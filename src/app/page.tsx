@@ -1,21 +1,44 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type DataPanel = "nbm" | "sounding" | "models";
 type WorkspaceSection = "dashboard" | "forecast" | "verify";
+type LiveWeather = {
+  location: string;
+  observation: { station: string; stationName: string; observedAt: string; description: string; temperatureF: number | null; dewpointF: number | null; windMph: number | null; windDirection: string | null };
+  forecast: { period: string; temperature: number; temperatureUnit: string; shortForecast: string; detailedForecast: string; precipitationChance: number | null } | null;
+  alerts: { event: string; headline: string | null }[];
+  fetchedAt: string;
+};
 
 export default function Home() {
   const [dataPanel, setDataPanel] = useState<DataPanel>("nbm");
   const [activeSection, setActiveSection] = useState<WorkspaceSection>("dashboard");
   const [radarExpanded, setRadarExpanded] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
+  const [liveWeather, setLiveWeather] = useState<LiveWeather | null>(null);
+  const [weatherError, setWeatherError] = useState("");
+
+  useEffect(() => {
+    fetch("/api/weather")
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Unable to load live data");
+        setLiveWeather(data);
+      })
+      .catch((error: Error) => setWeatherError(error.message));
+  }, []);
+
+  const observedAt = liveWeather
+    ? new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York", timeZoneName: "short" }).format(new Date(liveWeather.observation.observedAt))
+    : "Loading live NWS data…";
 
   return (
     <main className={radarExpanded ? "app radar-expanded" : "app"}>
       <header className="header">
         <div><p className="eyebrow">Human-first forecasting workspace</p><h1>The Weather Desk</h1></div>
-        <div className="location">Asheville, NC <span>Student workspace</span></div>
+        <div className="location">Athens, GA <span>Student workspace</span></div>
       </header>
 
       <nav aria-label="Main navigation" className="navigation">
@@ -27,19 +50,21 @@ export default function Home() {
       {activeSection === "dashboard" && <>
       <section className="dashboard-grid">
         <article className="radar-card">
-          <div className="card-heading"><div><h2>Radar</h2><p>Sample display · updated 2 min ago</p></div><div className="actions"><button>Animate loop</button><button onClick={() => setRadarExpanded((value) => !value)}>{radarExpanded ? "Exit expanded view" : "Expand radar"}</button></div></div>
-          <div className="radar" role="img" aria-label="Illustrative radar display showing scattered showers around Asheville">
+          <div className="card-heading"><div><h2>Radar</h2><p>Radar integration is next · current data is live</p></div><div className="actions"><button>Animate loop</button><button onClick={() => setRadarExpanded((value) => !value)}>{radarExpanded ? "Exit expanded view" : "Expand radar"}</button></div></div>
+          <div className="radar" role="img" aria-label="Illustrative radar display centered on Athens, Georgia">
             <div className="ring ring-one" /><div className="ring ring-two" /><div className="crosshair horizontal" /><div className="crosshair vertical" /><div className="storm storm-one" /><div className="storm storm-two" /><div className="storm storm-three" />
-            <div className="radar-label"><strong>Asheville</strong><span>Scattered showers · moving northeast</span></div>
+            <div className="radar-label"><strong>Athens</strong><span>Illustrative radar preview</span></div>
           </div>
-          <div className="card-footer"><span>Reflectivity</span><span>Light → moderate</span></div>
+          <div className="card-footer"><span>Reflectivity preview</span><span>Live radar coming next</span></div>
         </article>
 
         <aside className="quick-data" aria-label="Quick weather reference">
-          <div><strong>78°F · Mostly cloudy</strong><span>Dew point 68°F · SW 8 mph</span></div>
-          <div><strong>NBM: 64% rain chance</strong><span>High 85°F · QPF 0.18 in</span></div>
-          <div><strong>12Z sounding</strong><span>MLCAPE 1,150 J/kg · 0–6 km shear 28 kt</span></div>
-          <div><strong className="alert">Heat advisory until 8 PM</strong><span>Official NWS alert</span></div>
+          {weatherError && <div><strong className="alert">Live data unavailable</strong><span>{weatherError}</span></div>}
+          {!liveWeather && !weatherError && <div><strong>Loading Athens weather…</strong><span>Contacting the National Weather Service</span></div>}
+          {liveWeather && <><div><strong>{liveWeather.observation.temperatureF ?? "—"}°F · {liveWeather.observation.description}</strong><span>Dew point {liveWeather.observation.dewpointF ?? "—"}°F · {liveWeather.observation.windDirection ?? "—"} {liveWeather.observation.windMph ?? "—"} mph</span></div>
+          {liveWeather.forecast && <div><strong>NWS {liveWeather.forecast.period}: {liveWeather.forecast.shortForecast}</strong><span>{liveWeather.forecast.temperature}°{liveWeather.forecast.temperatureUnit} · {liveWeather.forecast.precipitationChance ?? 0}% rain chance</span></div>}
+          <div><strong>{liveWeather.alerts[0] ? liveWeather.alerts[0].event : "No active NWS alerts"}</strong><span>{liveWeather.alerts[0]?.headline ?? "No watches, warnings, or advisories reported for this point."}</span></div>
+          <div><strong>Observation: {liveWeather.observation.station}</strong><span>{liveWeather.observation.stationName} · {observedAt}</span></div></>}
         </aside>
       </section>
 
@@ -91,11 +116,12 @@ Guidance summary: scattered convection favored 3–8 PM; most likely rainfall re
       </section>}
 
       {activeSection === "verify" && <section className="workspace-card">
-        <div className="section-heading"><div><h2>Verification · Monday, July 13</h2><p>Asheville Regional Airport</p></div><span>3 / 4 metrics verified</span></div>
+        <div className="section-heading"><div><h2>Verification · Monday, July 13</h2><p>Asheville Regional Airport</p></div><div className="verification-score"><strong>3 / 4</strong><span>metrics verified</span></div></div>
         <div className="verification-grid"><div>
-          <h3>Day · 7 AM–7 PM</h3><table><thead><tr><th>Metric</th><th>Your forecast</th><th>NBM</th><th>Observed</th></tr></thead><tbody><tr><td>High temperature</td><td>85°F</td><td>83°F</td><td>84°F</td></tr><tr><td>Rain chance</td><td>70%</td><td>62%</td><td>Rain observed</td></tr><tr><td>Rain timing</td><td>4–7 PM</td><td>3–8 PM</td><td>5:12 PM</td></tr></tbody></table>
+          <h3>Day · 7 AM–7 PM</h3><table><thead><tr><th>Metric</th><th>Your forecast</th><th>NBM</th><th>Observed</th></tr></thead><tbody><tr><td>High temperature</td><td>85°F</td><td>83°F</td><td>84°F</td></tr><tr><td>Rain chance</td><td>70%</td><td>62%</td><td>Rain observed</td></tr><tr><td>Rain timing</td><td>4–7 PM</td><td>3–8 PM</td><td>5:12 PM</td></tr><tr><td>Thunderstorm risk</td><td>Scattered</td><td>Possible</td><td>One storm nearby</td></tr></tbody></table>
           <h3>Night · 7 PM–7 AM</h3><table><thead><tr><th>Metric</th><th>Your forecast</th><th>NBM</th><th>Observed</th></tr></thead><tbody><tr><td>Low temperature</td><td>68°F</td><td>67°F</td><td>67°F</td></tr><tr><td>Rain chance</td><td>20%</td><td>24%</td><td>Dry after 8 PM</td></tr><tr><td>Fog risk</td><td>Patchy</td><td>Patchy</td><td>Patchy fog 5–7 AM</td></tr></tbody></table>
-        </div><aside className="history"><h3>Forecast history</h3><button>Jul 13 · Day + night</button><button>Jul 12 · Day + night</button><button>Jul 11 · Day + night</button><p>Future versions will reopen each archived forecast and its saved data evidence.</p></aside></div>
+          <div className="verification-notes"><div><span>Temperature error</span><strong>1°F</strong><small>Your forecast was closer</small></div><div><span>Timing error</span><strong>0:12</strong><small>Rain began 12 min later</small></div><div><span>Reflection</span><strong>Good call</strong><small>Storm coverage was limited</small></div></div>
+        </div><aside className="history"><h3>Forecast history</h3><p>Open a saved forecast and its archived evidence.</p><button className="active">Jul 13 · Day + night<small>Archived radar, NBM, sounding</small></button><button>Jul 12 · Day + night<small>Archived NBM, sounding</small></button><button>Jul 11 · Day + night<small>Archived radar, NBM</small></button></aside></div>
       </section>}
     </main>
   );
