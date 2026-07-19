@@ -32,9 +32,14 @@ export default function Home() {
   const [dataPanel, setDataPanel] = useState<DataPanel>("nbm");
   const [activeSection, setActiveSection] = useState<WorkspaceSection>("dashboard");
   const [radarExpanded, setRadarExpanded] = useState(false);
+  const [radarLoop, setRadarLoop] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
   const [liveWeather, setLiveWeather] = useState<LiveWeather | null>(null);
   const [weatherError, setWeatherError] = useState("");
+  const [nbmText, setNbmText] = useState("");
+  const [nbmStatus, setNbmStatus] = useState("Loading latest KAHN NBM bulletin…");
+  const [soundingText, setSoundingText] = useState("");
+  const [soundingStatus, setSoundingStatus] = useState("Loading latest observed FFC sounding…");
   const [archives, setArchives] = useState<SavedForecast[]>([]);
   const [selectedArchiveId, setSelectedArchiveId] = useState<string | null>(null);
 
@@ -46,6 +51,28 @@ export default function Home() {
         setLiveWeather(data);
       })
       .catch((error: Error) => setWeatherError(error.message));
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/sounding")
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Sounding data unavailable");
+        setSoundingText(`Observed radiosonde · ${data.station} · ${data.cycle}\n\n${data.text}`);
+        setSoundingStatus("");
+      })
+      .catch((error: Error) => setSoundingStatus(error.message));
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/nbm")
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "NBM data unavailable");
+        setNbmText(`NBM hourly bulletin · ${data.station} · ${data.cycle}\n\n${data.text}`);
+        setNbmStatus("");
+      })
+      .catch((error: Error) => setNbmStatus(error.message));
   }, []);
 
   useEffect(() => {
@@ -104,9 +131,9 @@ export default function Home() {
       {activeSection === "dashboard" && <>
       <section className="dashboard-grid">
         <article className="radar-card">
-          <div className="card-heading"><div><h2>Radar</h2><p>Live composite reflectivity · centered on Athens</p></div><div className="actions"><button disabled>Animation next</button><button onClick={() => setRadarExpanded((value) => !value)}>{radarExpanded ? "Exit expanded view" : "Expand radar"}</button></div></div>
-          <div className="radar"><RadarMap /></div>
-          <div className="card-footer"><span>NOAA/NWS composite reflectivity</span><span>Pan, zoom, or expand</span></div>
+          <div className="card-heading"><div><h2>Radar</h2><p>Live composite reflectivity · centered on Athens</p></div><div className="actions"><button onClick={() => setRadarLoop((value) => !value)}>{radarLoop ? "Interactive map" : "Animate loop"}</button><button onClick={() => setRadarExpanded((value) => !value)}>{radarExpanded ? "Exit expanded view" : "Expand radar"}</button></div></div>
+          <div className="radar">{radarLoop ? <img className="radar-loop" src="https://radar.weather.gov/ridge/standard/KFFC_loop.gif" alt="Animated NOAA radar loop from Peachtree City radar covering Athens, Georgia" /> : <RadarMap />}</div>
+          <div className="card-footer"><span>{radarLoop ? "KFFC animated radar loop" : "NOAA/NWS composite reflectivity"}</span><span>{radarLoop ? "Peachtree City radar · Athens coverage" : "Pan, zoom, or expand"}</span></div>
         </article>
 
         <aside className="quick-data" aria-label="Quick weather reference">
@@ -126,15 +153,8 @@ export default function Home() {
           <button className={dataPanel === "sounding" ? "active" : ""} onClick={() => setDataPanel("sounding")}>Sounding</button>
           <button className={dataPanel === "models" ? "active" : ""} onClick={() => setDataPanel("models")}>Other models</button>
         </div>
-        {dataPanel === "nbm" && <pre className="model-text">{`NBM 4.2 · KAVL · 2026-07-19 18Z
-FHR    TMP  DPT  WDIR  WSPD  SKY  POP  QPF   TSTM
-003     82   68   220     8   65   18  0.00    4
-006     85   68   230    10   72   42  0.03   14
-009     83   69   240     9   84   64  0.18   28
-012     77   68   250     6   79   51  0.09   19
-
-Guidance summary: scattered convection favored 3–8 PM; most likely rainfall remains light, but higher local totals are possible.`}</pre>}
-        {dataPanel === "sounding" && <div className="sounding"><div className="skew" aria-label="Simplified sounding chart"><i className="temperature" /><i className="dewpoint" /><small>100 hPa</small><small>500 hPa</small><small>Surface</small></div><table><thead><tr><th>Pressure</th><th>Height</th><th>Temp</th><th>Dew point</th><th>Wind</th></tr></thead><tbody><tr><td>1000 hPa</td><td>610 m</td><td>23°C</td><td>19°C</td><td>220° / 8 kt</td></tr><tr><td>850 hPa</td><td>1,510 m</td><td>17°C</td><td>13°C</td><td>235° / 16 kt</td></tr><tr><td>700 hPa</td><td>3,090 m</td><td>7°C</td><td>1°C</td><td>245° / 23 kt</td></tr><tr><td>500 hPa</td><td>5,820 m</td><td>-8°C</td><td>-25°C</td><td>260° / 35 kt</td></tr></tbody></table></div>}
+        {dataPanel === "nbm" && <pre className="model-text">{nbmText || nbmStatus}</pre>}
+        {dataPanel === "sounding" && <pre className="model-text">{soundingText || soundingStatus}</pre>}
         {dataPanel === "models" && <p className="empty">Start with NBM and observed soundings. Future sources will appear here as timestamped, archivable panels so you can compare them without losing context.</p>}
       </section>
       </>}
