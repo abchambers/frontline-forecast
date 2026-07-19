@@ -1,10 +1,15 @@
 {
+<<<<<<< HEAD
   "name": "the-weather-desk",
+=======
+  "name": "nextjs",
+>>>>>>> 87a80c8a170bb2efdb4e8d3056c91387c1bc3b30
   "version": "0.1.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+<<<<<<< HEAD
     "start": "next start"
   },
   "dependencies": {
@@ -17,5 +22,24 @@
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19"
+=======
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "next": "16.2.4",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.4",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+>>>>>>> 87a80c8a170bb2efdb4e8d3056c91387c1bc3b30
   }
 }
