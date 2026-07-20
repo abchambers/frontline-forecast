@@ -3,7 +3,8 @@ import { NextResponse } from "next/server";
 const ATHENS = { latitude: "33.9519", longitude: "-83.3576", timezone: "America/New_York" };
 const LEVELS = [1000, 975, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200, 150, 100, 70, 50, 30];
 const MODELS = {
-  hrrr: { label: "HRRR CONUS", parameter: "ncep_hrrr_conus", cadenceHours: 1 },
+  // Open-Meteo's single-run archive exposes HRRR at its completed 6-hour archive cycles.
+  hrrr: { label: "HRRR CONUS", parameter: "ncep_hrrr_conus", cadenceHours: 6 },
   gfs: { label: "GFS Global", parameter: "gfs_global", cadenceHours: 6 },
 } as const;
 
@@ -15,7 +16,8 @@ function valueAt(source: OpenMeteoProfile["hourly"], key: string, index: number)
 }
 
 function runStamp(date: Date) {
-  return date.toISOString().slice(0, 13) + ":00";
+  // Open-Meteo requires the run initialization timestamp without seconds.
+  return date.toISOString().slice(0, 13);
 }
 
 function initialRun(model: (typeof MODELS)[keyof typeof MODELS], offset: number) {
