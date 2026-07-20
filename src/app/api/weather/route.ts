@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-
-const ATHENS = { latitude: 33.9519, longitude: -83.3576 };
+import { weatherDeskLocation } from "@/lib/locations";
 
 type NwsFeature<T> = { properties: T };
 
@@ -64,17 +63,18 @@ function directionFromDegrees(value: number | null) {
   return labels[Math.round(value / 45) % 8];
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    const selectedLocation = weatherDeskLocation(new URL(request.url).searchParams.get("location"));
     const point = await nws<NwsFeature<PointProperties>>(
-      `https://api.weather.gov/points/${ATHENS.latitude},${ATHENS.longitude}`,
+      `https://api.weather.gov/points/${selectedLocation.latitude},${selectedLocation.longitude}`,
     );
     const pointData = point.properties;
 
     const stationList = await nws<{ features: NwsFeature<{ stationIdentifier: string }>[] }>(
       pointData.observationStations,
     );
-    const stationId = stationList.features.find(({ properties }) => properties.stationIdentifier === "KAHN")?.properties.stationIdentifier
+    const stationId = stationList.features.find(({ properties }) => properties.stationIdentifier === selectedLocation.observationStation)?.properties.stationIdentifier
       ?? stationList.features[0]?.properties.stationIdentifier;
     if (!stationId) throw new Error("No nearby NWS observation station was available");
 
@@ -84,7 +84,7 @@ export async function GET() {
       ),
       nws<{ properties: { periods: ForecastPeriod[] } }>(pointData.forecast),
       nws<{ features: NwsFeature<AlertProperties>[] }>(
-        `https://api.weather.gov/alerts/active?point=${ATHENS.latitude},${ATHENS.longitude}`,
+        `https://api.weather.gov/alerts/active?point=${selectedLocation.latitude},${selectedLocation.longitude}`,
       ),
     ]);
 
@@ -107,7 +107,8 @@ export async function GET() {
 
     return NextResponse.json(
       {
-        location: `${pointData.relativeLocation.properties.city}, ${pointData.relativeLocation.properties.state}`,
+        location: selectedLocation.name,
+        locationDetails: { ...selectedLocation, nwsOffice: (pointData as PointProperties & { gridId?: string }).gridId ?? null, gridX: (pointData as PointProperties & { gridX?: number }).gridX ?? null, gridY: (pointData as PointProperties & { gridY?: number }).gridY ?? null },
         observation: {
           station: current.stationIdentifier,
           stationName: current.name,

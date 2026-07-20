@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-
-const ATHENS = { latitude: 33.9519, longitude: -83.3576, timezone: "America/New_York" };
+import { weatherDeskLocation } from "@/lib/locations";
 const MODELS = {
   best_match: { label: "Best match", endpoint: "https://api.open-meteo.com/v1/forecast", model: "best_match" },
   hrrr_conus: { label: "HRRR CONUS", endpoint: "https://api.open-meteo.com/v1/forecast", model: "ncep_hrrr_conus" },
@@ -27,12 +26,14 @@ function hourlyValue(source: OpenMeteoResponse["hourly"], field: string, index: 
 }
 
 export async function GET(request: Request) {
-  const requestedModel = new URL(request.url).searchParams.get("model") ?? "best_match";
+  const search = new URL(request.url).searchParams;
+  const requestedModel = search.get("model") ?? "best_match";
+  const location = weatherDeskLocation(search.get("location"));
   const model = MODELS[requestedModel as keyof typeof MODELS] ?? MODELS.best_match;
   const parameters = new URLSearchParams({
-    latitude: String(ATHENS.latitude),
-    longitude: String(ATHENS.longitude),
-    timezone: ATHENS.timezone,
+    latitude: String(location.latitude),
+    longitude: String(location.longitude),
+    timezone: location.timezone,
     temperature_unit: "fahrenheit",
     wind_speed_unit: "mph",
     forecast_days: "7",
@@ -82,7 +83,7 @@ export async function GET(request: Request) {
     return NextResponse.json({
       provider: "Open-Meteo",
       model: model.label,
-      location: "Athens, GA",
+      location: location.name,
       current: data.current ? {
         time: data.current.time,
         temperatureF: numeric(data.current.temperature_2m),

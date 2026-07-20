@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-
-const ATHENS = { latitude: "33.9519", longitude: "-83.3576", timezone: "America/New_York" };
+import { weatherDeskLocation } from "@/lib/locations";
 const LEVELS = [1000, 975, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200, 150, 100, 70, 50, 30];
 const MODELS = {
   // Open-Meteo's single-run archive exposes HRRR at its completed 6-hour archive cycles.
@@ -32,13 +31,14 @@ export async function GET(request: Request) {
   const search = new URL(request.url).searchParams;
   const requested = search.get("model") ?? "hrrr";
   const model = MODELS[requested as keyof typeof MODELS] ?? MODELS.hrrr;
+  const location = weatherDeskLocation(search.get("location"));
   const runOffset = Math.max(0, Math.min(24, Number.parseInt(search.get("runOffset") ?? "0", 10) || 0));
   const fields = LEVELS.flatMap((level) => [
     `temperature_${level}hPa`, `relative_humidity_${level}hPa`, `wind_speed_${level}hPa`,
     `wind_direction_${level}hPa`, `geopotential_height_${level}hPa`,
   ]);
   const parameters = new URLSearchParams({
-    ...ATHENS,
+    latitude: String(location.latitude), longitude: String(location.longitude), timezone: location.timezone,
     temperature_unit: "fahrenheit",
     wind_speed_unit: "mph",
     forecast_days: "3",
@@ -81,7 +81,7 @@ export async function GET(request: Request) {
     return NextResponse.json({
       provider: "Open-Meteo archived single run",
       model: model.label,
-      location: "Athens, GA",
+      location: location.name,
       runTime: runStamp(run),
       runOffset,
       cadenceHours: model.cadenceHours,

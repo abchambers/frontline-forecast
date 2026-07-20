@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
+import { defaultWeatherDeskLocation, weatherDeskLocation, weatherDeskLocations } from "@/lib/locations";
 
 const RadarMap = dynamic(() => import("./radar-map"), {
   ssr: false,
@@ -81,9 +82,11 @@ type Profile = { id: string; email: string | null; role: "student" | "forecaster
 const archiveStorageKey = "weather-desk-forecast-archives";
 const forecastDraftStorageKey = "weather-desk-active-forecast-draft";
 const sessionStorageKey = "weather-desk-supabase-session";
+const locationStorageKey = "weather-desk-location";
+const themeStorageKey = "weather-desk-theme";
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-const officialFfcSoundingImageUrl = "https://www.spc.noaa.gov/exper/soundings/LATEST/FFC.gif";
+function officialSoundingImageUrl(station: string) { return `https://www.spc.noaa.gov/exper/soundings/LATEST/${station}.gif`; }
 const guidanceModels = {
   "high-res": [["best_match", "Auto"], ["hrrr_conus", "HRRR"], ["nam_conus", "NAM"], ["nbm_conus", "NBM blend"]],
   global: [["gfs_global", "GFS"], ["ecmwf_ifs", "ECMWF"], ["icon_global", "ICON"], ["gem_global", "GEM"]],
@@ -398,6 +401,8 @@ export default function Home() {
   const [showNwsAlerts, setShowNwsAlerts] = useState(true);
   const [radarOpacity, setRadarOpacity] = useState(72);
   const [radarRefreshToken, setRadarRefreshToken] = useState(0);
+  const [locationId, setLocationId] = useState(defaultWeatherDeskLocation.id);
+  const [theme, setTheme] = useState<"light" | "dark">("light");
   const [saveMessage, setSaveMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submissionToken, setSubmissionToken] = useState("");
@@ -451,10 +456,27 @@ export default function Home() {
   const [collectingArchiveId, setCollectingArchiveId] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [profileMessage, setProfileMessage] = useState("");
+  const selectedLocation = weatherDeskLocation(locationId);
+
+  useEffect(() => {
+    const storedLocation = window.localStorage.getItem(locationStorageKey);
+    if (storedLocation) setLocationId(weatherDeskLocation(storedLocation).id);
+    const storedTheme = window.localStorage.getItem(themeStorageKey);
+    if (storedTheme === "dark" || storedTheme === "light") setTheme(storedTheme);
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(locationStorageKey, locationId);
+  }, [locationId]);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    window.localStorage.setItem(themeStorageKey, theme);
+  }, [theme]);
 
   useEffect(() => {
     let isActive = true;
-    const loadWeather = () => fetch("/api/weather", { cache: "no-store" })
+    const loadWeather = () => fetch(`/api/weather?location=${encodeURIComponent(locationId)}`, { cache: "no-store" })
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "Unable to load live data");
@@ -470,7 +492,7 @@ export default function Home() {
       isActive = false;
       window.clearInterval(refreshId);
     };
-  }, []);
+  }, [locationId]);
 
   useEffect(() => {
     let isActive = true;
@@ -578,7 +600,7 @@ export default function Home() {
   }, [session]);
 
   useEffect(() => {
-    fetch("/api/sounding")
+    fetch(`/api/sounding?location=${encodeURIComponent(locationId)}`)
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "Sounding data unavailable");
@@ -586,10 +608,10 @@ export default function Home() {
         setSoundingStatus("");
       })
       .catch((error: Error) => setSoundingStatus(error.message));
-  }, []);
+  }, [locationId]);
 
   useEffect(() => {
-    fetch("/api/nbm")
+    fetch(`/api/nbm?location=${encodeURIComponent(locationId)}`)
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "NBM data unavailable");
@@ -597,11 +619,11 @@ export default function Home() {
         setNbmStatus("");
       })
       .catch((error: Error) => setNbmStatus(error.message));
-  }, []);
+  }, [locationId]);
 
   useEffect(() => {
     setOpenMeteoStatus("Loading Open-Meteo guidance…");
-    fetch(`/api/open-meteo?model=${openMeteoModel}`)
+    fetch(`/api/open-meteo?model=${openMeteoModel}&location=${encodeURIComponent(locationId)}`)
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "Open-Meteo guidance is unavailable");
@@ -609,7 +631,7 @@ export default function Home() {
         setOpenMeteoStatus("");
       })
       .catch((error: Error) => setOpenMeteoStatus(error.message));
-  }, [openMeteoModel]);
+  }, [openMeteoModel, locationId]);
 
   useEffect(() => {
     if (dataPanel !== "models" || openMeteoView !== "compare") return;
@@ -617,7 +639,7 @@ export default function Home() {
     let active = true;
     setComparisonStatus("Loading model comparison…");
     Promise.all(models.map(async (model) => {
-      const response = await fetch(`/api/open-meteo?model=${model}`);
+      const response = await fetch(`/api/open-meteo?model=${model}&location=${encodeURIComponent(locationId)}`);
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || `Unable to load ${model}`);
       return [model, data as OpenMeteoGuidance] as const;
@@ -629,13 +651,13 @@ export default function Home() {
       })
       .catch((error: Error) => active && setComparisonStatus(error.message));
     return () => { active = false; };
-  }, [dataPanel, openMeteoView, comparisonLeftModel, comparisonRightModel]);
+  }, [dataPanel, openMeteoView, comparisonLeftModel, comparisonRightModel, locationId]);
 
   useEffect(() => {
     if (dataPanel !== "ensembles") return;
     let active = true;
     setEnsembleStatus("Loading GFS ensemble guidance…");
-    fetch("/api/ensembles")
+    fetch(`/api/ensembles?location=${encodeURIComponent(locationId)}`)
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "Ensemble guidance is unavailable");
@@ -646,13 +668,13 @@ export default function Home() {
       })
       .catch((error: Error) => active && setEnsembleStatus(error.message));
     return () => { active = false; };
-  }, [dataPanel]);
+  }, [dataPanel, locationId]);
 
   useEffect(() => {
     let active = true;
     setModelSounding(null);
     setModelSoundingStatus("Loading model sounding…");
-    fetch(`/api/model-sounding?model=${soundingModel}&runOffset=${soundingRunOffset}`)
+    fetch(`/api/model-sounding?model=${soundingModel}&runOffset=${soundingRunOffset}&location=${encodeURIComponent(locationId)}`)
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "Model sounding is unavailable");
@@ -664,7 +686,7 @@ export default function Home() {
       })
       .catch((error: Error) => active && setModelSoundingStatus(error.message));
     return () => { active = false; };
-  }, [soundingModel, soundingRunOffset]);
+  }, [soundingModel, soundingRunOffset, locationId]);
 
   useEffect(() => {
     const storedArchives = window.localStorage.getItem(archiveStorageKey);
@@ -724,8 +746,8 @@ export default function Home() {
   const referenceOptions: ReferenceItem[] = [
     { id: "nws-observation", label: "Current NWS observation", detail: liveWeather ? `${liveWeather.observation.temperatureF ?? "—"}°F · ${liveWeather.observation.description} · ${liveWeather.observation.station} · ${observedAt}` : "Live observation was unavailable when attached." },
     { id: "nws-guidance", label: "Current NWS forecast", detail: liveWeather?.forecast ? `${liveWeather.forecast.period}: ${liveWeather.forecast.detailedForecast}` : "NWS forecast was unavailable when attached." },
-    { id: "nbm", label: "NBM KAHN bulletin", detail: nbmText || nbmStatus },
-    { id: "sounding", label: "Observed FFC sounding", detail: soundingText || soundingStatus },
+    { id: "nbm", label: `NBM ${selectedLocation.observationStation} bulletin`, detail: nbmText || nbmStatus },
+    { id: "sounding", label: `Observed ${selectedLocation.upperAirStation} sounding`, detail: soundingText || soundingStatus },
     { id: "nws-alerts", label: "NWS alerts", detail: liveWeather?.alerts.length ? liveWeather.alerts.map((alert) => `${alert.event}: ${alert.headline ?? ""}`).join("\n") : liveWeather?.alertsAvailable === false ? "NWS alert status could not be confirmed." : "No active NWS alerts at the time this reference was attached." },
   ];
 
@@ -817,11 +839,11 @@ export default function Home() {
   function pinCurrentDeskPanel() {
     const snippet = (value: string, maxLength = 5000) => value.length > maxLength ? `${value.slice(0, maxLength)}\n\n[Source snapshot truncated for archive storage.]` : value;
     if (dataPanel === "nbm") {
-      attachDeskReference({ id: `nbm-${Date.now()}`, label: "NBM KAHN bulletin", detail: snippet(nbmText || nbmStatus) });
+      attachDeskReference({ id: `nbm-${Date.now()}`, label: `NBM ${selectedLocation.observationStation} bulletin`, detail: snippet(nbmText || nbmStatus) });
       return;
     }
     if (dataPanel === "sounding") {
-      attachDeskReference({ id: `observed-kffc-${Date.now()}`, label: "Observed KFFC sounding", detail: snippet(soundingText || soundingStatus) });
+      attachDeskReference({ id: `observed-${selectedLocation.upperAirStation.toLowerCase()}-${Date.now()}`, label: `Observed K${selectedLocation.upperAirStation} sounding`, detail: snippet(soundingText || soundingStatus) });
       return;
     }
     if (dataPanel === "ensembles") {
@@ -886,7 +908,7 @@ export default function Home() {
     const headers = { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json", Prefer: "return=representation" };
     const runResponse = await fetch(`${supabaseUrl}/rest/v1/forecast_runs`, {
       method: "POST", headers,
-      body: JSON.stringify({ user_id: session.user.id, location_name: "Athens, GA", latitude: 33.9519, longitude: -83.3576, initial_horizon_days: forecastRun.days.length, status: "submitted", submitted_at: submittedAt }),
+      body: JSON.stringify({ user_id: session.user.id, location_name: selectedLocation.name, latitude: selectedLocation.latitude, longitude: selectedLocation.longitude, initial_horizon_days: forecastRun.days.length, status: "submitted", submitted_at: submittedAt }),
     });
     const runRows = await runResponse.json().catch(() => []);
     if (!runResponse.ok || !runRows[0]?.id) throw new Error("Forecast run storage is not ready. Confirm the forecast-runs SQL migration was run.");
@@ -946,9 +968,9 @@ export default function Home() {
       return;
     }
     setCollectingArchiveId(archive.id);
-    setVerificationMessage("Collecting KAHN observations and calculating automated scores…");
+    setVerificationMessage(`Collecting ${selectedLocation.observationStation} observations and calculating automated scores…`);
     try {
-      const response = await fetch(`/api/verify?date=${archive.targetDate}`, { cache: "no-store" });
+      const response = await fetch(`/api/verify?date=${archive.targetDate}&location=${encodeURIComponent(locationId)}`, { cache: "no-store" });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Unable to collect observations");
       const verification: AutomaticVerification = {
@@ -1007,7 +1029,7 @@ export default function Home() {
     <main className={radarExpanded ? "app radar-expanded" : "app"}>
       <header className="header">
         <div><p className="eyebrow">Human-first forecasting workspace</p><h1>The Weather Desk</h1></div>
-        <div className="header-meta"><div className="location">Athens, GA <span>Student workspace</span></div><div className="header-account">{session ? <><span>{session.user.email}</span><button type="button" onClick={() => { window.localStorage.removeItem(sessionStorageKey); window.sessionStorage.removeItem(sessionStorageKey); setSession(null); setAuthMessage("Signed out."); }}>Sign out</button></> : <div className="login-menu-wrap"><button type="button" onClick={() => setLoginMenuOpen((open) => !open)}>Log in</button>{loginMenuOpen && <form className="login-menu" onSubmit={(event) => { event.preventDefault(); authenticate("signin"); }}><strong>Weather Desk account</strong><input aria-label="Email" type="email" placeholder="Email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} /><input aria-label="Password" type="password" placeholder="Password (6+ characters)" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} /><label className="remember-me"><input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} /> Remember me on this browser</label><div><button type="submit">Sign in</button><button type="button" onClick={() => authenticate("signup")}>Create account</button></div>{authMessage && <small>{authMessage}</small>}</form>}</div>}</div></div>
+        <div className="header-meta"><label className="location-selector"><span>Workspace location</span><select value={locationId} onChange={(event) => setLocationId(event.target.value)}>{weatherDeskLocations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}</select></label><div className="header-account"><button type="button" className="theme-toggle" onClick={() => setTheme((value) => value === "light" ? "dark" : "light")}>{theme === "light" ? "Dark mode" : "Light mode"}</button>{session ? <><span>{session.user.email}</span><button type="button" onClick={() => { window.localStorage.removeItem(sessionStorageKey); window.sessionStorage.removeItem(sessionStorageKey); setSession(null); setAuthMessage("Signed out."); }}>Sign out</button></> : <div className="login-menu-wrap"><button type="button" onClick={() => setLoginMenuOpen((open) => !open)}>Log in</button>{loginMenuOpen && <form className="login-menu" onSubmit={(event) => { event.preventDefault(); authenticate("signin"); }}><strong>Weather Desk account</strong><input aria-label="Email" type="email" placeholder="Email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} /><input aria-label="Password" type="password" placeholder="Password (6+ characters)" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} /><label className="remember-me"><input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} /> Remember me on this browser</label><div><button type="submit">Sign in</button><button type="button" onClick={() => authenticate("signup")}>Create account</button></div>{authMessage && <small>{authMessage}</small>}</form>}</div>}</div></div>
       </header>
 
       <nav aria-label="Main navigation" className="navigation">
@@ -1024,14 +1046,14 @@ export default function Home() {
       </section>
       <section className="dashboard-grid">
         <article className="radar-card">
-          <div className="card-heading"><div><h2>Radar</h2><p>{radarMapView === "composite" ? "Live composite reflectivity · centered on Athens" : "OpenWeather map layer · centered on Athens"}</p></div><div className="actions"><button onClick={() => { if (radarMapView !== "composite") { setRadarMapView("composite"); window.dispatchEvent(new CustomEvent("weather-desk-radar-layer", { detail: "none" })); setRadarLoop(true); } else { setRadarLoop((value) => !value); } setRadarPlaying(false); }}>{radarLoop && radarMapView === "composite" ? "Interactive map" : "Radar timeline"}</button><button onClick={() => setRadarRefreshToken((value) => value + 1)}>Refresh</button><button onClick={() => setRadarExpanded((value) => !value)}>{radarExpanded ? "Exit expanded view" : "Expand radar"}</button></div></div>
-          <div className="radar"><details className="radar-tools"><summary aria-label="Open radar controls">☰</summary><div><label>Map view<select value={radarMapView} onChange={(event) => { const view = event.target.value as RadarMapView; setRadarMapView(view); window.dispatchEvent(new CustomEvent("weather-desk-radar-layer", { detail: view === "composite" || view === "base" ? "none" : view })); if (view !== "composite") setRadarLoop(false); event.currentTarget.closest("details")?.removeAttribute("open"); }}><option value="composite">Composite reflectivity</option><option value="precipitation_new">Precipitation</option><option value="clouds_new">Cloud cover</option><option value="pressure_new">Pressure</option><option value="wind_new">Wind speed</option><option value="temp_new">Temperature</option><option value="base">Base map only</option></select></label><label className="alert-overlay-toggle"><input type="checkbox" checked={showNwsAlerts} onChange={(event) => { setShowNwsAlerts(event.target.checked); window.dispatchEvent(new CustomEvent("weather-desk-alert-overlay", { detail: event.target.checked })); event.currentTarget.closest("details")?.removeAttribute("open"); }} /> NWS watches &amp; warnings</label><label>Opacity <input type="range" min="20" max="100" value={radarOpacity} onChange={(event) => setRadarOpacity(Number(event.target.value))} /> <span>{radarOpacity}%</span></label><small>{radarMapView === "composite" ? (radarLoop ? radarTimelineStatus : "NOAA composite reflectivity · interactive map") : "OpenWeather weather-map layer · exclusive view"}</small></div></details>{radarLoop && radarMapView === "composite" && <div className="radar-playback"><button type="button" aria-label="Previous radar frame" disabled={!radarFrames.length} onClick={() => { setRadarPlaying(false); setRadarFrameIndex((index) => Math.max(0, index - 1)); }}>‹</button><button type="button" disabled={radarFrames.length < 2} onClick={() => setRadarPlaying((playing) => !playing)}>{radarPlaying ? "Pause" : "Play"}</button><button type="button" aria-label="Next radar frame" disabled={!radarFrames.length} onClick={() => { setRadarPlaying(false); setRadarFrameIndex((index) => Math.min(radarFrames.length - 1, index + 1)); }}>›</button><span>{radarFrameTime}</span></div>}<RadarMap opacity={radarOpacity / 100} showReflectivity={radarMapView === "composite"} refreshToken={radarRefreshToken} timelineTileUrl={radarLoop && radarMapView === "composite" ? radarFrame?.tileUrl : null} /></div>
+          <div className="card-heading"><div><h2>Radar</h2><p>{radarMapView === "composite" ? `Live composite reflectivity · centered on ${selectedLocation.name}` : `OpenWeather map layer · centered on ${selectedLocation.name}`}</p></div><div className="actions"><button onClick={() => { if (radarMapView !== "composite") { setRadarMapView("composite"); window.dispatchEvent(new CustomEvent("weather-desk-radar-layer", { detail: "none" })); setRadarLoop(true); } else { setRadarLoop((value) => !value); } setRadarPlaying(false); }}>{radarLoop && radarMapView === "composite" ? "Interactive map" : "Radar timeline"}</button><button onClick={() => setRadarRefreshToken((value) => value + 1)}>Refresh</button><button onClick={() => setRadarExpanded((value) => !value)}>{radarExpanded ? "Exit expanded view" : "Expand radar"}</button></div></div>
+          <div className="radar"><details className="radar-tools"><summary aria-label="Open radar controls">☰</summary><div><label>Map view<select value={radarMapView} onChange={(event) => { const view = event.target.value as RadarMapView; setRadarMapView(view); window.dispatchEvent(new CustomEvent("weather-desk-radar-layer", { detail: view === "composite" || view === "base" ? "none" : view })); if (view !== "composite") setRadarLoop(false); event.currentTarget.closest("details")?.removeAttribute("open"); }}><option value="composite">Composite reflectivity</option><option value="precipitation_new">Precipitation</option><option value="clouds_new">Cloud cover</option><option value="pressure_new">Pressure</option><option value="wind_new">Wind speed</option><option value="temp_new">Temperature</option><option value="base">Base map only</option></select></label><label className="alert-overlay-toggle"><input type="checkbox" checked={showNwsAlerts} onChange={(event) => { setShowNwsAlerts(event.target.checked); window.dispatchEvent(new CustomEvent("weather-desk-alert-overlay", { detail: event.target.checked })); event.currentTarget.closest("details")?.removeAttribute("open"); }} /> NWS watches &amp; warnings</label><label>Opacity <input type="range" min="20" max="100" value={radarOpacity} onChange={(event) => setRadarOpacity(Number(event.target.value))} /> <span>{radarOpacity}%</span></label><small>{radarMapView === "composite" ? (radarLoop ? radarTimelineStatus : `NOAA composite reflectivity · ${selectedLocation.radarSite}`) : "OpenWeather weather-map layer · exclusive view"}</small></div></details>{radarLoop && radarMapView === "composite" && <div className="radar-playback"><button type="button" aria-label="Previous radar frame" disabled={!radarFrames.length} onClick={() => { setRadarPlaying(false); setRadarFrameIndex((index) => Math.max(0, index - 1)); }}>‹</button><button type="button" disabled={radarFrames.length < 2} onClick={() => setRadarPlaying((playing) => !playing)}>{radarPlaying ? "Pause" : "Play"}</button><button type="button" aria-label="Next radar frame" disabled={!radarFrames.length} onClick={() => { setRadarPlaying(false); setRadarFrameIndex((index) => Math.min(radarFrames.length - 1, index + 1)); }}>›</button><span>{radarFrameTime}</span></div>}<RadarMap location={selectedLocation} opacity={radarOpacity / 100} showReflectivity={radarMapView === "composite"} refreshToken={radarRefreshToken} timelineTileUrl={radarLoop && radarMapView === "composite" ? radarFrame?.tileUrl : null} /></div>
           <div className="card-footer radar-footer"><RadarLegendStrip view={radarMapView} /></div>
         </article>
 
         <aside className="quick-data" aria-label="Quick weather reference">
           {weatherError && <div><strong className="alert">Live data unavailable</strong><span>{weatherError}</span></div>}
-          {!liveWeather && !weatherError && <div><strong>Loading Athens weather…</strong><span>Contacting the National Weather Service</span></div>}
+          {!liveWeather && !weatherError && <div><strong>Loading {selectedLocation.name} weather…</strong><span>Contacting the National Weather Service</span></div>}
           {liveWeather && <><div><strong>{liveWeather.observation.temperatureF ?? "—"}°F · {liveWeather.observation.description}</strong><span>{liveWeather.observation.temperatureSource === "forecast estimate" ? "NWS forecast estimate · " : ""}Dew point {liveWeather.observation.dewpointF ?? "—"}°F · {liveWeather.observation.windDirection ?? "—"} {liveWeather.observation.windMph ?? "—"} mph</span></div>
           {liveWeather.forecast && <div><strong>NWS {liveWeather.forecast.period}: {liveWeather.forecast.shortForecast}</strong><span>{liveWeather.forecast.temperature}°{liveWeather.forecast.temperatureUnit} · {liveWeather.forecast.precipitationChance ?? 0}% rain chance</span></div>}
           <div><strong>{liveWeather.alerts[0] ? liveWeather.alerts[0].event : liveWeather.alertsAvailable ? "No active NWS alerts" : "NWS alerts temporarily unavailable"}</strong><span>{liveWeather.alerts[0]?.headline ?? (liveWeather.alertsAvailable ? "No watches, warnings, or advisories reported for this point." : "Alert status could not be confirmed; check official NWS alerts before making a warning-sensitive decision.")}</span></div>
@@ -1048,8 +1070,8 @@ export default function Home() {
           <button className={dataPanel === "ensembles" ? "active" : ""} onClick={() => setDataPanel("ensembles")}>Ensembles</button>
           <button className={dataPanel === "model-sounding" ? "active" : ""} onClick={() => setDataPanel("model-sounding")}>Model sounding</button>
         </div>
-        {dataPanel === "nbm" && <section className="source-bulletin"><div className="model-guidance-heading"><div><strong>National Blend of Models bulletin</strong><span>Full NBM source text for Athens-area forecast analysis</span></div><small>{nbmText ? "Latest bulletin loaded" : nbmStatus}</small></div><details><summary>Open full NBM bulletin</summary><pre className="model-text">{nbmText || nbmStatus}</pre></details></section>}
-        {dataPanel === "sounding" && <section className="observed-sounding-panel"><div className="model-guidance-heading"><div><strong>Latest observed KFFC sounding</strong><span>Peachtree City, GA · official SPC analysis panel</span></div><a href="https://www.weather.gov/bmx/latestffcsounding" target="_blank" rel="noreferrer">Open NWS source</a></div><img src={officialFfcSoundingImageUrl} alt="Latest observed KFFC upper-air sounding from the Storm Prediction Center" /><details><summary>Raw KFFC sounding text</summary><pre className="model-text">{soundingText || soundingStatus}</pre></details></section>}
+        {dataPanel === "nbm" && <section className="source-bulletin"><div className="model-guidance-heading"><div><strong>National Blend of Models bulletin</strong><span>Full NBM source text for {selectedLocation.name} forecast analysis</span></div><small>{nbmText ? "Latest bulletin loaded" : nbmStatus}</small></div><details><summary>Open full NBM bulletin</summary><pre className="model-text">{nbmText || nbmStatus}</pre></details></section>}
+        {dataPanel === "sounding" && <section className="observed-sounding-panel"><div className="model-guidance-heading"><div><strong>Latest observed K{selectedLocation.upperAirStation} sounding</strong><span>Nearest upper-air site for {selectedLocation.name} · official SPC analysis panel</span></div><a href={`https://www.spc.noaa.gov/exper/soundings/LATEST/${selectedLocation.upperAirStation}.gif`} target="_blank" rel="noreferrer">Open SPC source</a></div><img src={officialSoundingImageUrl(selectedLocation.upperAirStation)} alt={`Latest observed K${selectedLocation.upperAirStation} upper-air sounding from the Storm Prediction Center`} /><details><summary>Raw K{selectedLocation.upperAirStation} sounding text</summary><pre className="model-text">{soundingText || soundingStatus}</pre></details></section>}
         {dataPanel === "models" && <section className="model-workspace">
           <div className="model-desk-controls"><div><span>Open-Meteo model guidance</span><div className="guidance-scope-toggle"><button type="button" className={guidanceGroup === "high-res" ? "active" : ""} onClick={() => { setGuidanceGroup("high-res"); if (!guidanceModels["high-res"].some(([id]) => id === openMeteoModel)) setOpenMeteoModel("hrrr_conus"); }}>High-res</button><button type="button" className={guidanceGroup === "global" ? "active" : ""} onClick={() => { setGuidanceGroup("global"); if (!guidanceModels.global.some(([id]) => id === openMeteoModel)) setOpenMeteoModel("gfs_global"); }}>Global</button></div></div><div className="model-view-toggle"><button type="button" className={openMeteoView === "hourly" ? "active" : ""} onClick={() => setOpenMeteoView("hourly")}>Hourly</button><button type="button" className={openMeteoView === "daily" ? "active" : ""} onClick={() => setOpenMeteoView("daily")}>Daily</button><button type="button" className={openMeteoView === "compare" ? "active" : ""} onClick={() => { const left = openMeteoModel === "best_match" ? "hrrr_conus" : openMeteoModel; setComparisonLeftModel(left); setComparisonRightModel(guidanceGroup === "global" ? "ecmwf_ifs" : "nbm_conus"); setOpenMeteoView("compare"); }}>Compare</button></div></div>
           {openMeteoView !== "compare" && (openMeteoGuidance ? <><article className="single-model-table"><header><div className="model-picker">{guidanceModels[guidanceGroup].map(([id, label]) => <button type="button" key={id} className={openMeteoModel === id ? "active" : ""} onClick={() => setOpenMeteoModel(id)}>{label}</button>)}</div><strong>{openMeteoGuidance.model} · Athens, GA</strong><small>{openMeteoGuidance.current ? `${openMeteoGuidance.current.temperatureF ?? "—"}°F · feels ${openMeteoGuidance.current.feelsLikeF ?? "—"}°F · ${openMeteoWeatherLabel(openMeteoGuidance.current.weatherCode)}` : "Current model guidance unavailable"}</small></header><ModelGuidanceTable guidance={openMeteoGuidance} view={openMeteoView} /><div className="table-reference-action"><small>Save this displayed guidance to the matching dated forecast tabs.</small><button type="button" onClick={() => attachGuidanceSeries(openMeteoGuidance, openMeteoView)}>Add {openMeteoGuidance.model} guidance</button></div></article><p className="model-attribution">Model data: <a href={openMeteoGuidance.source} target="_blank" rel="noreferrer">Open-Meteo</a>. High-res guidance is for near-term detail; global models are for pattern and range.</p></> : <p className="empty">{openMeteoStatus}</p>)}
