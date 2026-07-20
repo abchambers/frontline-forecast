@@ -28,11 +28,11 @@ type SavedForecast = {
   targetDate: string;
   status: "draft" | "submitted" | "revised" | "verified" | "withdrawn";
   versionNumber: number;
-  day: { high: string; conditions: string; rainChance: string; timing: string; hazards: string; references?: ReferenceItem[] };
-  night: { low: string; conditions: string; rainChance: string; timing: string; hazards: string; references?: ReferenceItem[] };
+  day: { high: string; conditions: string; rainChance: string; timing: string; hazards: string; reasoning?: string; references?: ReferenceItem[] };
+  night: { low: string; conditions: string; rainChance: string; timing: string; hazards: string; reasoning?: string; references?: ReferenceItem[] };
   evidence: { observation: string; forecast: string; alerts: string };
 };
-type WeatherDeskSession = { access_token: string; user: { id: string; email?: string } };
+type WeatherDeskSession = { access_token: string; refresh_token?: string; user: { id: string; email?: string } };
 type ReferenceItem = { id: string; label: string; detail: string };
 type PeriodDraft = { highLow: string; conditions: string; rainChance: string; timing: string; wind: string; confidence: string; hazards: string; reasoning: string; references: ReferenceItem[] };
 type ForecastDayDraft = { date: string; day: PeriodDraft; night: PeriodDraft };
@@ -105,7 +105,7 @@ function savedReferences(value: unknown): ReferenceItem[] {
 function automaticPeriodScore(forecastTemperature: string, rainChance: string, actual: ActualPeriod, useHigh: boolean) {
   const predictedTemperature = Number.parseFloat(forecastTemperature);
   const actualTemperature = useHigh ? actual.highF : actual.lowF;
-  if (!actual.complete || !Number.isFinite(predictedTemperature) || actualTemperature === null) return null;
+  if (!actual.observationCount || !Number.isFinite(predictedTemperature) || actualTemperature === null) return null;
   const temperaturePoints = Math.max(0, 70 - Math.abs(predictedTemperature - actualTemperature) * 10);
   const predictedRain = Number.parseFloat(rainChance) >= 50;
   const precipitationPoints = predictedRain === actual.precipitationObserved ? 30 : 0;
@@ -121,7 +121,8 @@ function temperatureErrorLabel(forecastTemperature: string, actual: ActualPeriod
 }
 
 function scoreLabel(score: number | null | undefined, actual: ActualPeriod | undefined) {
-  if (!actual?.complete) return "Pending";
+  if (!actual?.observationCount) return "Pending";
+  if (!actual.complete) return score === null || score === undefined ? "Pending" : `${score}% preliminary`;
   return score === null || score === undefined ? "Needs value" : `${score}%`;
 }
 
@@ -136,8 +137,8 @@ function archiveRecordsFromRun(run: CloudRunRow): SavedForecast[] {
     const status: SavedForecast["status"] = ["draft", "submitted", "revised", "verified", "withdrawn"].includes(run.status) ? run.status as SavedForecast["status"] : "submitted";
     return {
       id: `${run.id}:${targetDate}`, runId: run.id, periodIds: { day: day?.id, night: night?.id }, savedAt: run.created_at, label: archiveTitle({ savedAt: run.created_at }), targetDate, status, versionNumber: index + 1,
-      day: { high: dayData.highLow, conditions: dayData.conditions, rainChance: dayData.rainChance, timing: dayData.timing, hazards: dayData.hazards, references: savedReferences(dayData.references) },
-      night: { low: nightData.highLow, conditions: nightData.conditions, rainChance: nightData.rainChance, timing: nightData.timing, hazards: nightData.hazards, references: savedReferences(nightData.references) },
+      day: { high: dayData.highLow, conditions: dayData.conditions, rainChance: dayData.rainChance, timing: dayData.timing, hazards: dayData.hazards, reasoning: dayData.reasoning, references: savedReferences(dayData.references) },
+      night: { low: nightData.highLow, conditions: nightData.conditions, rainChance: nightData.rainChance, timing: nightData.timing, hazards: nightData.hazards, reasoning: nightData.reasoning, references: savedReferences(nightData.references) },
       evidence: day?.evidence_snapshot ?? night?.evidence_snapshot ?? { observation: "No observation snapshot", forecast: "No NWS snapshot", alerts: "No alert snapshot" },
     };
   });
@@ -167,6 +168,7 @@ export default function Home() {
   const [role, setRole] = useState("student");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(true);
   const [authMessage, setAuthMessage] = useState("");
   const [loginMenuOpen, setLoginMenuOpen] = useState(false);
   const [forecastRun, setForecastRun] = useState<ForecastRunDraft>(() => ({ id: crypto.randomUUID(), initialHorizonDays: 1, days: [createForecastDay(addDays(new Date(), 0))] }));
@@ -218,9 +220,23 @@ export default function Home() {
   }, [forecastRun]);
 
   useEffect(() => {
-    const savedSession = window.localStorage.getItem(sessionStorageKey);
+    const savedSession = window.localStorage.getItem(sessionStorageKey) ?? window.sessionStorage.getItem(sessionStorageKey);
     if (savedSession) {
-      try { setSession(JSON.parse(savedSession) as WeatherDeskSession); } catch { window.localStorage.removeItem(sessionStorageKey); }
+      const persistent = Boolean(window.localStorage.getItem(sessionStorageKey));
+      try {
+        const parsed = JSON.parse(savedSession) as WeatherDeskSession;
+        setRememberMe(persistent);
+        if (!parsed.refresh_token || !supabaseUrl || !supabaseKey) { setSession(parsed); return; }
+        fetch(`${supabaseUrl}/auth/v1/token?grant_type=refresh_token`, { method: "POST", headers: { apikey: supabaseKey, "Content-Type": "application/json" }, body: JSON.stringify({ refresh_token: parsed.refresh_token }) })
+          .then(async (response) => {
+            const data = await response.json();
+            if (!response.ok || !data.access_token) throw new Error("Session expired");
+            const refreshed = { access_token: data.access_token, refresh_token: data.refresh_token ?? parsed.refresh_token, user: data.user ?? parsed.user } as WeatherDeskSession;
+            if (persistent) window.localStorage.setItem(sessionStorageKey, JSON.stringify(refreshed)); else window.sessionStorage.setItem(sessionStorageKey, JSON.stringify(refreshed));
+            setSession(refreshed);
+          })
+          .catch(() => { window.localStorage.removeItem(sessionStorageKey); window.sessionStorage.removeItem(sessionStorageKey); });
+      } catch { window.localStorage.removeItem(sessionStorageKey); window.sessionStorage.removeItem(sessionStorageKey); }
     }
   }, []);
 
@@ -372,8 +388,8 @@ export default function Home() {
       return {
       id: crypto.randomUUID(), savedAt, label: archiveTitle({ savedAt }), targetDate: day.date,
       status: "submitted" as const, versionNumber,
-      day: { high: day.day.highLow, conditions: day.day.conditions, rainChance: day.day.rainChance, timing: day.day.timing, hazards: day.day.hazards, references: day.day.references },
-      night: { low: day.night.highLow, conditions: day.night.conditions, rainChance: day.night.rainChance, timing: day.night.timing, hazards: day.night.hazards, references: day.night.references },
+      day: { high: day.day.highLow, conditions: day.day.conditions, rainChance: day.day.rainChance, timing: day.day.timing, hazards: day.day.hazards, reasoning: day.day.reasoning, references: day.day.references },
+      night: { low: day.night.highLow, conditions: day.night.conditions, rainChance: day.night.rainChance, timing: day.night.timing, hazards: day.night.hazards, reasoning: day.night.reasoning, references: day.night.references },
       evidence: {
         observation: liveWeather ? `${liveWeather.observation.temperatureF ?? "—"}°F, ${liveWeather.observation.description}; ${liveWeather.observation.station} at ${observedAt}` : "No live observation available when saved",
         forecast: liveWeather?.forecast ? `${liveWeather.forecast.period}: ${liveWeather.forecast.shortForecast}; ${liveWeather.forecast.precipitationChance ?? 0}% precipitation chance` : "No NWS forecast available when saved",
@@ -435,7 +451,7 @@ export default function Home() {
 
   function reviseArchive(archive: SavedForecast) {
     const targetDate = fallbackForecastDate(archive.targetDate);
-    setForecastRun({ id: crypto.randomUUID(), initialHorizonDays: 1, days: [{ date: targetDate, day: { ...emptyPeriod("day"), highLow: archive.day.high, conditions: archive.day.conditions, rainChance: archive.day.rainChance, timing: archive.day.timing, hazards: archive.day.hazards, references: savedReferences(archive.day.references) }, night: { ...emptyPeriod("night"), highLow: archive.night.low, conditions: archive.night.conditions, rainChance: archive.night.rainChance, timing: archive.night.timing, hazards: archive.night.hazards, references: savedReferences(archive.night.references) } }] });
+    setForecastRun({ id: crypto.randomUUID(), initialHorizonDays: 1, days: [{ date: targetDate, day: { ...emptyPeriod("day"), highLow: archive.day.high, conditions: archive.day.conditions, rainChance: archive.day.rainChance, timing: archive.day.timing, hazards: archive.day.hazards, reasoning: archive.day.reasoning ?? "", references: savedReferences(archive.day.references) }, night: { ...emptyPeriod("night"), highLow: archive.night.low, conditions: archive.night.conditions, rainChance: archive.night.rainChance, timing: archive.night.timing, hazards: archive.night.hazards, reasoning: archive.night.reasoning ?? "", references: savedReferences(archive.night.references) } }] });
     setSelectedForecastDay(0); setArchiveMenuId(null); setSaveMessage(`Revision draft opened for ${targetDate}. Submit creates a new, auditable version.`); setActiveSection("forecast");
   }
 
@@ -516,8 +532,10 @@ export default function Home() {
     const data = await response.json();
     if (!response.ok) { setAuthMessage(data.error_description || data.msg || "Unable to sign in."); return; }
     if (!data.access_token) { setAuthMessage("Check your email to confirm the new account, then sign in."); return; }
-    const nextSession = { access_token: data.access_token, user: data.user } as WeatherDeskSession;
-    window.localStorage.setItem(sessionStorageKey, JSON.stringify(nextSession));
+    const nextSession = { access_token: data.access_token, refresh_token: data.refresh_token, user: data.user } as WeatherDeskSession;
+    window.localStorage.removeItem(sessionStorageKey);
+    window.sessionStorage.removeItem(sessionStorageKey);
+    if (rememberMe) window.localStorage.setItem(sessionStorageKey, JSON.stringify(nextSession)); else window.sessionStorage.setItem(sessionStorageKey, JSON.stringify(nextSession));
     setSession(nextSession);
     setLoginMenuOpen(false);
     setAuthMessage(`Signed in as ${data.user.email}.`);
@@ -527,7 +545,7 @@ export default function Home() {
     <main className={radarExpanded ? "app radar-expanded" : "app"}>
       <header className="header">
         <div><p className="eyebrow">Human-first forecasting workspace</p><h1>The Weather Desk</h1></div>
-        <div className="header-meta"><div className="location">Athens, GA <span>Student workspace</span></div><div className="header-account">{session ? <><span>{session.user.email}</span><button type="button" onClick={() => { window.localStorage.removeItem(sessionStorageKey); setSession(null); setAuthMessage("Signed out."); }}>Sign out</button></> : <div className="login-menu-wrap"><button type="button" onClick={() => setLoginMenuOpen((open) => !open)}>Log in</button>{loginMenuOpen && <div className="login-menu"><strong>Weather Desk account</strong><input aria-label="Email" type="email" placeholder="Email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} /><input aria-label="Password" type="password" placeholder="Password (6+ characters)" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} /><div><button type="button" onClick={() => authenticate("signin")}>Sign in</button><button type="button" onClick={() => authenticate("signup")}>Create account</button></div>{authMessage && <small>{authMessage}</small>}</div>}</div>}</div></div>
+        <div className="header-meta"><div className="location">Athens, GA <span>Student workspace</span></div><div className="header-account">{session ? <><span>{session.user.email}</span><button type="button" onClick={() => { window.localStorage.removeItem(sessionStorageKey); window.sessionStorage.removeItem(sessionStorageKey); setSession(null); setAuthMessage("Signed out."); }}>Sign out</button></> : <div className="login-menu-wrap"><button type="button" onClick={() => setLoginMenuOpen((open) => !open)}>Log in</button>{loginMenuOpen && <form className="login-menu" onSubmit={(event) => { event.preventDefault(); authenticate("signin"); }}><strong>Weather Desk account</strong><input aria-label="Email" type="email" placeholder="Email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} /><input aria-label="Password" type="password" placeholder="Password (6+ characters)" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} /><label className="remember-me"><input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} /> Remember me on this browser</label><div><button type="submit">Sign in</button><button type="button" onClick={() => authenticate("signup")}>Create account</button></div>{authMessage && <small>{authMessage}</small>}</form>}</div>}</div></div>
       </header>
 
       <nav aria-label="Main navigation" className="navigation">
@@ -610,7 +628,7 @@ export default function Home() {
       {activeSection === "verify" && session && <section className="workspace-card">
         <div className="records-toolbar"><div><p className="eyebrow">Forecast records</p><h2>Verify your work</h2><p>Compare each submitted forecast with its saved evidence and observations.</p></div><div><span>{filteredArchives.length} record{filteredArchives.length === 1 ? "" : "s"}</span><button type="button" className={archiveFiltersOpen ? "active" : ""} onClick={() => setArchiveFiltersOpen((open) => !open)}>Filter</button></div></div>
         {archiveFiltersOpen && <div className="archive-filters"><label>Forecast date<input type="date" value={archiveDateFilter} onChange={(event) => setArchiveDateFilter(event.target.value)} /></label><label>Status<select value={archiveStatusFilter} onChange={(event) => setArchiveStatusFilter(event.target.value as "all" | SavedForecast["status"])}><option value="all">All statuses</option><option value="submitted">Submitted</option><option value="verified">Verified</option><option value="revised">Revised</option><option value="draft">Draft</option></select></label><label>Search conditions<input value={archiveSearch} onChange={(event) => setArchiveSearch(event.target.value)} placeholder="storms, clear…" /></label><button type="button" onClick={() => { setArchiveDateFilter(""); setArchiveStatusFilter("all"); setArchiveSearch(""); }}>Clear</button></div>}
-        {selectedArchive ? <>{verificationMessage && <p className="empty">{verificationMessage}</p>}
+        {selectedArchive ? <>{verificationMessage && <p className="empty">{verificationMessage}</p>}<section className="saved-reasoning"><h3>Forecaster notes</h3><div><article><strong>Day reasoning</strong><p>{selectedArchive.day.reasoning || "No day reasoning was saved with this forecast."}</p></article><article><strong>Night reasoning</strong><p>{selectedArchive.night.reasoning || "No night reasoning was saved with this forecast."}</p></article></div></section>
         <div className="verification-grid"><div><div className="record-heading"><div><p className="eyebrow">Selected forecast</p><h2>{archiveVersionTitle(selectedArchive)}</h2><p>Athens, GA · {archiveSubmissionTitle(selectedArchive)}</p></div><div className="verification-score"><strong>{selectedArchive.status === "draft" ? "Draft" : selectedAutomaticVerification?.day.complete && selectedAutomaticVerification?.night.complete ? "Verified" : "Pending"}</strong><span>{selectedArchive.status === "draft" ? "not graded" : "automatic verification"}</span><button type="button" disabled={collectingArchiveId === selectedArchive.id} onClick={() => collectActuals(selectedArchive)}>{collectingArchiveId === selectedArchive.id ? "Collecting…" : "Collect actuals"}</button></div></div><div className="record-score-bar"><div><span>Day automatic score</span><i><b style={{ width: `${selectedAutomaticVerification?.dayScore ?? 0}%` }} /></i><strong>{scoreLabel(selectedAutomaticVerification?.dayScore, selectedAutomaticVerification?.day)}</strong></div><div><span>Night automatic score</span><i><b style={{ width: `${selectedAutomaticVerification?.nightScore ?? 0}%` }} /></i><strong>{scoreLabel(selectedAutomaticVerification?.nightScore, selectedAutomaticVerification?.night)}</strong></div></div><h3>Day · 7 AM–7 PM</h3><table><thead><tr><th>Metric</th><th>Your forecast</th><th>Saved guidance</th><th>Observed</th></tr></thead><tbody><tr><td>High temperature</td><td>{selectedArchive.day.high}°F</td><td>{selectedArchive.evidence.forecast}</td><td>{selectedAutomaticVerification?.day.highF ?? "Awaiting period end"}</td></tr><tr><td>Conditions</td><td>{selectedArchive.day.conditions}</td><td>Saved with forecast</td><td>{selectedAutomaticVerification?.day.conditions.join("; ") || "Awaiting period end"}</td></tr><tr><td>Rain chance</td><td>{selectedArchive.day.rainChance}</td><td>Saved with forecast</td><td>{selectedAutomaticVerification ? selectedAutomaticVerification.day.precipitationObserved ? "Precipitation observed" : "No precipitation observed" : "Awaiting period end"}</td></tr><tr><td>Timing / hazards</td><td>{selectedArchive.day.timing} · {selectedArchive.day.hazards}</td><td>Saved with forecast</td><td>{selectedAutomaticVerification?.day.maxWindMph ? `Max wind ${selectedAutomaticVerification.day.maxWindMph} mph` : "Awaiting period end"}</td></tr></tbody></table>
         <h3>Night · 7 PM–7 AM</h3><table><thead><tr><th>Metric</th><th>Your forecast</th><th>Saved guidance</th><th>Observed</th></tr></thead><tbody><tr><td>Low temperature</td><td>{selectedArchive.night.low}°F</td><td>Saved with forecast</td><td>{selectedAutomaticVerification?.night.lowF ?? "Awaiting period end"}</td></tr><tr><td>Conditions</td><td>{selectedArchive.night.conditions}</td><td>Saved with forecast</td><td>{selectedAutomaticVerification?.night.conditions.join("; ") || "Awaiting period end"}</td></tr><tr><td>Rain chance</td><td>{selectedArchive.night.rainChance}</td><td>Saved with forecast</td><td>{selectedAutomaticVerification ? selectedAutomaticVerification.night.precipitationObserved ? "Precipitation observed" : "No precipitation observed" : "Awaiting period end"}</td></tr><tr><td>Timing / hazards</td><td>{selectedArchive.night.timing} · {selectedArchive.night.hazards}</td><td>Saved with forecast</td><td>{selectedAutomaticVerification?.night.maxWindMph ? `Max wind ${selectedAutomaticVerification.night.maxWindMph} mph` : "Awaiting period end"}</td></tr></tbody></table>
         <div className="verification-notes"><div><span>Observation snapshot</span><strong>Captured</strong><small>{selectedArchive.evidence.observation}</small></div><div><span>NWS guidance snapshot</span><strong>Captured</strong><small>{selectedArchive.evidence.forecast}</small></div><div><span>Alert snapshot</span><strong>Captured</strong><small>{selectedArchive.evidence.alerts}</small></div></div><section className="saved-references"><h3>Attached reference data</h3><p>These are the source snapshots selected when this forecast was submitted.</p>{selectedReferences.length ? selectedReferences.map((reference) => <article key={`${reference.period}-${reference.id}`}><strong>{reference.period} · {reference.label}</strong><pre>{reference.detail}</pre></article>) : <p className="empty">No reference sources were attached to this older record.</p>}</section></div><aside className="history"><h3>Forecast history</h3><p>Open a saved forecast and its captured evidence. Right-click a record for actions.</p>{filteredArchives.map((archive) => { const verification = automaticVerifications[archive.id]; const dayScore = verification?.dayScore; const nightScore = verification?.nightScore; return <button key={archive.id} className={archive.id === selectedArchiveId ? "active" : ""} onClick={() => setSelectedArchiveId(archive.id)} onContextMenu={(event) => { event.preventDefault(); setArchiveMenuId(archive.id); setArchiveMenuPosition({ left: event.clientX, top: event.clientY }); }}>Forecast: {forecastTargetTitle(archive.targetDate)}<div className="archive-score-bars"><span><i style={{ width: `${dayScore ?? 0}%` }} /></span><small>Day {dayScore ?? "pending"}</small><span><i style={{ width: `${nightScore ?? 0}%` }} /></span><small>Night {nightScore ?? "pending"}</small></div><small>{archiveSubmissionTitle(archive)} · V{archive.versionNumber ?? 1} · {archive.status}</small></button>})}{filteredArchives.length === 0 && <p className="empty">No forecasts match these filters.</p>}<button onClick={() => setSelectedArchiveId(null)}>Example · Jul 13<small>Sample verification layout</small></button></aside></div></>
