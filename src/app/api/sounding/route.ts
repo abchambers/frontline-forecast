@@ -13,7 +13,7 @@ function candidates() {
 }
 
 function stamp(date: Date) {
-  return date.toISOString().replace(/[-:T]/g, "").slice(2, 12);
+  return date.toISOString().replace(/[-:T]/g, "").slice(2, 10);
 }
 
 export async function GET() {
@@ -21,10 +21,13 @@ export async function GET() {
     const cycle = stamp(candidate);
     const url = `https://www.spc.noaa.gov/exper/soundings/${cycle}_OBS/FFC.txt`;
     try {
-      const response = await fetch(url, { headers: { "User-Agent": "The Weather Desk student forecasting project" }, next: { revalidate: 3600 } });
+      const response = await fetch(url, {
+        headers: { "User-Agent": "The Weather Desk student forecasting project" },
+        cache: "no-store",
+      });
       if (!response.ok) continue;
       const text = (await response.text()).trim();
-      if (text.length > 100) return NextResponse.json({ station: "FFC", cycle: `${cycle.slice(0, 6)} ${cycle.slice(6)}Z`, text, source: url }, { headers: { "Cache-Control": "s-maxage=3600" } });
+      if (text.length > 100) return NextResponse.json({ station: "KFFC", cycle: `${cycle.slice(0, 6)} ${cycle.slice(6)}Z`, text, source: url }, { headers: { "Cache-Control": "s-maxage=900, stale-while-revalidate=3600" } });
     } catch {
       continue;
     }

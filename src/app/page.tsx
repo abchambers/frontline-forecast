@@ -8,7 +8,11 @@ const RadarMap = dynamic(() => import("./radar-map"), {
   loading: () => <div className="radar-loading">Loading live radar…</div>,
 });
 
-type DataPanel = "nbm" | "sounding" | "models";
+type DataPanel = "nbm" | "sounding" | "models" | "ensembles" | "model-sounding";
+type GuidanceGroup = "high-res" | "global";
+type RadarMapView = "composite" | "base" | "precipitation_new" | "clouds_new" | "pressure_new" | "wind_new" | "temp_new";
+type RadarLegend = { title: string; left: string; middle: string; right: string; unit: string; gradient: string };
+type OpenMeteoModel = "best_match" | "hrrr_conus" | "nbm_conus" | "nam_conus" | "gfs_global" | "ecmwf_ifs" | "icon_global" | "gem_global";
 type WorkspaceSection = "dashboard" | "forecast" | "verify" | "control";
 type LiveWeather = {
   location: string;
@@ -20,6 +24,36 @@ type LiveWeather = {
   fetchedAt: string;
 };
 type RadarTimelineFrame = { time: number; tileUrl: string };
+type OpenMeteoGuidance = {
+  provider: string;
+  model: string;
+  location: string;
+  current: { time: string; temperatureF: number | null; feelsLikeF: number | null; windMph: number | null; gustMph: number | null; weatherCode: number | null } | null;
+  days: { date: string; highF: number | null; lowF: number | null; precipitationProbability: number | null; windMph: number | null; gustMph: number | null; weatherCode: number | null }[];
+  nextHours: { time: string; temperatureF: number | null; dewpointF: number | null; precipitationProbability: number | null; precipitationIn: number | null; cloudCover: number | null; windMph: number | null; gustMph: number | null; cape: number | null; weatherCode: number | null }[];
+  source: string;
+  fetchedAt: string;
+};
+type ModelSounding = {
+  provider: string;
+  model: string;
+  location: string;
+  runTime: string;
+  runOffset: number;
+  cadenceHours: number;
+  profiles: { time: string; diagnostics: { cape: number | null; cin: number | null; freezingLevelHeightM: number | null }; levels: { pressureHpa: number; temperatureF: number | null; relativeHumidity: number | null; windMph: number | null; windDirection: number | null; geopotentialHeightM: number | null }[] }[];
+  source: string;
+  fetchedAt: string;
+};
+type EnsembleGuidance = {
+  provider: string;
+  model: string;
+  location: string;
+  rows: { time: string; temperature: EnsembleDistribution; precipitation: EnsembleDistribution; wind: EnsembleDistribution }[];
+  source: string;
+  fetchedAt: string;
+};
+type EnsembleDistribution = { members: number; min: number | null; max: number | null; mean: number | null; spread: number | null };
 type SavedForecast = {
   id: string;
   runId?: string;
@@ -49,6 +83,11 @@ const forecastDraftStorageKey = "weather-desk-active-forecast-draft";
 const sessionStorageKey = "weather-desk-supabase-session";
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+const officialFfcSoundingImageUrl = "https://www.spc.noaa.gov/exper/soundings/LATEST/FFC.gif";
+const guidanceModels = {
+  "high-res": [["best_match", "Auto"], ["hrrr_conus", "HRRR"], ["nam_conus", "NAM"], ["nbm_conus", "NBM blend"]],
+  global: [["gfs_global", "GFS"], ["ecmwf_ifs", "ECMWF"], ["icon_global", "ICON"], ["gem_global", "GEM"]],
+} as const satisfies Record<GuidanceGroup, readonly (readonly [OpenMeteoModel, string])[]>;
 
 function addDays(date: Date, amount: number) {
   const next = new Date(date);
@@ -98,6 +137,192 @@ function weatherIcon(description: string) {
   if (text.includes("cloud")) return "☁️";
   if (text.includes("fog")) return "🌫";
   return "☀️";
+}
+
+function openMeteoWeatherLabel(code: number | null) {
+  if (code === null) return "Unavailable";
+  if ([95, 96, 99].includes(code)) return "Thunderstorms";
+  if ([80, 81, 82].includes(code)) return "Rain showers";
+  if ([51, 53, 55, 56, 57].includes(code)) return "Drizzle";
+  if ([61, 63, 65, 66, 67].includes(code)) return "Rain";
+  if ([71, 73, 75, 77, 85, 86].includes(code)) return "Snow";
+  if ([45, 48].includes(code)) return "Fog";
+  if ([1, 2, 3].includes(code)) return "Partly cloudy";
+  return "Clear";
+}
+
+function openMeteoHour(time: string) {
+  return new Intl.DateTimeFormat("en-US", { hour: "numeric", timeZone: "America/New_York" }).format(new Date(`${time}:00`));
+}
+
+function modelTimestamp(time: string) {
+  return new Intl.DateTimeFormat("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(`${time}:00`));
+}
+
+function runTimestamp(time: string) {
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "UTC", timeZoneName: "short" }).format(new Date(`${time}:00Z`));
+}
+
+const radarLegends: Record<RadarMapView, RadarLegend | null> = {
+  composite: { title: "Base reflectivity", left: "0", middle: "35", right: "70+", unit: "dBZ", gradient: "linear-gradient(90deg,#6fb7ff 0 7%,#3bd8e9 7% 14%,#35ca8a 14% 22%,#36b84d 22% 30%,#a9d337 30% 38%,#efe23a 38% 46%,#ffbf25 46% 54%,#ff8027 54% 62%,#ec3e32 62% 70%,#be1f57 70% 78%,#9b2678 78% 86%,#dbdce5 86% 100%)" },
+  precipitation_new: { title: "Precipitation intensity", left: "Light", middle: "Moderate", right: "Heavy", unit: "OpenWeather", gradient: "linear-gradient(90deg,#77b7ff 0%,#38c5d5 22%,#38bf68 44%,#e2d42f 65%,#ff8d21 82%,#d7263d 100%)" },
+  clouds_new: { title: "Cloud cover", left: "0%", middle: "50%", right: "100%", unit: "OpenWeather", gradient: "linear-gradient(90deg,#eef5fa 0%,#bfcbd8 35%,#748293 68%,#263544 100%)" },
+  pressure_new: { title: "Surface pressure", left: "Lower", middle: "Typical", right: "Higher", unit: "OpenWeather", gradient: "linear-gradient(90deg,#5061bf 0%,#77b0db 30%,#d9df6e 55%,#e79239 78%,#b33447 100%)" },
+  wind_new: { title: "Wind speed", left: "Light", middle: "Breezy", right: "Strong", unit: "OpenWeather", gradient: "linear-gradient(90deg,#b3ecff 0%,#4ab8f0 24%,#46c76e 48%,#f0c42f 70%,#e65642 88%,#a72777 100%)" },
+  temp_new: { title: "Temperature", left: "Colder", middle: "Mild", right: "Warmer", unit: "OpenWeather", gradient: "linear-gradient(90deg,#5148a8 0%,#4a9de0 22%,#65c86b 48%,#f0d544 68%,#f48635 84%,#d84242 100%)" },
+  base: null,
+};
+
+const radarLegendBands: Record<Exclude<RadarMapView, "base">, { label: string; description: string }[]> = {
+  composite: [
+    { label: "0–10", description: "Very light reflectivity: drizzle, insects, or weak echoes." },
+    { label: "10–20", description: "Light precipitation or a weak shower." },
+    { label: "20–30", description: "Steady light to moderate rain." },
+    { label: "30–40", description: "Moderate rain; heavier showers may be developing." },
+    { label: "40–50", description: "Heavy rain and stronger convective cores." },
+    { label: "50–60", description: "Very heavy rain; thunderstorms are likely." },
+    { label: "60–70", description: "Severe-intensity core; hail is possible." },
+    { label: "70+", description: "Extreme reflectivity; treat as a potentially dangerous core." },
+  ],
+  precipitation_new: [{ label: "Low", description: "Lighter precipitation intensity." }, { label: "Mid", description: "Moderate precipitation intensity." }, { label: "High", description: "Heavier precipitation intensity." }],
+  clouds_new: [{ label: "0–25%", description: "Mostly clear sky." }, { label: "25–75%", description: "Partial to broken cloud cover." }, { label: "75–100%", description: "Overcast cloud cover." }],
+  pressure_new: [{ label: "Lower", description: "Lower relative surface pressure." }, { label: "Typical", description: "Typical local pressure range." }, { label: "Higher", description: "Higher relative surface pressure." }],
+  wind_new: [{ label: "Light", description: "Light wind speeds." }, { label: "Breezy", description: "Breezy wind speeds." }, { label: "Strong", description: "Stronger wind speeds." }],
+  temp_new: [{ label: "Cool", description: "Cooler temperatures within the displayed layer." }, { label: "Mild", description: "Middle temperature range." }, { label: "Warm", description: "Warmer temperatures within the displayed layer." }],
+};
+
+function RadarLegendStrip({ view }: { view: RadarMapView }) {
+  const legend = radarLegends[view];
+  const [hoveredBand, setHoveredBand] = useState<{ label: string; description: string } | null>(null);
+  if (view === "base" || !legend) return <span className="radar-source-note">Base map · pan and zoom to explore</span>;
+  const bands = radarLegendBands[view];
+  return <div className="radar-legend" aria-label={`${legend.title} color scale`}><span>{legend.title}</span><div className="radar-legend-scale"><i style={{ background: legend.gradient }} />{bands.map((band) => <button type="button" key={band.label} aria-label={`${band.label}: ${band.description}`} onBlur={() => setHoveredBand(null)} onFocus={() => setHoveredBand(band)} onMouseLeave={() => setHoveredBand(null)} onMouseEnter={() => setHoveredBand(band)} />)}</div><div><small>{legend.left}</small><small>{legend.middle}</small><small>{legend.right}</small></div><em>{hoveredBand ? `${hoveredBand.label} · ${hoveredBand.description}` : `${legend.unit} · Hover a color band for guidance`}</em></div>;
+}
+
+function ModelGuidanceTable({ guidance, view, compact = false }: { guidance: OpenMeteoGuidance; view: "hourly" | "daily"; compact?: boolean }) {
+  const tableClassName = `guidance-table${compact ? " compact-guidance-table" : ""}`;
+  if (view === "daily") return <div className="guidance-table-wrap"><table className={tableClassName}><thead><tr><th>Day</th><th>High / low</th><th>Conditions</th><th>Max PoP</th><th>Wind / gust</th></tr></thead><tbody>{guidance.days.map((day) => <tr key={day.date}><th>{forecastTargetTitle(day.date)}</th><td>{day.highF ?? "—"}° / {day.lowF ?? "—"}°</td><td>{openMeteoWeatherLabel(day.weatherCode)}</td><td>{day.precipitationProbability ?? "—"}%</td><td>{day.windMph ?? "—"} / {day.gustMph ?? "—"} mph</td></tr>)}</tbody></table></div>;
+  return <div className="guidance-table-wrap"><table className={tableClassName}><thead><tr><th>Valid</th><th>Temp / dew</th><th>PoP</th><th>Wind / gust</th><th>Cloud</th><th>CAPE</th></tr></thead><tbody>{guidance.nextHours.map((hour) => <tr key={hour.time}><th>{modelTimestamp(hour.time)}</th><td>{hour.temperatureF ?? "—"}° / {hour.dewpointF ?? "—"}°</td><td>{hour.precipitationProbability ?? "—"}%</td><td>{hour.windMph ?? "—"} / {hour.gustMph ?? "—"} mph</td><td>{hour.cloudCover ?? "—"}%</td><td>{hour.cape ?? "—"} J/kg</td></tr>)}</tbody></table></div>;
+}
+
+function dewpointFromTemperatureAndRh(temperatureF: number | null, relativeHumidity: number | null) {
+  if (temperatureF === null || relativeHumidity === null || relativeHumidity <= 0) return null;
+  const temperatureC = (temperatureF - 32) * 5 / 9;
+  const gamma = Math.log(relativeHumidity / 100) + (17.625 * temperatureC) / (243.04 + temperatureC);
+  return Math.round(((243.04 * gamma) / (17.625 - gamma)) * 9 / 5 + 32);
+}
+
+function LegacyModelSoundingChart({ profile }: { profile: ModelSounding["profiles"][number] }) {
+  const levels = profile.levels.filter((level) => level.temperatureF !== null);
+  const width = 900;
+  const height = 430;
+  const margin = { top: 22, right: 310, bottom: 38, left: 52 };
+  const plotBottom = height - margin.bottom;
+  const plotRight = width - margin.right;
+  const pressureToY = (pressure: number) => margin.top + ((Math.log(1000) - Math.log(pressure)) / (Math.log(1000) - Math.log(100))) * (plotBottom - margin.top);
+  const toCelsius = (temperatureF: number) => (temperatureF - 32) * 5 / 9;
+  const temperatureToX = (temperatureC: number, pressure: number) => margin.left + ((temperatureC + 60) / 110) * (plotRight - margin.left) + ((plotBottom - pressureToY(pressure)) / (plotBottom - margin.top)) * 118;
+  const pointPath = (values: (number | null)[]) => levels.map((level, index) => values[index] === null ? null : `${index === 0 || values[index - 1] === null ? "M" : "L"}${temperatureToX(toCelsius(values[index] as number), level.pressureHpa).toFixed(1)},${pressureToY(level.pressureHpa).toFixed(1)}`).filter(Boolean).join(" ");
+  const temperatures = levels.map((level) => level.temperatureF);
+  const dewpoints = levels.map((level) => dewpointFromTemperatureAndRh(level.temperatureF, level.relativeHumidity));
+  const pressureLines = [1000, 925, 850, 700, 500, 400, 300, 200, 100];
+  const temperatureLines = [-60, -50, -40, -30, -20, -10, 0, 10, 20, 30, 40, 50];
+  const windBarbs = levels.filter((level) => level.windMph !== null && level.windDirection !== null);
+  const hodo = { x: plotRight + 150, y: 176, radius: 108 };
+  const hodoPoint = (level: typeof windBarbs[number]) => { const speedKt = (level.windMph ?? 0) / 1.15078; const radians = ((level.windDirection ?? 0) * Math.PI) / 180; return { x: hodo.x - speedKt * Math.sin(radians) * 2.1, y: hodo.y + speedKt * Math.cos(radians) * 2.1 }; };
+  const hodoPath = windBarbs.map((level, index) => { const point = hodoPoint(level); return `${index ? "L" : "M"}${point.x.toFixed(1)},${point.y.toFixed(1)}`; }).join(" ");
+  return <figure className="sounding-chart"><figcaption><span>Skew-T / log-P forecast profile</span><small>Model guidance · temperature, moisture, wind, and hodograph</small></figcaption><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Skew-T log-P model sounding with temperature, dew point, pressure, winds, and hodograph"><defs><clipPath id="sounding-plot"><rect x={margin.left} y={margin.top} width={plotRight - margin.left} height={plotBottom - margin.top} /></clipPath></defs><rect x={margin.left} y={margin.top} width={plotRight - margin.left} height={plotBottom - margin.top} rx="6" /><g className="sounding-grid">{pressureLines.map((pressure) => <g key={pressure}><line x1={margin.left} x2={plotRight} y1={pressureToY(pressure)} y2={pressureToY(pressure)} /><text x={margin.left - 9} y={pressureToY(pressure) + 4} textAnchor="end">{pressure}</text></g>)}{temperatureLines.map((temperature) => <g key={temperature}><line x1={temperatureToX(temperature, 1000)} x2={temperatureToX(temperature, 100)} y1={plotBottom} y2={margin.top} /><text x={temperatureToX(temperature, 1000)} y={height - 16} textAnchor="middle">{temperature}°</text></g>)}</g><g clipPath="url(#sounding-plot)"><path className="sounding-temperature" d={pointPath(temperatures)} /><path className="sounding-dewpoint" d={pointPath(dewpoints)} /></g><g className="sounding-winds">{windBarbs.map((level) => { const speedKt = Math.round((level.windMph ?? 0) / 1.15078 / 5) * 5; const barbs = Array.from({ length: Math.floor(speedKt / 10) }, (_, index) => index); const hasHalf = speedKt % 10 >= 5; return <g key={level.pressureHpa} transform={`translate(${plotRight + 48} ${pressureToY(level.pressureHpa)}) rotate(${(level.windDirection ?? 0) + 180})`}><line x1="0" y1="0" x2="0" y2="-26" />{barbs.map((_, index) => <line key={index} x1="0" y1={-5 - index * 5} x2="10" y2={-10 - index * 5} />)}{hasHalf && <line x1="0" y1={-5 - barbs.length * 5} x2="6" y2={-8 - barbs.length * 5} />}</g>; })}</g><g className="sounding-hodograph"><text x={hodo.x} y={25} textAnchor="middle">Hodograph</text>{[20, 40].map((speed) => <circle key={speed} cx={hodo.x} cy={hodo.y} r={speed * 2.1} />)}<line x1={hodo.x - hodo.radius} x2={hodo.x + hodo.radius} y1={hodo.y} y2={hodo.y} /><line x1={hodo.x} x2={hodo.x} y1={hodo.y - hodo.radius} y2={hodo.y + hodo.radius} /><path d={hodoPath} />{windBarbs.map((level) => { const point = hodoPoint(level); return <g key={level.pressureHpa}><circle cx={point.x} cy={point.y} r="3.5" /><text x={point.x + 6} y={point.y - 5}>{level.pressureHpa}</text></g>; })}</g><text className="sounding-axis-label" x={15} y={height / 2} transform={`rotate(-90 15 ${height / 2})`} textAnchor="middle">Pressure (hPa)</text><text className="sounding-axis-label" x={plotRight + 48} y={height - 15} textAnchor="middle">wind</text><text className="sounding-axis-label" x={(margin.left + plotRight) / 2} y={height - 1} textAnchor="middle">Temperature (°C)</text></svg></figure>;
+}
+
+function VerticalProfileChart({ profile }: { profile: ModelSounding["profiles"][number] }) {
+  const levels = profile.levels.filter((level) => level.temperatureF !== null && level.geopotentialHeightM !== null);
+  const width = 900;
+  const height = 430;
+  const margin = { top: 28, right: 58, bottom: 45, left: 60 };
+  const right = width - margin.right;
+  const bottom = height - margin.bottom;
+  const maxHeight = Math.max(16000, ...levels.map((level) => level.geopotentialHeightM ?? 0));
+  const minTemperature = Math.floor((Math.min(...levels.map((level) => level.temperatureF ?? 100)) - 8) / 10) * 10;
+  const maxTemperature = Math.ceil((Math.max(...levels.map((level) => level.temperatureF ?? -100)) + 8) / 10) * 10;
+  const x = (temperature: number) => margin.left + ((temperature - minTemperature) / Math.max(1, maxTemperature - minTemperature)) * (right - margin.left);
+  const y = (heightM: number) => bottom - (heightM / maxHeight) * (bottom - margin.top);
+  const dewpoint = (level: typeof levels[number]) => dewpointFromTemperatureAndRh(level.temperatureF, level.relativeHumidity);
+  const path = (values: (number | null)[]) => levels.map((level, index) => {
+    const value = values[index];
+    return value === null ? null : `${index === 0 || values[index - 1] === null ? "M" : "L"}${x(value).toFixed(1)},${y(level.geopotentialHeightM as number).toFixed(1)}`;
+  }).filter(Boolean).join(" ");
+  const temperatureTicks = Array.from({ length: Math.floor((maxTemperature - minTemperature) / 10) + 1 }, (_, index) => minTemperature + index * 10);
+  const heightTicks = [0, 1500, 3000, 6000, 9000, 12000, 15000].filter((value) => value <= maxHeight);
+  const windLevels = levels.filter((level) => level.windMph !== null && level.windDirection !== null);
+  return <figure className="vertical-profile-chart"><figcaption><span>Model vertical profile</span><small>Temperature and dew point against geopotential height · this is intentionally not labeled as a Skew‑T</small></figcaption><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Model vertical temperature and dew point profile for Athens"><rect x={margin.left} y={margin.top} width={right - margin.left} height={bottom - margin.top} rx="6" />{heightTicks.map((heightM) => <g className="profile-grid" key={heightM}><line x1={margin.left} x2={right} y1={y(heightM)} y2={y(heightM)} /><text x={margin.left - 9} y={y(heightM) + 4} textAnchor="end">{heightM / 1000} km</text></g>)}{temperatureTicks.map((temperature) => <g className="profile-grid" key={temperature}><line x1={x(temperature)} x2={x(temperature)} y1={margin.top} y2={bottom} /><text x={x(temperature)} y={height - 17} textAnchor="middle">{temperature}°</text></g>)}<path className="profile-temperature" d={path(levels.map((level) => level.temperatureF))} /><path className="profile-dewpoint" d={path(levels.map(dewpoint))} />{windLevels.map((level) => { const speedKt = Math.round((level.windMph ?? 0) / 1.15078 / 5) * 5; const flags = Math.floor(speedKt / 10); return <g className="profile-wind" key={level.pressureHpa} transform={`translate(${right - 14} ${y(level.geopotentialHeightM as number)}) rotate(${(level.windDirection ?? 0) + 180})`}><line x1="0" y1="0" x2="0" y2="-24" />{Array.from({ length: flags }, (_, index) => <line key={index} x1="0" y1={-5 - index * 5} x2="9" y2={-10 - index * 5} />)}</g>; })}<text className="profile-axis-label" x={18} y={height / 2} transform={`rotate(-90 18 ${height / 2})`} textAnchor="middle">Geopotential height (km MSL)</text><text className="profile-axis-label" x={(margin.left + right) / 2} y={height - 2} textAnchor="middle">Temperature / dew point (°F) · wind barbs at right</text></svg><div className="profile-legend"><span><i className="temperature" />Temperature</span><span><i className="dewpoint" />Dew point (derived from model RH)</span><small>Use the official KFFC panel for observed parcel diagnostics, hodograph, and storm parameters.</small></div></figure>;
+}
+
+function SkewTChart({ profile }: { profile: ModelSounding["profiles"][number] }) {
+  const levels = profile.levels.filter((level) => level.temperatureF !== null);
+  const width = 920;
+  const height = 500;
+  const margin = { top: 28, right: 270, bottom: 44, left: 58 };
+  const right = width - margin.right;
+  const bottom = height - margin.bottom;
+  const logarithmicHeight = Math.log(1000 / 100);
+  const pressureToY = (pressure: number) => margin.top + (Math.log(1000 / pressure) / logarithmicHeight) * (bottom - margin.top);
+  // Standard Skew-T transform: x is temperature plus a fixed multiple of log pressure.
+  // Constant temperatures are diagonal; isobars stay horizontal on the log-pressure axis.
+  const skew = 32;
+  const x = (temperatureC: number, pressure: number) => margin.left + ((temperatureC + 70 + skew * Math.log(1000 / pressure)) / 130) * (right - margin.left);
+  const toC = (temperatureF: number) => (temperatureF - 32) * 5 / 9;
+  const pathFor = (values: (number | null)[]) => levels.map((level, index) => {
+    const value = values[index];
+    return value === null ? null : `${index === 0 || values[index - 1] === null ? "M" : "L"}${x(toC(value), level.pressureHpa).toFixed(1)},${pressureToY(level.pressureHpa).toFixed(1)}`;
+  }).filter(Boolean).join(" ");
+  const pressureLines = [1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100];
+  const isotherms = [-70, -60, -50, -40, -30, -20, -10, 0, 10, 20, 30, 40, 50];
+  const dryAdiabats = [250, 260, 270, 280, 290, 300, 310, 320, 330, 340, 350, 360, 370, 380, 390, 400, 420, 440];
+  const mixingRatios = [0.2, 0.4, 1, 2, 4, 8, 12, 16];
+  const dryAdiabatPath = (theta: number) => Array.from({ length: 50 }, (_, index) => 1000 - index * (900 / 49)).map((pressure, index) => {
+    const temperatureC = theta * Math.pow(pressure / 1000, 0.2854) - 273.15;
+    return `${index === 0 ? "M" : "L"}${x(temperatureC, pressure).toFixed(1)},${pressureToY(pressure).toFixed(1)}`;
+  }).join(" ");
+  const dewpointForMixingRatio = (mixingRatioGkg: number, pressure: number) => {
+    const mixingRatio = mixingRatioGkg / 1000;
+    const vaporPressure = (mixingRatio * pressure) / (0.622 + mixingRatio);
+    const ln = Math.log(vaporPressure / 6.112);
+    return (243.5 * ln) / (17.67 - ln);
+  };
+  const mixingRatioPath = (mixingRatio: number) => Array.from({ length: 35 }, (_, index) => 1000 - index * (600 / 34)).map((pressure, index) => `${index === 0 ? "M" : "L"}${x(dewpointForMixingRatio(mixingRatio, pressure), pressure).toFixed(1)},${pressureToY(pressure).toFixed(1)}`).join(" ");
+  const dewpoints = levels.map((level) => dewpointFromTemperatureAndRh(level.temperatureF, level.relativeHumidity));
+  const windLevels = levels.filter((level) => level.windMph !== null && level.windDirection !== null);
+  const hodo = { x: right + 145, y: 187, scale: 2.15, radius: 96 };
+  const hodoPoint = (level: typeof windLevels[number]) => { const speedKt = (level.windMph ?? 0) / 1.15078; const radians = ((level.windDirection ?? 0) * Math.PI) / 180; return { x: hodo.x - speedKt * Math.sin(radians) * hodo.scale, y: hodo.y + speedKt * Math.cos(radians) * hodo.scale }; };
+  const hodoPath = windLevels.map((level, index) => { const point = hodoPoint(level); return `${index ? "L" : "M"}${point.x.toFixed(1)},${point.y.toFixed(1)}`; }).join(" ");
+  return <figure className="skewt-chart"><figcaption><div><span>Skew‑T / log‑P model profile</span><small>Thermodynamic projection with standard log-pressure, skewed-temperature geometry</small></div><small>Model guidance only · no parcel diagnostics are inferred</small></figcaption><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Skew-T log-P model profile with temperature, dew point, pressure, winds, and hodograph"><defs><clipPath id="skewt-plot"><rect x={margin.left} y={margin.top} width={right - margin.left} height={bottom - margin.top} /></clipPath></defs><rect x={margin.left} y={margin.top} width={right - margin.left} height={bottom - margin.top} rx="5" /><g className="skewt-grid">{pressureLines.map((pressure) => <g key={pressure}><line className="isobar" x1={margin.left} x2={right} y1={pressureToY(pressure)} y2={pressureToY(pressure)} /><text x={margin.left - 8} y={pressureToY(pressure) + 4} textAnchor="end">{pressure}</text></g>)}{isotherms.map((temperature) => <g key={temperature}><line className="isotherm" x1={x(temperature, 1000)} x2={x(temperature, 100)} y1={pressureToY(1000)} y2={pressureToY(100)} /><text x={x(temperature, 1000)} y={height - 15} textAnchor="middle">{temperature}°</text></g>)}<g clipPath="url(#skewt-plot)">{dryAdiabats.map((theta) => <path className="dry-adiabat" key={theta} d={dryAdiabatPath(theta)} />)}{mixingRatios.map((ratio) => <path className="mixing-ratio" key={ratio} d={mixingRatioPath(ratio)} />)}<path className="skewt-temperature" d={pathFor(levels.map((level) => level.temperatureF))} /><path className="skewt-dewpoint" d={pathFor(dewpoints)} /></g></g><g className="skewt-winds">{windLevels.map((level) => { const speedKt = Math.round((level.windMph ?? 0) / 1.15078 / 5) * 5; const flags = Math.floor(speedKt / 10); return <g key={level.pressureHpa} transform={`translate(${right + 44} ${pressureToY(level.pressureHpa)}) rotate(${(level.windDirection ?? 0) + 180})`}><line x1="0" y1="0" x2="0" y2="-25" />{Array.from({ length: flags }, (_, index) => <line key={index} x1="0" y1={-5 - index * 5} x2="9" y2={-10 - index * 5} />)}</g>; })}</g><g className="skewt-hodograph"><text x={hodo.x} y={35} textAnchor="middle">Hodograph</text>{[20, 40].map((speed) => <circle key={speed} cx={hodo.x} cy={hodo.y} r={speed * hodo.scale} />)}<line x1={hodo.x - hodo.radius} x2={hodo.x + hodo.radius} y1={hodo.y} y2={hodo.y} /><line x1={hodo.x} x2={hodo.x} y1={hodo.y - hodo.radius} y2={hodo.y + hodo.radius} /><path d={hodoPath} />{windLevels.filter((level) => [1000, 850, 700, 500, 300].includes(level.pressureHpa)).map((level) => { const point = hodoPoint(level); return <g key={level.pressureHpa}><circle cx={point.x} cy={point.y} r="3" /><text x={point.x + 5} y={point.y - 5}>{level.pressureHpa}</text></g>; })}</g><text className="skewt-axis" x={16} y={height / 2} transform={`rotate(-90 16 ${height / 2})`} textAnchor="middle">Pressure (hPa)</text><text className="skewt-axis" x={right + 44} y={height - 15} textAnchor="middle">wind</text></svg><div className="skewt-legend"><span><i className="temperature" />Temperature</span><span><i className="dewpoint" />Dew point (from model RH)</span><span><i className="dry" />Dry adiabats</span><span><i className="mixing" />Mixing ratio</span></div></figure>;
+}
+
+// Do not label a hand-drawn projection as a Skew-T. This intentionally uses
+// a simple, auditable vertical coordinate until the app has a validated Skew-T renderer.
+function ModelSoundingChart({ profile }: { profile: ModelSounding["profiles"][number] }) {
+  return <><SkewTChart profile={profile} /><ModelEnvironmentSummary profile={profile} /></>;
+}
+
+function ModelEnvironmentSummary({ profile }: { profile: ModelSounding["profiles"][number] }) {
+  const surface = profile.levels.find((level) => level.pressureHpa === 1000) ?? profile.levels[0];
+  const midLevel = profile.levels.find((level) => level.pressureHpa === 500);
+  const windVector = (level: typeof surface | undefined) => {
+    if (!level || level.windMph === null || level.windDirection === null) return null;
+    const radians = level.windDirection * Math.PI / 180;
+    return { u: -level.windMph * Math.sin(radians), v: -level.windMph * Math.cos(radians) };
+  };
+  const surfaceWind = windVector(surface);
+  const midWind = windVector(midLevel);
+  const deepLayerShear = surfaceWind && midWind ? Math.round(Math.hypot(midWind.u - surfaceWind.u, midWind.v - surfaceWind.v)) : null;
+  const lapseRate = surface?.temperatureF != null && midLevel?.temperatureF != null && surface?.geopotentialHeightM != null && midLevel?.geopotentialHeightM != null
+    ? Math.round((((surface.temperatureF - midLevel.temperatureF) * 5 / 9) / ((midLevel.geopotentialHeightM - surface.geopotentialHeightM) / 1000)) * 10) / 10
+    : null;
+  return <section className="model-environment"><div><span>Surface CAPE</span><strong>{profile.diagnostics.cape ?? "—"} J/kg</strong><small>model-provided</small></div><div><span>CIN</span><strong>{profile.diagnostics.cin ?? "—"} J/kg</strong><small>model-provided</small></div><div><span>Freezing level</span><strong>{profile.diagnostics.freezingLevelHeightM === null ? "—" : `${Math.round(profile.diagnostics.freezingLevelHeightM * 3.28084).toLocaleString()} ft`}</strong><small>model-provided</small></div><div><span>0–6 km shear</span><strong>{deepLayerShear ?? "—"} mph</strong><small>derived from 1000–500 hPa winds</small></div><div><span>1000–500 lapse rate</span><strong>{lapseRate ?? "—"} °C/km</strong><small>derived from the profile</small></div></section>;
+}
+
+function EnsembleTable({ guidance }: { guidance: EnsembleGuidance }) {
+  return <div className="guidance-table-wrap"><table className="guidance-table ensemble-table"><thead><tr><th>Valid</th><th>Temp range / mean</th><th>Spread</th><th>Precip range</th><th>Wind range / mean</th></tr></thead><tbody>{guidance.rows.filter((_, index) => index % 3 === 0).slice(0, 24).map((row) => <tr key={row.time}><th>{modelTimestamp(row.time)}</th><td>{row.temperature.min ?? "—"}–{row.temperature.max ?? "—"}° / {row.temperature.mean ?? "—"}°</td><td>±{row.temperature.spread ?? "—"}°</td><td>{row.precipitation.min ?? "—"}–{row.precipitation.max ?? "—"} in</td><td>{row.wind.min ?? "—"}–{row.wind.max ?? "—"} / {row.wind.mean ?? "—"} mph</td></tr>)}</tbody></table></div>;
 }
 
 function savedReferences(value: unknown): ReferenceItem[] {
@@ -165,7 +390,8 @@ export default function Home() {
   const [radarFrameIndex, setRadarFrameIndex] = useState(0);
   const [radarPlaying, setRadarPlaying] = useState(false);
   const [radarTimelineStatus, setRadarTimelineStatus] = useState("Loading radar timeline…");
-  const [radarOverlay, setRadarOverlay] = useState<"reflectivity" | "none">("reflectivity");
+  const [radarMapView, setRadarMapView] = useState<RadarMapView>("composite");
+  const [showNwsAlerts, setShowNwsAlerts] = useState(true);
   const [radarOpacity, setRadarOpacity] = useState(72);
   const [radarRefreshToken, setRadarRefreshToken] = useState(0);
   const [saveMessage, setSaveMessage] = useState("");
@@ -177,6 +403,23 @@ export default function Home() {
   const [nbmStatus, setNbmStatus] = useState("Loading latest KAHN NBM bulletin…");
   const [soundingText, setSoundingText] = useState("");
   const [soundingStatus, setSoundingStatus] = useState("Loading latest observed FFC sounding…");
+  const [openMeteoGuidance, setOpenMeteoGuidance] = useState<OpenMeteoGuidance | null>(null);
+  const [openMeteoStatus, setOpenMeteoStatus] = useState("Loading Open-Meteo guidance…");
+  const [guidanceGroup, setGuidanceGroup] = useState<GuidanceGroup>("high-res");
+  const [openMeteoModel, setOpenMeteoModel] = useState<OpenMeteoModel>("best_match");
+  const [openMeteoView, setOpenMeteoView] = useState<"hourly" | "daily" | "compare">("hourly");
+  const [comparisonLeftModel, setComparisonLeftModel] = useState<OpenMeteoModel>("hrrr_conus");
+  const [comparisonRightModel, setComparisonRightModel] = useState<OpenMeteoModel>("nbm_conus");
+  const [comparisonView, setComparisonView] = useState<"hourly" | "daily">("hourly");
+  const [modelComparison, setModelComparison] = useState<Partial<Record<OpenMeteoModel, OpenMeteoGuidance>>>({});
+  const [comparisonStatus, setComparisonStatus] = useState("");
+  const [ensembleGuidance, setEnsembleGuidance] = useState<EnsembleGuidance | null>(null);
+  const [ensembleStatus, setEnsembleStatus] = useState("Loading ensemble guidance…");
+  const [soundingModel, setSoundingModel] = useState<"hrrr" | "gfs">("hrrr");
+  const [soundingRunOffset, setSoundingRunOffset] = useState(0);
+  const [modelSounding, setModelSounding] = useState<ModelSounding | null>(null);
+  const [modelSoundingStatus, setModelSoundingStatus] = useState("Loading model sounding…");
+  const [soundingProfileIndex, setSoundingProfileIndex] = useState(0);
   const [archives, setArchives] = useState<SavedForecast[]>([]);
   const [selectedArchiveId, setSelectedArchiveId] = useState<string | null>(null);
   const [archiveDateFilter, setArchiveDateFilter] = useState("");
@@ -353,6 +596,73 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    setOpenMeteoStatus("Loading Open-Meteo guidance…");
+    fetch(`/api/open-meteo?model=${openMeteoModel}`)
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Open-Meteo guidance is unavailable");
+        setOpenMeteoGuidance(data as OpenMeteoGuidance);
+        setOpenMeteoStatus("");
+      })
+      .catch((error: Error) => setOpenMeteoStatus(error.message));
+  }, [openMeteoModel]);
+
+  useEffect(() => {
+    if (dataPanel !== "models" || openMeteoView !== "compare") return;
+    const models = [...new Set([comparisonLeftModel, comparisonRightModel])];
+    let active = true;
+    setComparisonStatus("Loading model comparison…");
+    Promise.all(models.map(async (model) => {
+      const response = await fetch(`/api/open-meteo?model=${model}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `Unable to load ${model}`);
+      return [model, data as OpenMeteoGuidance] as const;
+    }))
+      .then((entries) => {
+        if (!active) return;
+        setModelComparison(Object.fromEntries(entries));
+        setComparisonStatus("");
+      })
+      .catch((error: Error) => active && setComparisonStatus(error.message));
+    return () => { active = false; };
+  }, [dataPanel, openMeteoView, comparisonLeftModel, comparisonRightModel]);
+
+  useEffect(() => {
+    if (dataPanel !== "ensembles") return;
+    let active = true;
+    setEnsembleStatus("Loading GFS ensemble guidance…");
+    fetch("/api/ensembles")
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Ensemble guidance is unavailable");
+        if (active) {
+          setEnsembleGuidance(data as EnsembleGuidance);
+          setEnsembleStatus("");
+        }
+      })
+      .catch((error: Error) => active && setEnsembleStatus(error.message));
+    return () => { active = false; };
+  }, [dataPanel]);
+
+  useEffect(() => {
+    let active = true;
+    setModelSounding(null);
+    setModelSoundingStatus("Loading model sounding…");
+    fetch(`/api/model-sounding?model=${soundingModel}&runOffset=${soundingRunOffset}`)
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Model sounding is unavailable");
+        if (active) {
+          setModelSounding(data as ModelSounding);
+          setSoundingProfileIndex(0);
+          setModelSoundingStatus("");
+        }
+      })
+      .catch((error: Error) => active && setModelSoundingStatus(error.message));
+    return () => { active = false; };
+  }, [soundingModel, soundingRunOffset]);
+
+  useEffect(() => {
     const storedArchives = window.localStorage.getItem(archiveStorageKey);
     if (!storedArchives) return;
     try {
@@ -432,6 +742,93 @@ export default function Home() {
         : [...day[period].references, item];
       return { ...day, [period]: { ...day[period], references } };
     }) }));
+  }
+
+  function attachDeskReference(reference: ReferenceItem, targetDate?: string) {
+    if (!session) {
+      setSaveMessage("Log in before pinning reference data to a forecast.");
+      return;
+    }
+    const date = validForecastDate(targetDate) ? targetDate : selectedDay.date;
+    const existingIndex = forecastRun.days.findIndex((day) => day.date === date);
+    const nextDays = existingIndex >= 0
+      ? forecastRun.days
+      : [...forecastRun.days, createForecastDay(date)].sort((a, b) => a.date.localeCompare(b.date));
+    const nextIndex = nextDays.findIndex((day) => day.date === date);
+    setForecastRun((run) => {
+      const days = existingIndex >= 0 ? run.days : [...run.days, createForecastDay(date)].sort((a, b) => a.date.localeCompare(b.date));
+      const resolvedIndex = days.findIndex((day) => day.date === date);
+      return { ...run, days: days.map((day, index) => index !== resolvedIndex ? day : {
+        ...day,
+        day: { ...day.day, references: day.day.references.some((item) => item.id === reference.id) ? day.day.references : [...day.day.references, reference] },
+        night: { ...day.night, references: day.night.references.some((item) => item.id === reference.id) ? day.night.references : [...day.night.references, reference] },
+      }) };
+    });
+    setSelectedForecastDay(nextIndex);
+    setSaveMessage(`${reference.label} pinned to ${forecastTargetTitle(date)} day and night.`);
+  }
+
+  function attachGuidanceSeries(guidance: OpenMeteoGuidance, view: "hourly" | "daily") {
+    if (!session) {
+      setSaveMessage("Log in before pinning reference data to a forecast.");
+      return;
+    }
+    const referencesByDate = new Map<string, ReferenceItem>();
+    if (view === "daily") {
+      guidance.days.forEach((day) => referencesByDate.set(day.date, {
+        id: `model-daily-${guidance.model}-${day.date}-${guidance.fetchedAt}`,
+        label: `${guidance.model} daily guidance`,
+        detail: `${forecastTargetTitle(day.date)} · High ${day.highF ?? "—"}°F / low ${day.lowF ?? "—"}°F · ${openMeteoWeatherLabel(day.weatherCode)} · PoP ${day.precipitationProbability ?? "—"}% · Wind ${day.windMph ?? "—"}/${day.gustMph ?? "—"} mph`,
+      }));
+    } else {
+      const byDate = new Map<string, typeof guidance.nextHours>();
+      guidance.nextHours.forEach((hour) => {
+        const date = hour.time.slice(0, 10);
+        byDate.set(date, [...(byDate.get(date) ?? []), hour]);
+      });
+      byDate.forEach((hours, date) => referencesByDate.set(date, {
+        id: `model-hourly-${guidance.model}-${date}-${guidance.fetchedAt}`,
+        label: `${guidance.model} hourly guidance`,
+        detail: hours.map((hour) => `${modelTimestamp(hour.time)} · Temp/dew ${hour.temperatureF ?? "—"}°/${hour.dewpointF ?? "—"}°F · PoP ${hour.precipitationProbability ?? "—"}% · Wind ${hour.windMph ?? "—"}/${hour.gustMph ?? "—"} mph · CAPE ${hour.cape ?? "—"} J/kg`).join("\n"),
+      }));
+    }
+    const targetDates = [...referencesByDate.keys()];
+    setForecastRun((run) => {
+      const existingDates = new Set(run.days.map((day) => day.date));
+      const days = [...run.days, ...targetDates.filter((date) => !existingDates.has(date)).map(createForecastDay)]
+        .sort((a, b) => a.date.localeCompare(b.date));
+      return {
+        ...run,
+        days: days.map((day) => {
+          const reference = referencesByDate.get(day.date);
+          if (!reference) return day;
+          const add = (period: PeriodDraft) => period.references.some((item) => item.id === reference.id) ? period.references : [...period.references, reference];
+          return { ...day, day: { ...day.day, references: add(day.day) }, night: { ...day.night, references: add(day.night) } };
+        }),
+      };
+    });
+    setSaveMessage(`${guidance.model} ${view} guidance pinned to ${targetDates.length} matching forecast day${targetDates.length === 1 ? "" : "s"}.`);
+  }
+
+  function pinCurrentDeskPanel() {
+    const snippet = (value: string, maxLength = 5000) => value.length > maxLength ? `${value.slice(0, maxLength)}\n\n[Source snapshot truncated for archive storage.]` : value;
+    if (dataPanel === "nbm") {
+      attachDeskReference({ id: `nbm-${Date.now()}`, label: "NBM KAHN bulletin", detail: snippet(nbmText || nbmStatus) });
+      return;
+    }
+    if (dataPanel === "sounding") {
+      attachDeskReference({ id: `observed-kffc-${Date.now()}`, label: "Observed KFFC sounding", detail: snippet(soundingText || soundingStatus) });
+      return;
+    }
+    if (dataPanel === "ensembles") {
+      const firstRow = ensembleGuidance?.rows[0];
+      attachDeskReference({ id: `gfs-ensemble-${ensembleGuidance?.fetchedAt ?? Date.now()}`, label: "GFS ensemble guidance", detail: firstRow ? `${modelTimestamp(firstRow.time)} · ${firstRow.temperature.members} members · Temperature ${firstRow.temperature.min ?? "—"}–${firstRow.temperature.max ?? "—"}°F (mean ${firstRow.temperature.mean ?? "—"}°F) · Wind ${firstRow.wind.min ?? "—"}–${firstRow.wind.max ?? "—"} mph` : ensembleStatus }, firstRow?.time.slice(0, 10));
+      return;
+    }
+    if (dataPanel === "model-sounding") {
+      const profile = modelSounding?.profiles[soundingProfileIndex];
+      attachDeskReference({ id: `model-sounding-${modelSounding?.model ?? soundingModel}-${profile?.time ?? Date.now()}`, label: `${modelSounding?.model ?? soundingModel.toUpperCase()} model sounding`, detail: profile ? `${modelTimestamp(profile.time)} · run ${runTimestamp(modelSounding?.runTime ?? profile.time)} · CAPE ${profile.diagnostics.cape ?? "—"} J/kg · CIN ${profile.diagnostics.cin ?? "—"} J/kg · Freezing level ${profile.diagnostics.freezingLevelHeightM === null ? "—" : `${Math.round(profile.diagnostics.freezingLevelHeightM * 3.28084).toLocaleString()} ft`}` : modelSoundingStatus }, profile?.time.slice(0, 10));
+    }
   }
 
   async function saveForecast(event: React.FormEvent<HTMLFormElement>) {
@@ -623,9 +1020,9 @@ export default function Home() {
       </section>
       <section className="dashboard-grid">
         <article className="radar-card">
-          <div className="card-heading"><div><h2>Radar</h2><p>Live composite reflectivity · centered on Athens</p></div><div className="actions"><button onClick={() => { setRadarLoop((value) => !value); setRadarPlaying(false); }}>{radarLoop ? "Interactive map" : "Radar timeline"}</button><button onClick={() => setRadarRefreshToken((value) => value + 1)}>Refresh</button><button onClick={() => setRadarExpanded((value) => !value)}>{radarExpanded ? "Exit expanded view" : "Expand radar"}</button></div></div>
-          <div className="radar"><details className="radar-tools"><summary aria-label="Open radar controls">☰</summary><div><label>Overlay<select value={radarOverlay} onChange={(event) => setRadarOverlay(event.target.value as "reflectivity" | "none")}><option value="reflectivity">Composite reflectivity</option><option value="none">Base map only</option></select></label><label>Opacity <input type="range" min="20" max="100" value={radarOpacity} onChange={(event) => setRadarOpacity(Number(event.target.value))} /> <span>{radarOpacity}%</span></label><small>{radarLoop ? radarTimelineStatus : "Interactive radar controls."}</small></div></details>{radarLoop && <div className="radar-playback"><button type="button" aria-label="Previous radar frame" disabled={!radarFrames.length} onClick={() => { setRadarPlaying(false); setRadarFrameIndex((index) => Math.max(0, index - 1)); }}>‹</button><button type="button" disabled={radarFrames.length < 2} onClick={() => setRadarPlaying((playing) => !playing)}>{radarPlaying ? "Pause" : "Play"}</button><button type="button" aria-label="Next radar frame" disabled={!radarFrames.length} onClick={() => { setRadarPlaying(false); setRadarFrameIndex((index) => Math.min(radarFrames.length - 1, index + 1)); }}>›</button><span>{radarFrameTime}</span></div>}<RadarMap opacity={radarOpacity / 100} showReflectivity={radarOverlay === "reflectivity"} refreshToken={radarRefreshToken} timelineTileUrl={radarLoop ? radarFrame?.tileUrl : null} /></div>
-          <div className="card-footer"><span>{radarLoop ? "Radar timeline · RainViewer" : "NOAA/NWS composite reflectivity"}</span><span>{radarLoop ? "Past radar frames · controls on map" : "Pan, zoom, or expand"}</span></div>
+          <div className="card-heading"><div><h2>Radar</h2><p>{radarMapView === "composite" ? "Live composite reflectivity · centered on Athens" : "OpenWeather map layer · centered on Athens"}</p></div><div className="actions"><button onClick={() => { if (radarMapView !== "composite") { setRadarMapView("composite"); window.dispatchEvent(new CustomEvent("weather-desk-radar-layer", { detail: "none" })); setRadarLoop(true); } else { setRadarLoop((value) => !value); } setRadarPlaying(false); }}>{radarLoop && radarMapView === "composite" ? "Interactive map" : "Radar timeline"}</button><button onClick={() => setRadarRefreshToken((value) => value + 1)}>Refresh</button><button onClick={() => setRadarExpanded((value) => !value)}>{radarExpanded ? "Exit expanded view" : "Expand radar"}</button></div></div>
+          <div className="radar"><details className="radar-tools"><summary aria-label="Open radar controls">☰</summary><div><label>Map view<select value={radarMapView} onChange={(event) => { const view = event.target.value as RadarMapView; setRadarMapView(view); window.dispatchEvent(new CustomEvent("weather-desk-radar-layer", { detail: view === "composite" || view === "base" ? "none" : view })); if (view !== "composite") setRadarLoop(false); event.currentTarget.closest("details")?.removeAttribute("open"); }}><option value="composite">Composite reflectivity</option><option value="precipitation_new">Precipitation</option><option value="clouds_new">Cloud cover</option><option value="pressure_new">Pressure</option><option value="wind_new">Wind speed</option><option value="temp_new">Temperature</option><option value="base">Base map only</option></select></label><label className="alert-overlay-toggle"><input type="checkbox" checked={showNwsAlerts} onChange={(event) => { setShowNwsAlerts(event.target.checked); window.dispatchEvent(new CustomEvent("weather-desk-alert-overlay", { detail: event.target.checked })); event.currentTarget.closest("details")?.removeAttribute("open"); }} /> NWS watches &amp; warnings</label><label>Opacity <input type="range" min="20" max="100" value={radarOpacity} onChange={(event) => setRadarOpacity(Number(event.target.value))} /> <span>{radarOpacity}%</span></label><small>{radarMapView === "composite" ? (radarLoop ? radarTimelineStatus : "NOAA composite reflectivity · interactive map") : "OpenWeather weather-map layer · exclusive view"}</small></div></details>{radarLoop && radarMapView === "composite" && <div className="radar-playback"><button type="button" aria-label="Previous radar frame" disabled={!radarFrames.length} onClick={() => { setRadarPlaying(false); setRadarFrameIndex((index) => Math.max(0, index - 1)); }}>‹</button><button type="button" disabled={radarFrames.length < 2} onClick={() => setRadarPlaying((playing) => !playing)}>{radarPlaying ? "Pause" : "Play"}</button><button type="button" aria-label="Next radar frame" disabled={!radarFrames.length} onClick={() => { setRadarPlaying(false); setRadarFrameIndex((index) => Math.min(radarFrames.length - 1, index + 1)); }}>›</button><span>{radarFrameTime}</span></div>}<RadarMap opacity={radarOpacity / 100} showReflectivity={radarMapView === "composite"} refreshToken={radarRefreshToken} timelineTileUrl={radarLoop && radarMapView === "composite" ? radarFrame?.tileUrl : null} /></div>
+          <div className="card-footer radar-footer"><RadarLegendStrip view={radarMapView} /></div>
         </article>
 
         <aside className="quick-data" aria-label="Quick weather reference">
@@ -644,10 +1041,19 @@ export default function Home() {
           <button className={dataPanel === "nbm" ? "active" : ""} onClick={() => setDataPanel("nbm")}>NBM full text</button>
           <button className={dataPanel === "sounding" ? "active" : ""} onClick={() => setDataPanel("sounding")}>Sounding</button>
           <button className={dataPanel === "models" ? "active" : ""} onClick={() => setDataPanel("models")}>Other models</button>
+          <button className={dataPanel === "ensembles" ? "active" : ""} onClick={() => setDataPanel("ensembles")}>Ensembles</button>
+          <button className={dataPanel === "model-sounding" ? "active" : ""} onClick={() => setDataPanel("model-sounding")}>Model sounding</button>
         </div>
-        {dataPanel === "nbm" && <pre className="model-text">{nbmText || nbmStatus}</pre>}
-        {dataPanel === "sounding" && <pre className="model-text">{soundingText || soundingStatus}</pre>}
-        {dataPanel === "models" && <p className="empty">Start with NBM and observed soundings. Future sources will appear here as timestamped, archivable panels so you can compare them without losing context.</p>}
+        {dataPanel === "nbm" && <section className="source-bulletin"><div className="model-guidance-heading"><div><strong>National Blend of Models bulletin</strong><span>Full NBM source text for Athens-area forecast analysis</span></div><small>{nbmText ? "Latest bulletin loaded" : nbmStatus}</small></div><details><summary>Open full NBM bulletin</summary><pre className="model-text">{nbmText || nbmStatus}</pre></details></section>}
+        {dataPanel === "sounding" && <section className="observed-sounding-panel"><div className="model-guidance-heading"><div><strong>Latest observed KFFC sounding</strong><span>Peachtree City, GA · official SPC analysis panel</span></div><a href="https://www.weather.gov/bmx/latestffcsounding" target="_blank" rel="noreferrer">Open NWS source</a></div><img src={officialFfcSoundingImageUrl} alt="Latest observed KFFC upper-air sounding from the Storm Prediction Center" /><details><summary>Raw KFFC sounding text</summary><pre className="model-text">{soundingText || soundingStatus}</pre></details></section>}
+        {dataPanel === "models" && <section className="model-workspace">
+          <div className="model-desk-controls"><div><span>Open-Meteo model guidance</span><div className="guidance-scope-toggle"><button type="button" className={guidanceGroup === "high-res" ? "active" : ""} onClick={() => { setGuidanceGroup("high-res"); if (!guidanceModels["high-res"].some(([id]) => id === openMeteoModel)) setOpenMeteoModel("hrrr_conus"); }}>High-res</button><button type="button" className={guidanceGroup === "global" ? "active" : ""} onClick={() => { setGuidanceGroup("global"); if (!guidanceModels.global.some(([id]) => id === openMeteoModel)) setOpenMeteoModel("gfs_global"); }}>Global</button></div></div><div className="model-view-toggle"><button type="button" className={openMeteoView === "hourly" ? "active" : ""} onClick={() => setOpenMeteoView("hourly")}>Hourly</button><button type="button" className={openMeteoView === "daily" ? "active" : ""} onClick={() => setOpenMeteoView("daily")}>Daily</button><button type="button" className={openMeteoView === "compare" ? "active" : ""} onClick={() => { const left = openMeteoModel === "best_match" ? "hrrr_conus" : openMeteoModel; setComparisonLeftModel(left); setComparisonRightModel(guidanceGroup === "global" ? "ecmwf_ifs" : "nbm_conus"); setOpenMeteoView("compare"); }}>Compare</button></div></div>
+          {openMeteoView !== "compare" && (openMeteoGuidance ? <><article className="single-model-table"><header><div className="model-picker">{guidanceModels[guidanceGroup].map(([id, label]) => <button type="button" key={id} className={openMeteoModel === id ? "active" : ""} onClick={() => setOpenMeteoModel(id)}>{label}</button>)}</div><strong>{openMeteoGuidance.model} · Athens, GA</strong><small>{openMeteoGuidance.current ? `${openMeteoGuidance.current.temperatureF ?? "—"}°F · feels ${openMeteoGuidance.current.feelsLikeF ?? "—"}°F · ${openMeteoWeatherLabel(openMeteoGuidance.current.weatherCode)}` : "Current model guidance unavailable"}</small></header><ModelGuidanceTable guidance={openMeteoGuidance} view={openMeteoView} /><div className="table-reference-action"><small>Save this displayed guidance to the matching dated forecast tabs.</small><button type="button" onClick={() => attachGuidanceSeries(openMeteoGuidance, openMeteoView)}>Add {openMeteoGuidance.model} guidance</button></div></article><p className="model-attribution">Model data: <a href={openMeteoGuidance.source} target="_blank" rel="noreferrer">Open-Meteo</a>. High-res guidance is for near-term detail; global models are for pattern and range.</p></> : <p className="empty">{openMeteoStatus}</p>)}
+          {openMeteoView === "compare" && <section className="model-compare" aria-busy={Boolean(comparisonStatus)}>{comparisonStatus && <p className="model-loading" role="status">{comparisonStatus}</p>}<div className="comparison-columns">{[comparisonLeftModel, comparisonRightModel].map((id, index) => { const guidance = modelComparison[id]; const selectedModel = index === 0 ? comparisonLeftModel : comparisonRightModel; return <article key={index}><header><div className="model-picker">{guidanceModels[guidanceGroup].filter(([model]) => model !== "best_match").map(([model, label]) => <button type="button" key={model} className={selectedModel === model ? "active" : ""} onClick={() => { if (index === 0) { if (model === comparisonRightModel) setComparisonRightModel(comparisonLeftModel); setComparisonLeftModel(model); setOpenMeteoModel(model); } else { if (model === comparisonLeftModel) setComparisonLeftModel(comparisonRightModel); setComparisonRightModel(model); } }}>{label}</button>)}</div><div className="comparison-table-title"><strong>{guidance?.model ?? "Loading model…"}</strong><div className="model-view-toggle"><button type="button" className={comparisonView === "hourly" ? "active" : ""} onClick={() => setComparisonView("hourly")}>Hourly</button><button type="button" className={comparisonView === "daily" ? "active" : ""} onClick={() => setComparisonView("daily")}>Daily</button></div></div></header>{guidance ? <><ModelGuidanceTable guidance={guidance} view={comparisonView} compact /><div className="table-reference-action"><small>Save this model to matching forecast dates.</small><button type="button" onClick={() => attachGuidanceSeries(guidance, comparisonView)}>Add {guidance.model}</button></div></> : <p className="empty">Loading model guidance…</p>}</article>; })}</div></section>}
+        </section>}
+        {dataPanel === "ensembles" && <section className="ensemble-panel"><div className="model-guidance-heading"><div><strong>Global ensemble guidance</strong><span>NOAA GFS ensemble · range and spread for Athens, GA</span></div><small>Uncertainty is forecast information—not a single deterministic answer.</small></div>{ensembleGuidance ? <><div className="ensemble-summary"><article><span>Members</span><strong>{ensembleGuidance.rows[0]?.temperature.members ?? "—"}</strong><small>available at the selected point</small></article><article><span>Temperature spread</span><strong>±{ensembleGuidance.rows[0]?.temperature.spread ?? "—"}°F</strong><small>at the first valid hour</small></article><article><span>Forecast horizon</span><strong>10 days</strong><small>GFS ensemble point guidance</small></article></div><EnsembleTable guidance={ensembleGuidance} /><p className="model-attribution">Ensemble data: <a href={ensembleGuidance.source} target="_blank" rel="noreferrer">Open-Meteo Ensemble API</a>. Individual members quantify plausible outcomes; this summary intentionally emphasizes range and spread.</p></> : <p className="empty">{ensembleStatus}</p>}</section>}
+        {dataPanel === "model-sounding" && <section className="model-sounding-panel"><div className="model-desk-controls"><div><span>Forecast profile for Athens, GA</span><div className="model-picker"><button type="button" className={soundingModel === "hrrr" ? "active" : ""} onClick={() => { setSoundingModel("hrrr"); setSoundingRunOffset(0); }}>HRRR</button><button type="button" className={soundingModel === "gfs" ? "active" : ""} onClick={() => { setSoundingModel("gfs"); setSoundingRunOffset(0); }}>GFS</button></div></div>{modelSounding?.profiles.length ? <label className="model-time-select">Valid time<select value={soundingProfileIndex} onChange={(event) => setSoundingProfileIndex(Number(event.target.value))}>{modelSounding.profiles.map((profile, index) => <option key={profile.time} value={index}>{modelTimestamp(profile.time)}</option>)}</select></label> : null}</div><div className="model-run-controls"><button type="button" onClick={() => setSoundingRunOffset((offset) => offset + 1)}>‹ Older run</button><div><span>Archived model run</span><strong>{modelSounding ? runTimestamp(modelSounding.runTime) : "Loading run…"}</strong><small>{modelSounding ? `${modelSounding.cadenceHours}-hour cycle · reproducible run` : "Run selection will remain available"}</small></div><button type="button" disabled={soundingRunOffset === 0} onClick={() => setSoundingRunOffset((offset) => Math.max(0, offset - 1))}>Newer run ›</button></div>{modelSounding?.profiles[soundingProfileIndex] ? <><div className="model-guidance-heading"><div><strong>{modelSounding.model} model sounding · {modelTimestamp(modelSounding.profiles[soundingProfileIndex].time)}</strong><span>Pressure-level forecast profile · not an observed radiosonde</span></div><small>Temperature, moisture, and wind by level</small></div><ModelSoundingChart profile={modelSounding.profiles[soundingProfileIndex]} /><div className="guidance-table-wrap"><table className="guidance-table sounding-table"><thead><tr><th>Pressure</th><th>Height</th><th>Temperature</th><th>RH</th><th>Wind</th></tr></thead><tbody>{modelSounding.profiles[soundingProfileIndex].levels.map((level) => <tr key={level.pressureHpa}><th>{level.pressureHpa} hPa</th><td>{level.geopotentialHeightM ?? "—"} m</td><td>{level.temperatureF ?? "—"}°F</td><td>{level.relativeHumidity ?? "—"}%</td><td>{level.windMph ?? "—"} mph @ {level.windDirection ?? "—"}°</td></tr>)}</tbody></table></div><p className="model-attribution">Profile data: <a href={modelSounding.source} target="_blank" rel="noreferrer">Open-Meteo Single Runs API</a>. Each run is archived and selected by initialization time; compare it with the observed KFFC sounding.</p></> : <p className="empty">{modelSoundingStatus}</p>}</section>}
+        {dataPanel !== "models" && <div className="desk-reference-action"><div><strong>Save this reference with your forecast</strong><small>It will be captured in the active forecast day. Time-specific ensemble and model-sounding data use their matching forecast date.</small></div><button type="button" onClick={pinCurrentDeskPanel}>Pin reference to forecast</button></div>}
       </section>
       </>}
 
