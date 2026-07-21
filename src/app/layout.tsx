@@ -5,6 +5,11 @@ import "./verify-overrides.css";
 export const metadata: Metadata = {
   title: "The Weather Desk",
   description: "A human-first weather forecasting workspace.",
+  robots: {
+    index: false,
+    follow: false,
+    googleBot: { index: false, follow: false },
+  },
   icons: {
     icon: "/icon.svg",
   },

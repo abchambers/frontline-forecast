@@ -6,7 +6,12 @@ export async function GET(_: Request, { params }: { params: Promise<{ layer: str
   const { layer, z, x, y } = await params;
   const key = process.env.OPENWEATHER_API_KEY;
   if (!key) return NextResponse.json({ error: "OpenWeather map layers are not configured." }, { status: 503 });
-  if (!ALLOWED_LAYERS.has(layer) || !/^\d+$/.test(z) || !/^\d+$/.test(x) || !/^\d+$/.test(y)) {
+  const zoom = Number(z);
+  const tileX = Number(x);
+  const tileY = Number(y);
+  const tilesAtZoom = 2 ** zoom;
+  if (!ALLOWED_LAYERS.has(layer) || !/^\d+$/.test(z) || !/^\d+$/.test(x) || !/^\d+$/.test(y)
+    || !Number.isInteger(zoom) || zoom < 0 || zoom > 10 || tileX < 0 || tileY < 0 || tileX >= tilesAtZoom || tileY >= tilesAtZoom) {
     return NextResponse.json({ error: "Invalid map tile request." }, { status: 400 });
   }
   try {
