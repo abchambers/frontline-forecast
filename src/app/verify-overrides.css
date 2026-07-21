@@ -116,6 +116,32 @@
 .attached-draft-references { border:1px solid var(--line); border-left:3px solid var(--accent); border-radius:8px; display:grid; gap:7px; margin-top:10px; padding:9px; }.attached-draft-references > strong { color:var(--muted); font-size:.7rem; letter-spacing:.04em; text-transform:uppercase; }.attached-reference-table { display:grid; gap:4px; }.attached-reference-heading,.attached-reference-row { align-items:start; display:grid; gap:8px; grid-template-columns:minmax(110px,.95fr) minmax(0,1.7fr) auto; }.attached-reference-heading { border-bottom:1px solid var(--line); color:var(--muted); font-size:.66rem; font-weight:800; letter-spacing:.03em; padding:0 0 5px; text-transform:uppercase; }.attached-reference-row { padding:4px 0; }.attached-reference-row b { color:var(--ink); font-size:.75rem; line-height:1.3; }.attached-reference-row small { color:var(--muted); font-size:.72rem; line-height:1.32; overflow-wrap:anywhere; }.attached-reference-row button { background:transparent; border:0; color:var(--accent); font-size:.72rem; font-weight:700; padding:1px 0; }
 .submission-evidence { border-top:1px solid var(--line); display:grid; gap:11px; margin-top:18px; padding-top:16px; }.submission-evidence header { display:grid; gap:3px; }.submission-evidence h3 { font-size:.95rem; }.submission-evidence p { color:var(--muted); font-size:.76rem; line-height:1.4; margin:0; max-width:720px; }.submission-evidence > div { display:grid; gap:8px; grid-template-columns:repeat(3,minmax(0,1fr)); }.submission-evidence article { background:var(--soft); border:1px solid var(--line); border-radius:8px; display:grid; gap:5px; min-width:0; padding:10px; }.submission-evidence article span { color:var(--muted); font-size:.67rem; font-weight:800; letter-spacing:.04em; text-transform:uppercase; }.submission-evidence article small { color:var(--ink); font-size:.78rem; line-height:1.4; overflow-wrap:anywhere; }
 .verification-table { table-layout:fixed; width:100%; }.verification-table .metric-column { width:22%; }.verification-table .forecast-column { width:55%; }.verification-table .observed-column { width:23%; }.verification-table td { overflow-wrap:anywhere; }
+
+/* Mobile keeps controls compact and horizontally discoverable instead of
+   wrapping them into uneven stacks with unused space. */
+@media (max-width:700px) {
+  .header { align-items:flex-start; flex-direction:row; gap:10px; }
+  .header > .brand-lockup { min-width:0; }
+  .header-meta { align-items:flex-end; flex:0 1 auto; gap:5px; justify-items:end; min-width:0; }
+  .location-trigger { max-width:142px; }
+  .location-trigger strong { max-width:118px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .header-account { border-top:0; gap:5px; max-width:154px; min-width:0; padding-top:0; }
+  .header-account > span { display:none; }
+  .header-account button { font-size:.72rem; padding:5px 7px; white-space:nowrap; }
+  .header-account .theme-toggle { display:none; }
+  .login-menu { left:auto; max-width:calc(100vw - 28px); right:0; width:270px; }
+  .navigation { -webkit-overflow-scrolling:touch; flex-wrap:nowrap; margin:22px 0 16px; padding-bottom:0; scrollbar-width:none; }
+  .navigation::-webkit-scrollbar { display:none; }
+  .navigation button { flex:0 0 auto; white-space:nowrap; }
+  .day-tabs,.horizon-actions,.reference-picker > div,.model-picker,.radar-product-picker > div,.radar-field-picker { -webkit-overflow-scrolling:touch; flex-wrap:nowrap; max-width:100%; overflow-x:auto; padding-bottom:2px; scrollbar-width:none; }
+  .day-tabs::-webkit-scrollbar,.horizon-actions::-webkit-scrollbar,.reference-picker > div::-webkit-scrollbar,.model-picker::-webkit-scrollbar,.radar-product-picker > div::-webkit-scrollbar,.radar-field-picker::-webkit-scrollbar { display:none; }
+  .day-tabs button,.horizon-actions button,.reference-picker button,.model-picker button,.radar-product-picker button,.radar-field-picker button { flex:0 0 auto; white-space:nowrap; }
+  .reference-picker { min-width:0; }
+  .reference-picker > div { margin-right:-2px; }
+  .weekly-calendar-grid { display:flex; gap:9px; grid-template-columns:none; overflow-x:auto; padding-bottom:4px; scroll-snap-type:x proximity; scrollbar-width:none; }
+  .weekly-calendar-grid::-webkit-scrollbar { display:none; }
+  .weekly-calendar-grid > article { flex:0 0 calc((100% - 9px) / 2); min-height:198px; scroll-snap-align:start; }
+}
 .archived-reference-preview { display:grid; gap:10px; margin-top:9px; }.archived-reference-preview dl { display:grid; gap:6px; margin:0; }.archived-reference-preview dl div { border-left:2px solid var(--accent); display:grid; gap:2px; padding-left:8px; }.archived-reference-preview dt { color:var(--muted); font-size:.67rem; font-weight:800; letter-spacing:.04em; text-transform:uppercase; }.archived-reference-preview dd { color:var(--ink); font-size:.8rem; line-height:1.45; margin:0; overflow-wrap:anywhere; }.archived-reference-preview details { border:1px solid var(--line); border-radius:7px; overflow:hidden; }.archived-reference-preview summary { cursor:pointer; font-size:.76rem; font-weight:700; padding:8px 9px; }.archived-reference-preview details ul { color:var(--muted); display:grid; font-size:.76rem; gap:5px; line-height:1.4; margin:0; padding:0 14px 10px 28px; }.archived-reference-preview details pre { border:0; border-radius:0; margin:0; max-height:300px; }.reference-table-wrap { border:1px solid var(--line); border-radius:8px; max-width:100%; overflow:auto; }.reference-table-wrap table { border-collapse:collapse; min-width:620px; width:100%; }.reference-table-wrap th,.reference-table-wrap td { border-bottom:1px solid var(--line); font-size:.76rem; padding:7px 8px; text-align:left; vertical-align:top; white-space:nowrap; }.reference-table-wrap th { background:var(--soft); color:var(--muted); font-size:.68rem; letter-spacing:.03em; text-transform:uppercase; }.reference-table-wrap tr:last-child td { border-bottom:0; }.model-reference-preview .skewt-chart { margin:0; }.reference-metric-grid { border:1px solid var(--line); border-radius:8px; display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); overflow:hidden; }.reference-metric-grid div { border-left:1px solid var(--line); display:grid; gap:3px; min-width:0; padding:10px; }.reference-metric-grid div:first-child { border-left:0; }.reference-metric-grid span,.reference-text-card span { color:var(--muted); font-size:.68rem; font-weight:800; letter-spacing:.04em; text-transform:uppercase; }.reference-metric-grid strong { font-size:.82rem; line-height:1.35; overflow-wrap:anywhere; }.reference-text-card { background:var(--soft); border-left:3px solid var(--accent); border-radius:0 8px 8px 0; display:grid; gap:5px; padding:10px 11px; }.reference-text-card p { color:var(--ink); font-size:.81rem; line-height:1.45; margin:0; overflow-wrap:anywhere; }.reference-text-card small { color:var(--muted); font-size:.72rem; }.observed-reference-preview figure { border:1px solid var(--line); border-radius:8px; margin:0; overflow:hidden; }.observed-reference-preview img { background:#e8f7fb; display:block; height:auto; margin:auto; max-height:640px; max-width:100%; object-fit:contain; width:auto; }.observed-reference-preview figcaption { background:var(--soft); border-top:1px solid var(--line); display:grid; gap:3px; padding:9px 10px; }.observed-reference-preview figcaption strong { font-size:.8rem; }.observed-reference-preview figcaption small { color:var(--muted); font-size:.72rem; line-height:1.35; }
 .radar-workspace { background:var(--surface); border:1px solid var(--line); border-radius:12px; box-shadow:0 10px 28px rgba(24,34,47,.045); display:grid; gap:14px; padding:18px; }.radar-workspace-heading { align-items:flex-start; border-bottom:1px solid var(--line); display:flex; gap:16px; justify-content:space-between; padding-bottom:14px; }.radar-workspace-heading h2 { font-size:1.35rem; letter-spacing:-.02em; }.radar-workspace-heading p:not(.eyebrow) { color:var(--muted); font-size:.84rem; line-height:1.4; margin-top:5px; }.radar-workspace-heading > div:last-child { display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end; }.radar-workspace-heading button { background:var(--surface); border:1px solid var(--line); border-radius:7px; color:var(--ink); font-weight:700; padding:8px 10px; }.radar-workspace-heading button:first-child { background:var(--accent); border-color:var(--accent); color:var(--accent-contrast); }
 .radar-workspace-toolbar { align-items:end; background:var(--soft); border:1px solid var(--line); border-radius:9px; display:flex; flex-wrap:wrap; gap:12px 20px; padding:11px; }.radar-workspace-toolbar .radar-product-picker { flex:1 1 350px; }.radar-workspace-toolbar .setting-check { align-items:flex-start; display:flex; gap:8px; }.radar-workspace-toolbar .setting-check small { color:var(--muted); display:block; font-size:.7rem; font-weight:400; line-height:1.35; margin-top:2px; }.radar-opacity-control { align-items:center; color:var(--muted); display:flex; font-size:.74rem; font-weight:700; gap:7px; }.radar-opacity-control input { accent-color:var(--accent); max-width:110px; }.radar-opacity-control strong { color:var(--accent); }
@@ -152,4 +178,28 @@
   .submission-evidence > div { grid-template-columns:1fr; }
   .attached-reference-heading { display:none; }.attached-reference-row { gap:3px; grid-template-columns:1fr auto; }.attached-reference-row small { grid-column:1 / -1; grid-row:2; }.attached-reference-row button { grid-column:2; grid-row:1; }.reference-table-wrap table { min-width:520px; }
   .workspace-notice { align-items:flex-start; flex-direction:column; }.workspace-notice > div:last-child { align-self:flex-end; }
+}
+
+/* Keep the Radar workspace's product family selector useful on a phone without
+   letting its supporting settings consume the map's vertical space. */
+@media (max-width:700px) {
+  .radar-workspace-toolbar {
+    align-items:center;
+    display:grid;
+    gap:8px 10px;
+    grid-template-columns:minmax(0,1fr) auto;
+    padding:8px;
+  }
+  .radar-workspace-toolbar .radar-product-picker {
+    flex:none;
+    grid-column:1 / -1;
+    min-width:0;
+    width:100%;
+  }
+  .radar-workspace-toolbar .radar-product-picker > span { font-size:.62rem; }
+  .radar-workspace-toolbar .radar-product-picker button { font-size:.68rem; padding:4px 7px; }
+  .radar-workspace-toolbar .setting-check { font-size:.72rem; min-width:0; }
+  .radar-workspace-toolbar .setting-check small { display:none; }
+  .radar-opacity-control { font-size:.69rem; gap:5px; width:auto; }
+  .radar-opacity-control input { max-width:76px; }
 }
