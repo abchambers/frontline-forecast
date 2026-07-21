@@ -127,9 +127,9 @@ function emptyPeriod(period: "day" | "night"): PeriodDraft {
 function createForecastDay(date: string): ForecastDayDraft { return { date, day: emptyPeriod("day"), night: emptyPeriod("night") }; }
 
 const conditionOptions = [
-  ["clear", "Clear"], ["mostly-sunny", "Mostly sunny"], ["partly-cloudy", "Partly cloudy"], ["mostly-cloudy", "Mostly cloudy"], ["cloudy", "Cloudy"],
-  ["fog", "Fog"], ["drizzle", "Drizzle"], ["showers", "Showers"], ["rain", "Rain"], ["storms", "Thunderstorms"], ["scattered-storms", "Scattered thunderstorms"],
-  ["severe-storms", "Severe thunderstorms"], ["windy", "Windy"], ["snow", "Snow"], ["sleet", "Sleet"], ["freezing-rain", "Freezing rain"],
+  ["clear", "Clear"], ["mostly-sunny", "Mostly sunny"], ["partly-cloudy", "Partly cloudy"], ["mostly-cloudy", "Mostly cloudy"], ["cloudy", "Cloudy"], ["haze", "Haze or smoke"],
+  ["fog", "Fog"], ["drizzle", "Drizzle"], ["showers", "Showers"], ["rain", "Rain"], ["storms", "Thunderstorms"], ["isolated-storms", "Isolated thunderstorms"], ["scattered-storms", "Scattered thunderstorms"],
+  ["severe-storms", "Severe thunderstorms"], ["windy", "Windy"], ["hot-humid", "Hot and humid"], ["snow", "Snow"], ["sleet", "Sleet"], ["wintry-mix", "Wintry mix"], ["freezing-rain", "Freezing rain"],
 ] as const;
 
 function conditionLabel(value: string) {

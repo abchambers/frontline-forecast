@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { weatherDeskLocation } from "@/lib/locations";
+import { celsiusToFahrenheit, metersPerSecondToMph } from "@/lib/weather-data";
 
 type Observation = {
   properties: {
@@ -29,16 +30,13 @@ function localTimeToUtc(date: string, hour: number, timeZone: string) {
   return estimate;
 }
 
-function fahrenheit(celsius: number) { return Math.round((celsius * 9) / 5 + 32); }
-function mph(metersPerSecond: number) { return Math.round(metersPerSecond * 2.23694); }
-
 function summarize(observations: Observation[], start: Date, end: Date) {
   const inPeriod = observations.filter(({ properties }) => {
     const time = new Date(properties.timestamp).getTime();
     return time >= start.getTime() && time < end.getTime();
   });
-  const temperatures = inPeriod.map(({ properties }) => properties.temperature?.value ?? null).filter((value): value is number => value !== null).map(fahrenheit);
-  const winds = inPeriod.map(({ properties }) => properties.windSpeed?.value ?? null).filter((value): value is number => value !== null).map(mph);
+  const temperatures = inPeriod.map(({ properties }) => celsiusToFahrenheit(properties.temperature?.value)).filter((value): value is number => value !== null);
+  const winds = inPeriod.map(({ properties }) => metersPerSecondToMph(properties.windSpeed?.value)).filter((value): value is number => value !== null);
   const precipitation = inPeriod.some(({ properties }) => (properties.precipitationLastHour?.value ?? 0) > 0 || /rain|shower|storm|drizzle|snow/i.test(properties.textDescription ?? ""));
   return {
     observationCount: inPeriod.length,

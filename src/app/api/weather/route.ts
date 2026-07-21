@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { weatherDeskLocation } from "@/lib/locations";
+import { canonicalObservation, celsiusToFahrenheit, metersPerSecondToMph, windDirectionLabel } from "@/lib/weather-data";
 
 type NwsFeature<T> = { properties: T };
 
@@ -49,20 +50,6 @@ async function nws<T>(url: string) {
   return response.json() as Promise<T>;
 }
 
-function celsiusToFahrenheit(value: number | null) {
-  return value === null ? null : Math.round((value * 9) / 5 + 32);
-}
-
-function metersPerSecondToMph(value: number | null) {
-  return value === null ? null : Math.round(value * 2.23694);
-}
-
-function directionFromDegrees(value: number | null) {
-  if (value === null) return null;
-  const labels = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-  return labels[Math.round(value / 45) % 8];
-}
-
 export async function GET(request: Request) {
   try {
     const selectedLocation = weatherDeskLocation(new URL(request.url).searchParams.get("location"));
@@ -104,6 +91,20 @@ export async function GET(request: Request) {
     const nextPeriod = forecast.properties.periods[0];
     const observedTemperatureF = celsiusToFahrenheit(current.temperature.value);
     const forecastTemperatureF = nextPeriod?.temperature ?? null;
+    const normalizedObservation = canonicalObservation({
+      source: "NWS station observation",
+      locationId: selectedLocation.id,
+      observedAt: current.timestamp,
+      temperatureF: observedTemperatureF,
+      dewpointF: celsiusToFahrenheit(current.dewpoint.value),
+      relativeHumidity: null,
+      precipitationIn: null,
+      precipitationProbability: null,
+      windMph: metersPerSecondToMph(current.windSpeed.value),
+      windDirectionDeg: current.windDirection.value,
+      windGustMph: null,
+      condition: current.textDescription,
+    });
 
     return NextResponse.json(
       {
@@ -121,10 +122,11 @@ export async function GET(request: Request) {
           temperatureSource: observedTemperatureF === null && forecastTemperatureF !== null
             ? "forecast estimate"
             : "observation",
-          dewpointF: celsiusToFahrenheit(current.dewpoint.value),
-          windMph: metersPerSecondToMph(current.windSpeed.value),
-          windDirection: directionFromDegrees(current.windDirection.value),
+          dewpointF: normalizedObservation.dewpointF,
+          windMph: normalizedObservation.windMph,
+          windDirection: windDirectionLabel(normalizedObservation.windDirectionDeg),
         },
+        normalizedObservation,
         forecast: nextPeriod
           ? {
               period: nextPeriod.name,

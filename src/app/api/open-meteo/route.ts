@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { weatherDeskLocation } from "@/lib/locations";
+import { canonicalModelPoint, round } from "@/lib/weather-data";
 const MODELS = {
   best_match: { label: "Best match", endpoint: "https://api.open-meteo.com/v1/forecast", model: "best_match" },
   hrrr_conus: { label: "HRRR CONUS", endpoint: "https://api.open-meteo.com/v1/forecast", model: "ncep_hrrr_conus" },
@@ -18,7 +19,7 @@ type OpenMeteoResponse = {
 };
 
 function numeric(value: string | number | null | undefined) {
-  return typeof value === "number" && Number.isFinite(value) ? Math.round(value) : null;
+  return typeof value === "number" ? round(value) : null;
 }
 
 function hourlyValue(source: OpenMeteoResponse["hourly"], field: string, index: number) {
@@ -80,6 +81,21 @@ export async function GET(request: Request) {
       weatherCode: numeric(data.daily?.weather_code?.[index]),
     }));
 
+    const normalizedCurrent = data.current ? canonicalModelPoint({
+      source: `Open-Meteo ${model.label}`,
+      locationId: location.id,
+      observedAt: data.current.time,
+      temperatureF: numeric(data.current.temperature_2m),
+      dewpointF: null,
+      relativeHumidity: null,
+      precipitationIn: null,
+      precipitationProbability: null,
+      windMph: numeric(data.current.wind_speed_10m),
+      windDirectionDeg: null,
+      windGustMph: numeric(data.current.wind_gusts_10m),
+      condition: null,
+    }) : null;
+
     return NextResponse.json({
       provider: "Open-Meteo",
       model: model.label,
@@ -92,6 +108,7 @@ export async function GET(request: Request) {
         gustMph: numeric(data.current.wind_gusts_10m),
         weatherCode: numeric(data.current.weather_code),
       } : null,
+      normalizedCurrent,
       days,
       nextHours,
       source: "https://open-meteo.com/en/docs",
