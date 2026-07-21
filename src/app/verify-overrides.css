@@ -203,3 +203,37 @@
   .radar-opacity-control { font-size:.69rem; gap:5px; width:auto; }
   .radar-opacity-control input { max-width:76px; }
 }
+
+/* Phone boundary pass: cards retain the shared page edge, while data-dense
+   controls advertise overflow through horizontal scrolling rather than a
+   squeezed or partially clipped layout. */
+@media (max-width:700px) {
+  .header { justify-content:space-between; width:100%; }
+  .header-meta {
+    align-self:stretch;
+    justify-content:space-between;
+    margin-left:auto;
+    text-align:right;
+  }
+  .header-account { justify-self:end; }
+  .location-menu { max-width:calc(100vw - 28px); }
+  .dashboard-grid,.data-desk,.workspace-card,.radar-workspace,.forecast-period,
+  .model-workspace,.model-sounding-panel,.forecast-map-desk,.ensemble-panel,
+  .verification-grid,.weekly-calendar,.reference-picker,.saved-references {
+    min-width:0;
+    max-width:100%;
+  }
+  .outlook-cards,.archive-list,.model-view-toggle,.guidance-scope-toggle,
+  .radar-playback,.weekly-calendar-heading > div:last-child {
+    -webkit-overflow-scrolling:touch;
+    max-width:100%;
+    overflow-x:auto;
+    scrollbar-width:none;
+  }
+  .outlook-cards::-webkit-scrollbar,.archive-list::-webkit-scrollbar,
+  .model-view-toggle::-webkit-scrollbar,.guidance-scope-toggle::-webkit-scrollbar,
+  .radar-playback::-webkit-scrollbar,.weekly-calendar-heading > div:last-child::-webkit-scrollbar { display:none; }
+  .archive-list,.model-view-toggle,.guidance-scope-toggle,.weekly-calendar-heading > div:last-child { flex-wrap:nowrap; }
+  .archive-list button,.model-view-toggle button,.guidance-scope-toggle button,
+  .weekly-calendar-heading > div:last-child button { flex:0 0 auto; white-space:nowrap; }
+}
