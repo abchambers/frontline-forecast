@@ -450,6 +450,7 @@ export default function Home() {
   const [defaultLocationId, setDefaultLocationId] = useState(defaultWeatherDeskLocation.id);
   const [settingsReady, setSettingsReady] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
+  const [workspaceNotice, setWorkspaceNotice] = useState<{ message: string; targetDate?: string } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submissionToken, setSubmissionToken] = useState("");
   const [liveWeather, setLiveWeather] = useState<LiveWeather | null>(null);
@@ -537,6 +538,12 @@ export default function Home() {
     if (!settingsReady) return;
     window.localStorage.setItem(workspaceSettingsStorageKey, JSON.stringify({ defaultLocationId, radarMapView, radarOpacity, showNwsAlerts }));
   }, [defaultLocationId, radarMapView, radarOpacity, settingsReady, showNwsAlerts]);
+
+  useEffect(() => {
+    if (!workspaceNotice) return;
+    const timeout = window.setTimeout(() => setWorkspaceNotice(null), 7000);
+    return () => window.clearTimeout(timeout);
+  }, [workspaceNotice]);
 
   useEffect(() => {
     let isActive = true;
@@ -834,11 +841,17 @@ export default function Home() {
     }) }));
   }
 
+  function removeReference(period: "day" | "night", referenceId: string) {
+    setForecastRun((run) => ({
+      ...run,
+      days: run.days.map((day, index) => index !== selectedForecastDay ? day : {
+        ...day,
+        [period]: { ...day[period], references: day[period].references.filter((reference) => reference.id !== referenceId) },
+      }),
+    }));
+  }
+
   function attachDeskReference(reference: ReferenceItem, targetDate?: string) {
-    if (!session) {
-      setSaveMessage("Log in before pinning reference data to a forecast.");
-      return;
-    }
     const date = validForecastDate(targetDate) ? targetDate : selectedDay.date;
     const existingIndex = forecastRun.days.findIndex((day) => day.date === date);
     const nextDays = existingIndex >= 0
@@ -855,14 +868,12 @@ export default function Home() {
       }) };
     });
     setSelectedForecastDay(nextIndex);
-    setSaveMessage(`${reference.label} pinned to ${forecastTargetTitle(date)} day and night.`);
+    const message = `${reference.label} added to ${forecastTargetTitle(date)} day and night.`;
+    setSaveMessage(session ? message : `${message} Sign in before submitting the forecast.`);
+    setWorkspaceNotice({ message: session ? message : `${message} It is saved in this browser until you sign in and submit.`, targetDate: date });
   }
 
   function attachGuidanceSeries(guidance: OpenMeteoGuidance, view: "hourly" | "daily") {
-    if (!session) {
-      setSaveMessage("Log in before pinning reference data to a forecast.");
-      return;
-    }
     const referencesByDate = new Map<string, ReferenceItem>();
     if (view === "daily") {
       guidance.days.forEach((day) => referencesByDate.set(day.date, {
@@ -897,7 +908,9 @@ export default function Home() {
         }),
       };
     });
-    setSaveMessage(`${guidance.model} ${view} guidance pinned to ${targetDates.length} matching forecast day${targetDates.length === 1 ? "" : "s"}.`);
+    const message = `${guidance.model} ${view} guidance added to ${targetDates.length} matching forecast day${targetDates.length === 1 ? "" : "s"}.`;
+    setSaveMessage(session ? message : `${message} Sign in before submitting the forecast.`);
+    setWorkspaceNotice({ message: session ? message : `${message} It is saved in this browser until you sign in and submit.`, targetDate: targetDates[0] });
   }
 
   function pinCurrentDeskPanel() {
@@ -1113,6 +1126,7 @@ export default function Home() {
         <button className={activeSection === "verify" ? "active" : ""} onClick={() => setActiveSection("verify")}>Verify</button>
         {session && role === "admin" && <button className={activeSection === "control" ? "active" : ""} onClick={() => setActiveSection("control")}>Control center</button>}
       </nav>
+      {workspaceNotice && <aside className="workspace-notice" role="status"><div><strong>Reference data added</strong><span>{workspaceNotice.message}</span></div><div>{workspaceNotice.targetDate && <button type="button" onClick={() => { const index = forecastRun.days.findIndex((day) => day.date === workspaceNotice.targetDate); if (index >= 0) setSelectedForecastDay(index); setActiveSection("forecast"); setWorkspaceNotice(null); }}>View forecast</button>}<button type="button" aria-label="Dismiss confirmation" onClick={() => setWorkspaceNotice(null)}>×</button></div></aside>}
 
       {activeSection === "dashboard" && <>
       <section className="outlook-strip" aria-label="Seven-day NWS guidance">
@@ -1186,7 +1200,7 @@ export default function Home() {
             <label>Wind<input value={selectedDay.day.wind} onChange={(event) => updatePeriod("day", "wind", event.target.value)} /></label>
             <label>Confidence<select value={selectedDay.day.confidence} onChange={(event) => updatePeriod("day", "confidence", event.target.value)}><option value="low">Low</option><option value="moderate">Moderate</option><option value="high">High</option></select></label>
             <label className="wide-field">Hazards<input value={selectedDay.day.hazards} onChange={(event) => updatePeriod("day", "hazards", event.target.value)} /></label>
-            <div className="wide-field reference-picker"><span>Attach reference data</span><div>{referenceOptions.map((item) => <button type="button" key={item.id} className={selectedDay.day.references.some((reference) => reference.id === item.id) ? "active" : ""} onClick={() => toggleReference("day", item)}>{selectedDay.day.references.some((reference) => reference.id === item.id) ? "✓ " : "+ "}{item.label}</button>)}</div><small>Attached items are captured with this forecast and shown in Verify.</small></div>
+            <div className="wide-field reference-picker"><span>Attach reference data</span><div>{referenceOptions.map((item) => <button type="button" key={item.id} className={selectedDay.day.references.some((reference) => reference.id === item.id) ? "active" : ""} onClick={() => toggleReference("day", item)}>{selectedDay.day.references.some((reference) => reference.id === item.id) ? "✓ " : "+ "}{item.label}</button>)}</div>{selectedDay.day.references.length > 0 && <div className="attached-draft-references"><strong>Added to this day</strong>{selectedDay.day.references.map((reference) => <div key={reference.id}><span>{reference.label}</span><button type="button" onClick={() => removeReference("day", reference.id)}>Remove</button></div>)}</div>}<small>Attached items are captured with this forecast and shown in Verify.</small></div>
             <label className="wide-field">Day reasoning<textarea value={selectedDay.day.reasoning} onChange={(event) => updatePeriod("day", "reasoning", event.target.value)} /></label>
           </div></fieldset>
           <fieldset className="forecast-period"><legend>{new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric" }).format(new Date(`${selectedDay.date}T12:00:00`))} night <small>7 PM–7 AM</small></legend><div className="forecast-fields">
@@ -1197,7 +1211,7 @@ export default function Home() {
             <label>Wind<input value={selectedDay.night.wind} onChange={(event) => updatePeriod("night", "wind", event.target.value)} /></label>
             <label>Confidence<select value={selectedDay.night.confidence} onChange={(event) => updatePeriod("night", "confidence", event.target.value)}><option value="low">Low</option><option value="moderate">Moderate</option><option value="high">High</option></select></label>
             <label className="wide-field">Hazards<input value={selectedDay.night.hazards} onChange={(event) => updatePeriod("night", "hazards", event.target.value)} /></label>
-            <div className="wide-field reference-picker"><span>Attach reference data</span><div>{referenceOptions.map((item) => <button type="button" key={item.id} className={selectedDay.night.references.some((reference) => reference.id === item.id) ? "active" : ""} onClick={() => toggleReference("night", item)}>{selectedDay.night.references.some((reference) => reference.id === item.id) ? "✓ " : "+ "}{item.label}</button>)}</div><small>Attached items are captured with this forecast and shown in Verify.</small></div>
+            <div className="wide-field reference-picker"><span>Attach reference data</span><div>{referenceOptions.map((item) => <button type="button" key={item.id} className={selectedDay.night.references.some((reference) => reference.id === item.id) ? "active" : ""} onClick={() => toggleReference("night", item)}>{selectedDay.night.references.some((reference) => reference.id === item.id) ? "✓ " : "+ "}{item.label}</button>)}</div>{selectedDay.night.references.length > 0 && <div className="attached-draft-references"><strong>Added to this night</strong>{selectedDay.night.references.map((reference) => <div key={reference.id}><span>{reference.label}</span><button type="button" onClick={() => removeReference("night", reference.id)}>Remove</button></div>)}</div>}<small>Attached items are captured with this forecast and shown in Verify.</small></div>
             <label className="wide-field">Night reasoning<textarea value={selectedDay.night.reasoning} onChange={(event) => updatePeriod("night", "reasoning", event.target.value)} /></label>
           </div></fieldset></div>
           {submissionToken && <div className="submission-token" role="status"><span>✓</span><div><strong>Forecast archived</strong><small>{submissionToken}</small></div><button type="button" aria-label="Dismiss submission confirmation" onClick={() => setSubmissionToken("")}>×</button></div>}
