@@ -31,3 +31,22 @@ This lets locally owned sensors and a future Weather Desk model coexist with
 NWS and Open-Meteo data without a UI rewrite. Model-grid maps will require a
 companion gridded-data contract, but can share the same run metadata:
 provider/model, run time, valid time, variables, units, grid, and quality.
+
+`src/lib/model-maps.ts` is that first gridded-data contract. It defines a
+model-map request by provider, model, run, valid time, variable, level, and
+units. The app will not draw a made-up model map: it will only render a field
+after a provider or owned-model adapter can attach an exact grid/tile source to
+that request.
+
+## Daily observation archive
+
+`weather_daily_observations` stores day/night observation summaries separately
+from an individual forecast. The scheduled archive task records both yesterday
+and the current local day for every configured Weather Desk location. A record
+is marked `provisional` while a period is still in progress and becomes
+`complete` when both periods are closed; missing station data is marked
+`degraded` instead of being silently treated as a zero.
+
+Run `202607210010_weather_observation_archive.sql` in Supabase before the
+scheduled archive can save. It is intentionally service-role-only for now:
+the historical/raw data does not become public just because it exists.
