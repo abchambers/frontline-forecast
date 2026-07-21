@@ -293,13 +293,14 @@ function SkewTChart({ profile }: { profile: ModelSounding["profiles"][number] })
   // isotherms.  Keep the skew in screen pixels rather than temperature units:
   // the former preserves the same geometry for every trace and prevents upper
   // levels from shearing out of the plotting window.
-  const temperatureMin = -70;
-  const temperatureRange = 120;
-  // Isotherms lean upward to the right on a Skew-T. Keep that tilt modest so
-  // the actual profile still behaves like a sounding: warm lower-air points
-  // begin toward the right, then the temperature/dew-point traces bend back
-  // left as pressure and temperature decrease with height.
-  const skewPixels = 82;
+  // Match the conventional NWS/SPC surface scale: the bottom axis is the
+  // familiar -20 to +40 °C range. Colder upper-air values remain visible
+  // because the Skew-T transform shifts them right with decreasing pressure.
+  const temperatureMin = -20;
+  const temperatureRange = 60;
+  // The skew offsets colder upper-air values into the panel while the actual
+  // temperature/dew-point traces still bend left as the atmosphere cools.
+  const skewPixels = 236;
   const x = (temperatureC: number, pressure: number) => {
     const verticalFraction = (bottom - pressureToY(pressure)) / (bottom - margin.top);
     return margin.left + ((temperatureC - temperatureMin) / temperatureRange) * (right - margin.left) + verticalFraction * skewPixels;
@@ -312,6 +313,7 @@ function SkewTChart({ profile }: { profile: ModelSounding["profiles"][number] })
   const pressureLines = [1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100];
   const isotherms = [-70, -60, -50, -40, -30, -20, -10, 0, 10, 20, 30, 40, 50];
   const dryAdiabats = [250, 260, 270, 280, 290, 300, 310, 320, 330, 340, 350, 360, 370, 380, 390, 400, 420, 440];
+  const moistAdiabats = [0, 5, 10, 15, 20, 25, 30, 35, 40];
   const mixingRatios = [0.2, 0.4, 1, 2, 4, 8, 12, 16];
   const dryAdiabatPath = (theta: number) => Array.from({ length: 50 }, (_, index) => 1000 - index * (900 / 49)).map((pressure, index) => {
     const temperatureC = theta * Math.pow(pressure / 1000, 0.2854) - 273.15;
@@ -322,6 +324,30 @@ function SkewTChart({ profile }: { profile: ModelSounding["profiles"][number] })
     const vaporPressure = (mixingRatio * pressure) / (0.622 + mixingRatio);
     const ln = Math.log(vaporPressure / 6.112);
     return (243.5 * ln) / (17.67 - ln);
+  };
+  const saturationMixingRatio = (temperatureK: number, pressureHpa: number) => {
+    const temperatureC = temperatureK - 273.15;
+    const vaporPressure = Math.min(pressureHpa * 0.99, 6.112 * Math.exp((17.67 * temperatureC) / (temperatureC + 243.5)));
+    return (0.622 * vaporPressure) / Math.max(0.01, pressureHpa - vaporPressure);
+  };
+  // Integrate a saturated pseudo-adiabat upward in 10 hPa steps. This gives
+  // the curved moist-adiabat family visible on operational Skew-T charts.
+  const moistAdiabatPath = (startingTemperatureC: number) => {
+    const points: string[] = [];
+    let temperatureK = startingTemperatureC + 273.15;
+    for (let pressure = 1000; pressure >= 100; pressure -= 10) {
+      points.push(`${pressure === 1000 ? "M" : "L"}${x(temperatureK - 273.15, pressure).toFixed(1)},${pressureToY(pressure).toFixed(1)}`);
+      const mixingRatio = saturationMixingRatio(temperatureK, pressure);
+      const rd = 287.05;
+      const rv = 461.5;
+      const cp = 1004;
+      const latentHeat = 2.5e6;
+      const pressurePa = pressure * 100;
+      const dTemperatureDPressure = ((rd * temperatureK / pressurePa) * (1 + (latentHeat * mixingRatio) / (rd * temperatureK)))
+        / (cp + (latentHeat ** 2 * mixingRatio * 0.622) / (rv * temperatureK ** 2));
+      temperatureK -= dTemperatureDPressure * 1000;
+    }
+    return points.join(" ");
   };
   const mixingRatioPath = (mixingRatio: number) => Array.from({ length: 35 }, (_, index) => 1000 - index * (600 / 34)).map((pressure, index) => `${index === 0 ? "M" : "L"}${x(dewpointForMixingRatio(mixingRatio, pressure), pressure).toFixed(1)},${pressureToY(pressure).toFixed(1)}`).join(" ");
   const dewpoints = levels.map((level) => dewpointFromTemperatureAndRh(level.temperatureF, level.relativeHumidity));
@@ -336,7 +362,7 @@ function SkewTChart({ profile }: { profile: ModelSounding["profiles"][number] })
     const halfBarb = remaining >= 5;
     return <><line x1="0" y1="0" x2="0" y2="-28" />{Array.from({ length: flags }, (_, index) => <path key={`flag-${index}`} d={`M0 ${-4 - index * 7} L10 ${-8 - index * 7} L0 ${-11 - index * 7} Z`} />)}{Array.from({ length: fullBarbs }, (_, index) => { const offset = flags * 7 + index * 5; return <line key={`barb-${index}`} x1="0" y1={-5 - offset} x2="10" y2={-10 - offset} />; })}{halfBarb && <line x1="0" y1={-5 - flags * 7 - fullBarbs * 5} x2="5" y2={-7.5 - flags * 7 - fullBarbs * 5} />}</>;
   };
-  return <figure className="skewt-chart"><figcaption><div><span>Skew‑T / log‑P model profile</span><small>Thermodynamic projection with standard log-pressure, skewed-temperature geometry</small></div><small>Model guidance only · no parcel diagnostics are inferred</small></figcaption><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Skew-T log-P model profile with temperature, dew point, pressure, winds, and hodograph"><defs><clipPath id="skewt-plot"><rect x={margin.left} y={margin.top} width={right - margin.left} height={bottom - margin.top} /></clipPath></defs><rect x={margin.left} y={margin.top} width={right - margin.left} height={bottom - margin.top} rx="5" /><g className="skewt-grid"><g clipPath="url(#skewt-plot)">{pressureLines.map((pressure) => <line className="isobar" key={pressure} x1={margin.left} x2={right} y1={pressureToY(pressure)} y2={pressureToY(pressure)} />)}{isotherms.map((temperature) => <line className="isotherm" key={temperature} x1={x(temperature, 1000)} x2={x(temperature, 100)} y1={pressureToY(1000)} y2={pressureToY(100)} />)}{dryAdiabats.map((theta) => <path className="dry-adiabat" key={theta} d={dryAdiabatPath(theta)} />)}{mixingRatios.map((ratio) => <path className="mixing-ratio" key={ratio} d={mixingRatioPath(ratio)} />)}<path className="skewt-temperature" d={pathFor(levels.map((level) => level.temperatureF))} /><path className="skewt-dewpoint" d={pathFor(dewpoints)} /></g>{pressureLines.map((pressure) => <text key={pressure} x={margin.left - 8} y={pressureToY(pressure) + 4} textAnchor="end">{pressure}</text>)}{isotherms.map((temperature) => { const labelX = x(temperature, 1000); return labelX >= margin.left && labelX <= right ? <text key={temperature} x={labelX} y={height - 15} textAnchor="middle">{temperature}°</text> : null; })}</g><g className="skewt-winds">{windLevels.map((level) => <g key={level.pressureHpa} transform={`translate(${right + 44} ${pressureToY(level.pressureHpa)}) rotate(${(level.windDirection ?? 0) + 180})`}>{windBarb((level.windMph ?? 0) / 1.15078)}</g>)}</g><g className="skewt-hodograph"><text x={hodo.x} y={35} textAnchor="middle">Hodograph</text>{[20, 40].map((speed) => <circle key={speed} cx={hodo.x} cy={hodo.y} r={speed * hodo.scale} />)}<line x1={hodo.x - hodo.radius} x2={hodo.x + hodo.radius} y1={hodo.y} y2={hodo.y} /><line x1={hodo.x} x2={hodo.x} y1={hodo.y - hodo.radius} y2={hodo.y + hodo.radius} /><path d={hodoPath} />{windLevels.filter((level) => [1000, 850, 700, 500, 300].includes(level.pressureHpa)).map((level) => { const point = hodoPoint(level); return <g key={level.pressureHpa}><circle cx={point.x} cy={point.y} r="3" /><text x={point.x + 5} y={point.y - 5}>{level.pressureHpa}</text></g>; })}</g><text className="skewt-axis" x={16} y={height / 2} transform={`rotate(-90 16 ${height / 2})`} textAnchor="middle">Pressure (hPa)</text><text className="skewt-axis" x={right + 44} y={height - 15} textAnchor="middle">wind</text></svg><div className="skewt-legend"><span><i className="temperature" />Temperature</span><span><i className="dewpoint" />Dew point (from model RH)</span><span><i className="dry" />Dry adiabats</span><span><i className="mixing" />Mixing ratio</span><small>Wind barbs: half = 5 kt · full = 10 kt · pennant = 50 kt</small></div></figure>;
+  return <figure className="skewt-chart"><figcaption><div><span>Skew‑T / log‑P model profile</span><small>Thermodynamic projection with standard log-pressure, skewed-temperature geometry</small></div><small>Model guidance only · no parcel diagnostics are inferred</small></figcaption><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Skew-T log-P model profile with temperature, dew point, pressure, winds, and hodograph"><defs><clipPath id="skewt-plot"><rect x={margin.left} y={margin.top} width={right - margin.left} height={bottom - margin.top} /></clipPath></defs><rect x={margin.left} y={margin.top} width={right - margin.left} height={bottom - margin.top} rx="5" /><g className="skewt-grid"><g clipPath="url(#skewt-plot)">{pressureLines.map((pressure) => <line className="isobar" key={pressure} x1={margin.left} x2={right} y1={pressureToY(pressure)} y2={pressureToY(pressure)} />)}{isotherms.map((temperature) => <line className="isotherm" key={temperature} x1={x(temperature, 1000)} x2={x(temperature, 100)} y1={pressureToY(1000)} y2={pressureToY(100)} />)}{dryAdiabats.map((theta) => <path className="dry-adiabat" key={theta} d={dryAdiabatPath(theta)} />)}{moistAdiabats.map((temperature) => <path className="moist-adiabat" key={temperature} d={moistAdiabatPath(temperature)} />)}{mixingRatios.map((ratio) => <path className="mixing-ratio" key={ratio} d={mixingRatioPath(ratio)} />)}<path className="skewt-temperature" d={pathFor(levels.map((level) => level.temperatureF))} /><path className="skewt-dewpoint" d={pathFor(dewpoints)} /></g>{pressureLines.map((pressure) => <text key={pressure} x={margin.left - 8} y={pressureToY(pressure) + 4} textAnchor="end">{pressure}</text>)}{isotherms.map((temperature) => { const labelX = x(temperature, 1000); return labelX >= margin.left && labelX <= right ? <text key={temperature} x={labelX} y={height - 15} textAnchor="middle">{temperature}°</text> : null; })}</g><g className="skewt-winds">{windLevels.map((level) => <g key={level.pressureHpa} transform={`translate(${right + 44} ${pressureToY(level.pressureHpa)}) rotate(${(level.windDirection ?? 0) + 180})`}>{windBarb((level.windMph ?? 0) / 1.15078)}</g>)}</g><g className="skewt-hodograph"><text x={hodo.x} y={35} textAnchor="middle">Hodograph</text>{[20, 40].map((speed) => <circle key={speed} cx={hodo.x} cy={hodo.y} r={speed * hodo.scale} />)}<line x1={hodo.x - hodo.radius} x2={hodo.x + hodo.radius} y1={hodo.y} y2={hodo.y} /><line x1={hodo.x} x2={hodo.x} y1={hodo.y - hodo.radius} y2={hodo.y + hodo.radius} /><path d={hodoPath} />{windLevels.filter((level) => [1000, 850, 700, 500, 300].includes(level.pressureHpa)).map((level) => { const point = hodoPoint(level); return <g key={level.pressureHpa}><circle cx={point.x} cy={point.y} r="3" /><text x={point.x + 5} y={point.y - 5}>{level.pressureHpa}</text></g>; })}</g><text className="skewt-axis" x={16} y={height / 2} transform={`rotate(-90 16 ${height / 2})`} textAnchor="middle">Pressure (hPa)</text><text className="skewt-axis" x={right + 44} y={height - 15} textAnchor="middle">wind</text></svg><div className="skewt-legend"><span><i className="temperature" />Temperature</span><span><i className="dewpoint" />Dew point (from model RH)</span><span><i className="dry" />Dry adiabats</span><span><i className="moist" />Moist adiabats</span><span><i className="mixing" />Mixing ratio</span><small>Wind barbs: half = 5 kt · full = 10 kt · pennant = 50 kt</small></div></figure>;
 }
 
 // The model panel uses an explicit Skew-T / log-P projection. It remains
