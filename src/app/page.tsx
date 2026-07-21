@@ -73,7 +73,9 @@ type SavedForecast = {
 type WeatherDeskSession = { access_token: string; refresh_token?: string; user: { id: string; email?: string } };
 type ReferencePreview =
   | { kind: "model-sounding"; profile: ModelSounding["profiles"][number] }
-  | { kind: "guidance"; columns: string[]; rows: string[][] };
+  | { kind: "guidance"; columns: string[]; rows: string[][] }
+  | { kind: "observed-sounding"; station: string; imageUrl: string }
+  | { kind: "metrics"; items: { label: string; value: string }[] };
 type ReferenceItem = { id: string; label: string; detail: string; preview?: ReferencePreview };
 type PeriodDraft = { highLow: string; conditions: string; rainChance: string; timing: string; wind: string; confidence: string; hazards: string; reasoning: string; references: ReferenceItem[] };
 type ForecastDayDraft = { date: string; day: PeriodDraft; night: PeriodDraft };
@@ -422,13 +424,23 @@ function ModelSoundingChart({ profile }: { profile: ModelSounding["profiles"][nu
 
 function ArchivedReferencePreview({ reference }: { reference: ReferenceItem }) {
   const snapshotLines = reference.detail.split(/\n+/).filter(Boolean);
+  const legacyObservedStation = reference.label.match(/observed\s+k?([a-z0-9]{3,4})\s+sounding/i)?.[1]?.toUpperCase();
+  const observedPreview = reference.preview?.kind === "observed-sounding"
+    ? reference.preview
+    : legacyObservedStation ? { kind: "observed-sounding" as const, station: legacyObservedStation, imageUrl: officialSoundingImageUrl(legacyObservedStation) } : null;
   if (reference.preview?.kind === "model-sounding") {
     return <div className="archived-reference-preview model-reference-preview"><ModelSoundingChart profile={reference.preview.profile} /><details><summary>Saved source details</summary><ul>{snapshotLines.map((line, index) => <li key={`${reference.id}-${index}`}>{line}</li>)}</ul></details></div>;
+  }
+  if (observedPreview) {
+    return <div className="archived-reference-preview observed-reference-preview"><figure><img src={observedPreview.imageUrl} alt={`Official SPC upper-air sounding chart for ${observedPreview.station}`} /><figcaption><strong>Official K{observedPreview.station} upper-air analysis</strong><small>The archived text below is the saved record; the official graphic is the current SPC panel.</small></figcaption></figure><details><summary>Saved source details</summary><pre>{reference.detail}</pre></details></div>;
   }
   if (reference.preview?.kind === "guidance") {
     return <div className="archived-reference-preview"><div className="reference-table-wrap"><table><thead><tr>{reference.preview.columns.map((column) => <th key={column}>{column}</th>)}</tr></thead><tbody>{reference.preview.rows.map((row, index) => <tr key={`${reference.id}-${index}`}>{row.map((value, cellIndex) => <td key={`${index}-${cellIndex}`}>{value}</td>)}</tr>)}</tbody></table></div><details><summary>Saved source details</summary><ul>{snapshotLines.map((line, index) => <li key={`${reference.id}-${index}`}>{line}</li>)}</ul></details></div>;
   }
-  return <div className="archived-reference-preview"><dl>{snapshotLines.slice(0, 8).map((line, index) => <div key={`${reference.id}-${index}`}><dt>{index === 0 ? "Snapshot" : "Detail"}</dt><dd>{line}</dd></div>)}</dl>{snapshotLines.length > 8 && <details><summary>Show full saved source</summary><pre>{reference.detail}</pre></details>}</div>;
+  if (reference.preview?.kind === "metrics") {
+    return <div className="archived-reference-preview"><div className="reference-metric-grid">{reference.preview.items.map((item) => <div key={item.label}><span>{item.label}</span><strong>{item.value}</strong></div>)}</div><details><summary>Saved source details</summary><pre>{reference.detail}</pre></details></div>;
+  }
+  return <div className="archived-reference-preview"><div className="reference-text-card"><span>Saved source snapshot</span><p>{snapshotLines[0] ?? "No source detail was saved."}</p>{snapshotLines.length > 1 && <small>{snapshotLines.length - 1} additional source line{snapshotLines.length === 2 ? "" : "s"} retained below</small>}</div><details><summary>Show saved source details</summary><pre>{reference.detail}</pre></details></div>;
 }
 
 function ModelEnvironmentSummary({ profile }: { profile: ModelSounding["profiles"][number] }) {
@@ -920,11 +932,11 @@ export default function Home() {
     return days;
   }, []) ?? [];
   const referenceOptions: ReferenceItem[] = [
-    { id: "nws-observation", label: "Current NWS observation", detail: liveWeather ? `${liveWeather.observation.temperatureF ?? "—"}°F · ${liveWeather.observation.description} · ${liveWeather.observation.station} · ${observedAt}` : "Live observation was unavailable when attached." },
-    { id: "nws-guidance", label: "Current NWS forecast", detail: liveWeather?.forecast ? `${liveWeather.forecast.period}: ${liveWeather.forecast.detailedForecast}` : "NWS forecast was unavailable when attached." },
+    { id: "nws-observation", label: "Current NWS observation", detail: liveWeather ? `${liveWeather.observation.temperatureF ?? "—"}°F · ${liveWeather.observation.description} · ${liveWeather.observation.station} · ${observedAt}` : "Live observation was unavailable when attached.", preview: liveWeather ? { kind: "metrics", items: [{ label: "Temperature", value: `${liveWeather.observation.temperatureF ?? "—"}°F` }, { label: "Dew point", value: `${liveWeather.observation.dewpointF ?? "—"}°F` }, { label: "Wind", value: liveWeather.observation.windMph === null ? "—" : `${liveWeather.observation.windDirection ?? ""} ${liveWeather.observation.windMph} mph`.trim() }, { label: "Station", value: liveWeather.observation.station }] } : undefined },
+    { id: "nws-guidance", label: "Current NWS forecast", detail: liveWeather?.forecast ? `${liveWeather.forecast.period}: ${liveWeather.forecast.detailedForecast}` : "NWS forecast was unavailable when attached.", preview: liveWeather?.forecast ? { kind: "metrics", items: [{ label: "Period", value: liveWeather.forecast.period }, { label: "Temperature", value: `${liveWeather.forecast.temperature}°${liveWeather.forecast.temperatureUnit}` }, { label: "Precipitation", value: `${liveWeather.forecast.precipitationChance ?? "—"}%` }, { label: "Conditions", value: liveWeather.forecast.shortForecast }] } : undefined },
     { id: "nbm", label: `NBM ${selectedLocation.observationStation} bulletin`, detail: nbmText || nbmStatus },
-    { id: "sounding", label: `Observed ${selectedLocation.upperAirStation} sounding`, detail: soundingText || soundingStatus },
-    { id: "nws-alerts", label: "NWS alerts", detail: liveWeather?.alerts.length ? liveWeather.alerts.map((alert) => `${alert.event}: ${alert.headline ?? ""}`).join("\n") : liveWeather?.alertsAvailable === false ? "NWS alert status could not be confirmed." : "No active NWS alerts at the time this reference was attached." },
+    { id: "sounding", label: `Observed ${selectedLocation.upperAirStation} sounding`, detail: soundingText || soundingStatus, preview: { kind: "observed-sounding", station: selectedLocation.upperAirStation, imageUrl: officialSoundingImageUrl(selectedLocation.upperAirStation) } },
+    { id: "nws-alerts", label: "NWS alerts", detail: liveWeather?.alerts.length ? liveWeather.alerts.map((alert) => `${alert.event}: ${alert.headline ?? ""}`).join("\n") : liveWeather?.alertsAvailable === false ? "NWS alert status could not be confirmed." : "No active NWS alerts at the time this reference was attached.", preview: { kind: "metrics", items: [{ label: "Alerts", value: liveWeather?.alertsAvailable === false ? "Feed unavailable" : `${liveWeather?.alerts.length ?? 0} active` }, { label: "Status", value: liveWeather?.alerts.length ? liveWeather.alerts.map((alert) => alert.event).join(", ") : "No active alerts" }] } },
     ...(modelSounding?.profiles[soundingProfileIndex] ? [modelSoundingReference()] : []),
   ];
 
@@ -1068,12 +1080,12 @@ export default function Home() {
       return;
     }
     if (dataPanel === "sounding") {
-      attachDeskReference({ id: `observed-${selectedLocation.upperAirStation.toLowerCase()}-${Date.now()}`, label: `Observed K${selectedLocation.upperAirStation} sounding`, detail: snippet(soundingText || soundingStatus) });
+      attachDeskReference({ id: `observed-${selectedLocation.upperAirStation.toLowerCase()}-${Date.now()}`, label: `Observed K${selectedLocation.upperAirStation} sounding`, detail: snippet(soundingText || soundingStatus), preview: { kind: "observed-sounding", station: selectedLocation.upperAirStation, imageUrl: officialSoundingImageUrl(selectedLocation.upperAirStation) } });
       return;
     }
     if (dataPanel === "ensembles") {
       const firstRow = ensembleGuidance?.rows[0];
-      attachDeskReference({ id: `gfs-ensemble-${ensembleGuidance?.fetchedAt ?? Date.now()}`, label: "GFS ensemble guidance", detail: firstRow ? `${modelTimestamp(firstRow.time)} · ${firstRow.temperature.members} members · Temperature ${firstRow.temperature.min ?? "—"}–${firstRow.temperature.max ?? "—"}°F (mean ${firstRow.temperature.mean ?? "—"}°F) · Wind ${firstRow.wind.min ?? "—"}–${firstRow.wind.max ?? "—"} mph` : ensembleStatus }, firstRow?.time.slice(0, 10));
+      attachDeskReference({ id: `gfs-ensemble-${ensembleGuidance?.fetchedAt ?? Date.now()}`, label: "GFS ensemble guidance", detail: firstRow ? `${modelTimestamp(firstRow.time)} · ${firstRow.temperature.members} members · Temperature ${firstRow.temperature.min ?? "—"}–${firstRow.temperature.max ?? "—"}°F (mean ${firstRow.temperature.mean ?? "—"}°F) · Wind ${firstRow.wind.min ?? "—"}–${firstRow.wind.max ?? "—"} mph` : ensembleStatus, preview: firstRow ? { kind: "guidance", columns: ["Valid", "Members", "Temperature", "Precipitation", "Wind"], rows: [[modelTimestamp(firstRow.time), String(firstRow.temperature.members), `${firstRow.temperature.min ?? "—"}–${firstRow.temperature.max ?? "—"}°F · mean ${firstRow.temperature.mean ?? "—"}°F`, `${firstRow.precipitation.min ?? "—"}–${firstRow.precipitation.max ?? "—"} in`, `${firstRow.wind.min ?? "—"}–${firstRow.wind.max ?? "—"} mph`]] } : undefined }, firstRow?.time.slice(0, 10));
       return;
     }
     if (dataPanel === "model-sounding") {
