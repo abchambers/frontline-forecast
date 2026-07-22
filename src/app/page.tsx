@@ -549,19 +549,31 @@ function archiveRecordsFromRun(run: CloudRunRow): SavedForecast[] {
   const runLocation = weatherDeskLocations.find((location) => location.name === run.location_name) ?? defaultWeatherDeskLocation;
   const byDate = new Map<string, CloudRunRow["forecast_periods"]>();
   run.forecast_periods.forEach((period) => byDate.set(period.valid_date, [...(byDate.get(period.valid_date) ?? []), period]));
-  return [...byDate.entries()].map(([targetDate, periods], index) => {
+  return [...byDate.entries()].map(([targetDate, periods]) => {
     const day = periods.find((period) => period.period === "day");
     const night = periods.find((period) => period.period === "night");
     const dayData = day?.forecast_data ?? emptyPeriod("day");
     const nightData = night?.forecast_data ?? emptyPeriod("night");
     const status: SavedForecast["status"] = ["draft", "submitted", "revised", "verified", "withdrawn"].includes(run.status) ? run.status as SavedForecast["status"] : "submitted";
     return {
-      id: `${run.id}:${targetDate}`, runId: run.id, periodIds: { day: day?.id, night: night?.id }, locationId: runLocation.id, locationName: run.location_name ?? runLocation.name, savedAt: run.created_at, label: archiveTitle({ savedAt: run.created_at }), targetDate, status, versionNumber: index + 1,
+      id: `${run.id}:${targetDate}`, runId: run.id, periodIds: { day: day?.id, night: night?.id }, locationId: runLocation.id, locationName: run.location_name ?? runLocation.name, savedAt: run.created_at, label: archiveTitle({ savedAt: run.created_at }), targetDate, status, versionNumber: 1,
       day: { high: dayData.highLow, conditions: dayData.conditions, rainChance: dayData.rainChance, timing: dayData.timing, hazards: dayData.hazards, reasoning: dayData.reasoning, references: savedReferences(dayData.references) },
       night: { low: nightData.highLow, conditions: nightData.conditions, rainChance: nightData.rainChance, timing: nightData.timing, hazards: nightData.hazards, reasoning: nightData.reasoning, references: savedReferences(nightData.references) },
       evidence: day?.evidence_snapshot ?? night?.evidence_snapshot ?? { observation: "No observation snapshot", forecast: "No NWS snapshot", alerts: "No alert snapshot" },
     };
   });
+}
+
+function numberArchiveVersions(records: SavedForecast[]) {
+  const versionsByDate = new Map<string, number>();
+  return [...records]
+    .sort((a, b) => new Date(a.savedAt).getTime() - new Date(b.savedAt).getTime() || a.id.localeCompare(b.id))
+    .map((record) => {
+      const versionNumber = (versionsByDate.get(record.targetDate) ?? 0) + 1;
+      versionsByDate.set(record.targetDate, versionNumber);
+      return { ...record, versionNumber };
+    })
+    .sort((a, b) => new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime());
 }
 
 function ForecasterNotes({ archive }: { archive: SavedForecast }) {
@@ -886,7 +898,7 @@ export default function Home() {
       const legacyArchives = legacyRows.map((row) => ({ ...row.forecast_data, id: row.id, savedAt: row.created_at, evidence: row.evidence_snapshot })) as SavedForecast[];
       const includeLegacy = activeWorkspace?.kind === "personal" || activeWorkspace?.kind === "all" || !activeWorkspace;
       const olderOnly = includeLegacy ? legacyArchives.filter((legacy) => !runArchives.some((run) => run.targetDate === legacy.targetDate && Math.abs(new Date(run.savedAt).getTime() - new Date(legacy.savedAt).getTime()) < 1000)) : [];
-      const cloudArchives = [...runArchives, ...olderOnly].sort((a, b) => new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime());
+      const cloudArchives = numberArchiveVersions([...runArchives, ...olderOnly]);
       setArchives(cloudArchives);
       setSelectedArchiveId(cloudArchives[0]?.id ?? null);
       const verificationByPeriod = new Map(verificationRows.map((row) => [row.forecast_period_id, row]));
@@ -1141,7 +1153,7 @@ export default function Home() {
     const storedArchives = window.localStorage.getItem(archiveStorageKey);
     if (!storedArchives) return;
     try {
-      const parsed = JSON.parse(storedArchives) as SavedForecast[];
+      const parsed = numberArchiveVersions(JSON.parse(storedArchives) as SavedForecast[]);
       setArchives(parsed);
       setSelectedArchiveId(parsed[0]?.id ?? null);
     } catch {
@@ -1422,7 +1434,7 @@ export default function Home() {
         runId: cloudRecord.runId,
         periodIds: cloudRecord.periodIdsByDate[archive.targetDate],
       }));
-      const combinedArchives = [...cloudArchives, ...archives].slice(0, 50);
+      const combinedArchives = numberArchiveVersions([...cloudArchives, ...archives].slice(0, 50));
       setArchives(combinedArchives);
       setSelectedArchiveId(cloudArchives[0]?.id ?? null);
       window.localStorage.setItem(archiveStorageKey, JSON.stringify(combinedArchives));
