@@ -765,7 +765,16 @@ function ClassroomAssignmentDesk(props: { assignments: ClassroomAssignment[]; su
   const latestByStudent = new Map<string, ClassroomAssignmentSubmission>();
   props.submissions.filter((submission) => submission.assignment_id === assignment?.id && submission.status !== "withdrawn").sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).forEach((submission) => { if (!latestByStudent.has(submission.user_id)) latestByStudent.set(submission.user_id, submission); });
   const studentName = (userId: string) => props.roster.find((member) => member.userId === userId)?.label ?? "Student";
-  return <><ClassroomAssignmentStudio assignments={props.assignments} submissions={props.submissions} roster={props.roster} selectedAssignmentId={props.selectedAssignmentId} canManage={props.canManage} onCreate={props.onCreate} onOpenForecast={props.onOpenForecast} onOpenAssignment={props.onOpenAssignment} message={props.message} />{props.canManage && assignment && <section className="assignment-review-queue"><header><div><p className="eyebrow">Assessment</p><h3>Review this assignment</h3><p>Select a student’s submitted forecast to add private feedback, a manual grade, and rubric marks.</p></div></header><div>{[...latestByStudent.values()].map((submission) => <button type="button" key={submission.id} onClick={() => window.dispatchEvent(new CustomEvent("weather-desk-review-student", { detail: { userId: submission.user_id, label: studentName(submission.user_id), organizationId: assignment.classroom_id, classroomId: assignment.classroom_id } }))}><span><strong>{studentName(submission.user_id)}</strong><small>{assignmentDates(assignment).filter((date) => submission.forecast_periods.some((period) => period.valid_date === date)).length}/{assignmentDates(assignment).length} assigned days submitted</small></span><b>Review</b></button>)}{!latestByStudent.size && <p className="empty">Student submissions will appear here when they are ready for assessment.</p>}</div></section>}</>;
+  return <><ClassroomAssignmentStudio assignments={props.assignments} submissions={props.submissions} roster={props.roster} selectedAssignmentId={props.selectedAssignmentId} canManage={props.canManage} onCreate={props.onCreate} onOpenForecast={props.onOpenForecast} onOpenAssignment={props.onOpenAssignment} message={props.message} />{props.canManage && assignment && <AssignmentAssessmentQueue assignment={assignment} submissions={[...latestByStudent.values()]} studentName={studentName} />}</>;
+}
+
+function AssignmentAssessmentQueue({ assignment, submissions, studentName }: { assignment: ClassroomAssignment; submissions: ClassroomAssignmentSubmission[]; studentName: (userId: string) => string }) {
+  const [comments, setComments] = useState<Record<string, string>>({});
+  const [scores, setScores] = useState<Record<string, string>>({});
+  const [messages, setMessages] = useState<Record<string, string>>({});
+  const dates = assignmentDates(assignment);
+  const submit = (runId: string) => window.dispatchEvent(new CustomEvent("weather-desk-save-assignment-review", { detail: { runId, comment: comments[runId] ?? "", manualScore: scores[runId] ?? "", onComplete: (message: string) => { setMessages((all) => ({ ...all, [runId]: message })); if (message.startsWith("Assessment saved")) { setComments((all) => ({ ...all, [runId]: "" })); setScores((all) => ({ ...all, [runId]: "" })); } } } }));
+  return <section className="assignment-assessment-queue"><header><div><p className="eyebrow">Assessment queue</p><h3>Student submissions</h3><p>Expand a student to review the exact assigned forecast days, leave feedback, then continue down the list.</p></div><span>{submissions.length} submitted</span></header><div>{submissions.map((submission) => <details key={submission.id}><summary><span><strong>{studentName(submission.user_id)}</strong><small>Submitted {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(submission.created_at))}</small></span><b>{dates.filter((date) => submission.forecast_periods.some((period) => period.valid_date === date)).length}/{dates.length} days</b></summary><div className="assignment-assessment-body"><div className="assignment-submission-days">{dates.map((date) => <ForecastDayMiniCard key={date} date={date} periods={submission.forecast_periods} />)}</div><div className="inline-assessment"><label>Instructor feedback<textarea value={comments[submission.id] ?? ""} onChange={(event) => setComments((all) => ({ ...all, [submission.id]: event.target.value }))} placeholder="Specific feedback for this student…" /></label><label>Manual grade <input inputMode="numeric" value={scores[submission.id] ?? ""} onChange={(event) => setScores((all) => ({ ...all, [submission.id]: event.target.value }))} placeholder="Optional 0–100" /></label><button type="button" onClick={() => submit(submission.id)}>Save assessment</button></div>{submission.forecast_reviews?.length ? <div className="inline-assessment-history"><strong>Previous feedback</strong>{submission.forecast_reviews.map((review) => <p key={review.id}>{review.manual_score === null ? "Comment" : `Grade ${review.manual_score}%`} · {review.comment || "No written feedback."}</p>)}</div> : null}{messages[submission.id] && <p className="control-message" role="status">{messages[submission.id]}</p>}</div></details>)}{!submissions.length && <p className="empty">Student submissions will appear here when they are ready for assessment.</p>}</div></section>;
 }
 
 export default function Home() {
@@ -910,6 +919,23 @@ export default function Home() {
     window.addEventListener("weather-desk-review-student", openReview);
     return () => window.removeEventListener("weather-desk-review-student", openReview);
   }, []);
+
+  useEffect(() => {
+    const saveInlineAssessment = async (event: Event) => {
+      const detail = (event as CustomEvent<{ runId: string; comment: string; manualScore: string; onComplete: (message: string) => void }>).detail;
+      if (!detail?.runId || !session || !supabaseUrl || !supabaseKey) { detail?.onComplete("Assessment could not be saved. Please sign in again."); return; }
+      const manualScore = detail.manualScore.trim() === "" ? null : Number(detail.manualScore);
+      if (!detail.comment.trim() && manualScore === null) { detail.onComplete("Add feedback or a manual grade before saving."); return; }
+      if (manualScore !== null && (!Number.isFinite(manualScore) || manualScore < 0 || manualScore > 100)) { detail.onComplete("Manual grade must be between 0 and 100."); return; }
+      const response = await fetch(`${supabaseUrl}/rest/v1/forecast_reviews`, { method: "POST", headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json", Prefer: "return=representation" }, body: JSON.stringify({ run_id: detail.runId, reviewer_id: session.user.id, comment: detail.comment.trim() || null, manual_score: manualScore, rubric_scores: {} }) });
+      const rows = await response.json().catch(() => []);
+      if (!response.ok || !rows[0]) { detail.onComplete("Assessment could not be saved."); return; }
+      setAssignmentSubmissions((submissions) => submissions.map((submission) => submission.id === detail.runId ? { ...submission, forecast_reviews: [rows[0] as ForecastReview, ...(submission.forecast_reviews ?? [])] } : submission));
+      detail.onComplete("Assessment saved. You can continue to the next student.");
+    };
+    window.addEventListener("weather-desk-save-assignment-review", saveInlineAssessment);
+    return () => window.removeEventListener("weather-desk-save-assignment-review", saveInlineAssessment);
+  }, [session]);
 
   useEffect(() => {
     const storedLocation = window.localStorage.getItem(locationStorageKey);
