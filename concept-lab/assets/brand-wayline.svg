@@ -1,13 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-labelledby="title desc">
-  <title id="title">Frontline Forecast Frontline mark</title>
-  <desc id="desc">A red and blue weather front crossing a radar horizon.</desc>
+  <title id="title">Frontline Forecast FF front-line mark</title>
+  <desc id="desc">Two letter F forms made from blue cold-front and red warm-front symbols over a radar field.</desc>
   <rect x="8" y="8" width="144" height="144" rx="38" fill="#0b1c34"/>
-  <path d="M31 91a50 50 0 0 1 77-32" fill="none" stroke="#285fbd" stroke-linecap="round" stroke-width="5" opacity=".95"/>
-  <path d="M26 105a64 64 0 0 1 92-45" fill="none" stroke="#79b9ff" stroke-linecap="round" stroke-width="5" opacity=".72"/>
-  <path d="M28 88c17-19 38-21 58-8 15 10 30 7 46-7" fill="none" stroke="#f7fbff" stroke-linecap="round" stroke-width="10"/>
-  <path d="M34 51h92" stroke="#3281ff" stroke-linecap="round" stroke-width="7"/>
-  <path d="M40 51l9-6v12zm22 0 9-6v12zm22 0 9-6v12" fill="#9dccff"/>
-  <path d="M105 44a7 7 0 1 1 0 14h-1v-14z" fill="#ed5b5f"/>
-  <path d="M117 44a7 7 0 1 1 0 14h-1v-14z" fill="#ed5b5f"/>
-  <path d="M49 88l9-2-4 9m31-9 9-2-4 9" fill="#3281ff"/>
+  <path d="M29 110a52 52 0 0 1 72-70" fill="none" stroke="#23549d" stroke-linecap="round" stroke-width="5" opacity=".72"/>
+  <path d="M32 126a67 67 0 0 1 95-85" fill="none" stroke="#71b2fa" stroke-linecap="round" stroke-width="4" opacity=".36"/>
+  <path d="M43 112V48h42M43 79h31" fill="none" stroke="#3281ff" stroke-linecap="round" stroke-linejoin="round" stroke-width="9"/>
+  <path d="M50 48l9-7v14zm21 0 9-7v14z" fill="#a8d0ff"/>
+  <path d="M89 112V62h31M89 88h23" fill="none" stroke="#ed5b5f" stroke-linecap="round" stroke-linejoin="round" stroke-width="9"/>
+  <path d="M101 57a6 6 0 0 1 0 10h-5V57zm17 0a6 6 0 0 1 0 10h-5V57z" fill="#ffc1bd"/>
+  <path d="M38 124c20-9 43-9 68 0" fill="none" stroke="#f7fbff" stroke-linecap="round" stroke-width="5" opacity=".92"/>
 </svg>
