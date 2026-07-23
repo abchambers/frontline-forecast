@@ -348,3 +348,35 @@
 .assignment-assessment-queue { margin-top:18px; border:1px solid var(--line); border-radius:16px; background:var(--surface); padding:18px; }.assignment-assessment-queue > header { display:flex; justify-content:space-between; gap:16px; align-items:start; }.assignment-assessment-queue > header p { margin:0; color:var(--muted); }.assignment-assessment-queue > header h3 { margin:3px 0; }.assignment-assessment-queue > header div > p:last-child { font-size:.9rem; }.assignment-assessment-queue > header > span { padding:6px 9px; border-radius:999px; color:var(--blue); background:color-mix(in srgb,var(--blue) 12%,transparent); font-size:.78rem; font-weight:800; }.assignment-assessment-queue details { border-top:1px solid var(--line); }.assignment-assessment-queue details:first-of-type { margin-top:14px; }.assignment-assessment-queue summary { list-style:none; cursor:pointer; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 2px; }.assignment-assessment-queue summary::-webkit-details-marker { display:none; }.assignment-assessment-queue summary span { display:grid; gap:3px; }.assignment-assessment-queue summary small { color:var(--muted); }.assignment-assessment-queue summary b { color:var(--blue); font-size:.82rem; }.assignment-assessment-body { display:grid; gap:13px; padding:0 0 16px; }.inline-assessment { display:grid; grid-template-columns:1fr 150px auto; align-items:end; gap:10px; padding:12px; border-radius:12px; background:var(--soft); }.inline-assessment label { display:grid; gap:6px; color:var(--muted); font-size:.78rem; font-weight:700; }.inline-assessment textarea, .inline-assessment input { min-height:39px; padding:9px; color:var(--ink); background:var(--surface); border:1px solid var(--line); border-radius:9px; font:inherit; }.inline-assessment textarea { min-height:76px; resize:vertical; }.inline-assessment-history { border-left:3px solid var(--line); padding:3px 0 3px 12px; }.inline-assessment-history p { color:var(--muted); margin:5px 0; font-size:.88rem; }
 @media (max-width: 720px) { .inline-assessment { grid-template-columns:1fr; }.assignment-assessment-queue > header { display:grid; } }
 @media (max-width: 720px) { .assignment-composer-fields { grid-template-columns:1fr; }.assignment-date-picker > div { grid-template-columns:repeat(4,minmax(0,1fr)); }.assignment-focus > header { display:grid; }.assignment-focus > header button { justify-self:start; } }
+
+/* Desk system: a restrained, role-aware shell that keeps the same visual language
+   across public weather, personal records, classrooms, schools, and control work. */
+.app { max-width:1240px; }
+.header { border-bottom:1px solid var(--line); padding-bottom:22px; }
+.navigation { align-items:center; background:color-mix(in srgb,var(--surface) 92%,var(--soft)); border:1px solid var(--line); border-radius:15px; box-shadow:0 8px 24px color-mix(in srgb,var(--ink) 7%,transparent); margin:20px 0 24px; padding:5px; width:max-content; max-width:100%; }
+.navigation button { border:1px solid transparent; border-radius:10px; color:var(--muted); font-weight:800; margin:0; padding:9px 13px; white-space:nowrap; }
+.navigation button:hover { background:var(--soft); color:var(--ink); }
+.navigation button.active { background:var(--accent); box-shadow:0 5px 13px color-mix(in srgb,var(--accent) 30%,transparent); color:var(--accent-contrast); }
+.workspace-card,.outlook-strip,.radar-card,.weather-summary,.data-desk { box-shadow:0 10px 28px color-mix(in srgb,var(--ink) 5%,transparent); }
+.section-heading { border-bottom:1px solid var(--line); margin-bottom:18px; padding-bottom:15px; }
+.section-heading > span { background:var(--accent-soft); border:0; border-radius:999px; color:var(--accent); font-size:.75rem; font-weight:800; padding:7px 10px; text-transform:capitalize; }
+.school-workspace,.classroom-workspace { min-height:460px; }
+.school-desk .section-heading,.classroom-workspace > .section-heading { margin-bottom:16px; }
+.school-status-grid,.classroom-progress-grid,.classroom-today-grid { background:var(--soft); border:1px solid var(--line); border-radius:14px; overflow:hidden; }
+.school-status-grid article,.classroom-progress-grid article,.classroom-today-grid article { min-width:0; }
+.school-class-directory { border:1px solid var(--line); border-radius:14px; margin-top:20px; padding:18px; }
+.school-class-directory > header { border-bottom:1px solid var(--line); margin-bottom:8px; padding-bottom:12px; }
+.school-class-directory button { border-radius:11px; margin-top:6px; }
+.classroom-hub-tabs { background:var(--soft); border:1px solid var(--line); border-radius:12px; margin:0 0 20px; padding:4px; width:max-content; max-width:100%; }
+.classroom-hub-tabs button { border:0; border-radius:8px; color:var(--muted); font-weight:800; padding:8px 12px; }
+.classroom-hub-tabs button.active { background:var(--surface); box-shadow:0 2px 8px color-mix(in srgb,var(--ink) 10%,transparent); color:var(--ink); }
+.classroom-today,.classroom-progress { border:1px solid var(--line); border-radius:14px; padding:18px; }
+.classroom-today > header,.classroom-progress > header { border-bottom:1px solid var(--line); margin-bottom:15px; padding-bottom:13px; }
+.control-center > .section-heading { margin-bottom:22px; }
+.control-center .control-layout,.control-center + .workspace-card { margin-top:18px; }
+.desk-classroom .navigation,.desk-organization .navigation { border-color:color-mix(in srgb,var(--accent) 24%,var(--line)); }
+.desk-classroom .workspace-card,.desk-organization .workspace-card { border-top:3px solid color-mix(in srgb,var(--accent) 72%,var(--line)); }
+.desk-personal .records-toolbar,.desk-personal .forecast-head { border-color:color-mix(in srgb,var(--accent) 28%,var(--line)); }
+:root[data-theme="dark"] .navigation { background:color-mix(in srgb,var(--surface) 88%,#000); box-shadow:none; }
+:root[data-theme="dark"] .workspace-card,:root[data-theme="dark"] .outlook-strip,:root[data-theme="dark"] .radar-card,:root[data-theme="dark"] .weather-summary,:root[data-theme="dark"] .data-desk { box-shadow:none; }
+@media(max-width:700px) { .header { padding-bottom:16px; }.navigation { border-radius:12px; margin:16px 0 18px; overflow-x:auto; width:100%; }.navigation button { padding:9px 12px; }.school-workspace,.classroom-workspace { min-height:0; }.school-class-directory,.classroom-today,.classroom-progress { padding:14px; }.classroom-hub-tabs { overflow-x:auto; width:100%; }.classroom-hub-tabs button { white-space:nowrap; }.section-heading > span { align-self:flex-start; } }
