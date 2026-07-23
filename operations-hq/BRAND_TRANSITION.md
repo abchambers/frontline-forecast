@@ -9,8 +9,8 @@
 
 ## Intentionally unchanged
 
-- Production URL: `https://nextjs-the-weather-desk.vercel.app`.
-- Vercel project, Supabase project, database schema/table names, environment-variable names, API routes, package name, local-storage keys, event names, and `WeatherDesk*` TypeScript identifiers.
+- Production URL: `https://frontline-forecast-the-weather-desk.vercel.app`.
+- Supabase project, database schema/table names, environment-variable names, API routes, local-storage keys, event names, and `WeatherDesk*` TypeScript identifiers.
 - NWS/NOAA, Open-Meteo, RainViewer, OpenWeather, OpenStreetMap, and Leaflet attribution and provider identities.
 - Legal-entity details, because no registered entity or verified legal name is represented in the repository.
 
@@ -19,7 +19,7 @@ These are stability boundaries, not evidence that the old product name remains p
 ## Manual dashboard and domain work before launch
 
 1. In Supabase Authentication, update the confirmation, password-reset, and invite email templates to say **Frontline Forecast**. The templates are dashboard-managed and are not stored in this repository.
-2. When a company domain is acquired, add it to Vercel first, then set the canonical production origin in `NEXT_PUBLIC_SITE_URL` and Supabase Authentication Site URL/redirect allow-list. Keep `nextjs-the-weather-desk.vercel.app` as a deliberate compatibility URL until the redirect behavior is tested.
+2. When a company domain is acquired, add it to Vercel first, then set the canonical production origin in `NEXT_PUBLIC_SITE_URL` and Supabase Authentication Site URL/redirect allow-list. Keep the current Vercel address as a deliberate compatibility URL until the redirect behavior is tested.
 3. Set the email sender display name and a verified sending domain only after the domain and mailbox provider are ready. Do not invent a support address before one is monitored.
 4. Update external service dashboards, billing records, and provider registration details separately. Changing a courtesy user-agent string does not change a commercial plan or a provider agreement.
 

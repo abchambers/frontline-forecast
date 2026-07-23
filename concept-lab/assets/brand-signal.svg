@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-labelledby="title desc">
+  <title id="title">Frontline Forecast Signal mark</title>
+  <desc id="desc">A weather signal moving through a radar field.</desc>
+  <rect x="8" y="8" width="144" height="144" rx="38" fill="#f4f7fa"/>
+  <circle cx="80" cy="80" r="43" fill="none" stroke="#9eb0c2" stroke-width="6"/>
+  <path d="M38 93c16-10 29-13 42-8 16 7 28 3 42-12" fill="none" stroke="#163b63" stroke-linecap="round" stroke-width="12"/>
+  <path d="M43 49a52 52 0 0 1 74 0" fill="none" stroke="#2685e8" stroke-linecap="round" stroke-width="9"/>
+  <circle cx="121" cy="76" r="9" fill="#ddbc3e"/>
+  <path d="m56 87 11 0-7 9m30-2 11 0-7 9" fill="#2685e8"/>
+</svg>

@@ -14,16 +14,16 @@
 For the current production URL, Supabase Authentication → URL Configuration should include:
 
 ```text
-Site URL: https://nextjs-the-weather-desk.vercel.app
+Site URL: https://frontline-forecast-the-weather-desk.vercel.app
 Redirect URLs:
-  https://nextjs-the-weather-desk.vercel.app/**
+  https://frontline-forecast-the-weather-desk.vercel.app/**
   http://localhost:3001/**
 ```
 
 Vercel Production environment also needs:
 
 ```text
-NEXT_PUBLIC_SITE_URL=https://nextjs-the-weather-desk.vercel.app
+NEXT_PUBLIC_SITE_URL=https://frontline-forecast-the-weather-desk.vercel.app
 ```
 
 When a custom domain is adopted, replace the Site URL with the canonical custom domain and keep the Vercel URL only as an intentional fallback.

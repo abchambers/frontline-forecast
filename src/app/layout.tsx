@@ -3,7 +3,7 @@ import "./globals.css";
 import "./verify-overrides.css";
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "https://nextjs-the-weather-desk.vercel.app"),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "https://frontline-forecast-the-weather-desk.vercel.app"),
   title: {
     default: "Frontline Forecast",
     template: "%s | Frontline Forecast",

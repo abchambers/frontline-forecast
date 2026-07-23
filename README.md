@@ -4,7 +4,7 @@ A human-first weather forecasting workspace for live weather analysis, student f
 
 ## Production
 
-[Open Frontline Forecast](https://nextjs-the-weather-desk.vercel.app/). The production app runs on Vercel and does not depend on a local Terminal window being open.
+[Open Frontline Forecast](https://frontline-forecast-the-weather-desk.vercel.app/). The production app runs on Vercel and does not depend on a local Terminal window being open.
 
 ## Run locally
 

@@ -2,7 +2,7 @@
 
 ## The easy way: open the live site
 
-Use [production Frontline Forecast](https://nextjs-the-weather-desk.vercel.app/) on any phone, tablet, or computer. It is deployed on Vercel, so it remains available when this Mac is asleep, powered off, or its Terminal windows are closed.
+Use [production Frontline Forecast](https://frontline-forecast-the-weather-desk.vercel.app/) on any phone, tablet, or computer. It is deployed on Vercel, so it remains available when this Mac is asleep, powered off, or its Terminal windows are closed.
 
 ## Develop from another computer
 

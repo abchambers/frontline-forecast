@@ -10,6 +10,7 @@ Operations HQ is the private planning and operating workspace for Frontline Fore
 | [Runbooks](RUNBOOKS.md) | Repeatable release, incident, and customer-operating procedures |
 | [Decision log](DECISION_LOG.md) | Decisions that should not be re-litigated in product UI work |
 | [Domain and access plan](DOMAIN_AND_ACCESS_PLAN.md) | The eventual `www`, `app`, and private `hq` boundaries |
+| [Project and URL transition](PROJECT_AND_URL_TRANSITION.md) | Safe move from the legacy Vercel name before a custom domain |
 | [Pilot program](PILOT_PROGRAM.md) | How to run a small, measurable first classroom pilot |
 | [Provider register](PROVIDER_REGISTER.md) | Current data sources, commercial gates, attribution, and ownership |
 | [Company workspace](../docs/COMPANY_WORKSPACE.md) | Longer-horizon company, revenue, architecture, and risk plan |
