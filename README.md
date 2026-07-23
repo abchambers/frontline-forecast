@@ -17,7 +17,7 @@ npm run dev
 
 Open the local address Next.js prints, usually `http://localhost:3000`.
 
-For moving development to another device, see [the portable workspace guide](docs/portable-workspace.md).
+For moving development to another device, see [the portable workspace guide](docs/portable-workspace.md) and the [Frontline Forecast launchpad](docs/START_HERE.md).
 
 ## Included workflows
 

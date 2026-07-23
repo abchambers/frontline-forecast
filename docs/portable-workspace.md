@@ -10,8 +10,8 @@ Use [production Frontline Forecast](https://frontline-forecast-the-weather-desk.
 2. Clone the repository:
 
    ```bash
-   git clone https://github.com/abchambers/nextjs.git
-   cd nextjs
+   git clone https://github.com/abchambers/frontline-forecast.git
+   cd frontline-forecast
    ```
 
 3. Install packages once:
@@ -42,7 +42,9 @@ When changes are ready, commit and push them to `main`; Vercel deploys the produ
 Only while the development computer remains on and connected to the same network:
 
 ```bash
-npm run dev -- --hostname 0.0.0.0
+npm run dev:lan
 ```
 
-Open the network address printed by Next.js from the other device. Do not use this as a replacement for Vercel; closing the terminal or computer stops it.
+From another device on the same Wi-Fi network, open [http://Bulldogs-MacBook-Pro.local:3000](http://Bulldogs-MacBook-Pro.local:3000). If that name does not resolve, use the network address printed by Next.js instead. Do not use this as a replacement for Vercel; closing the terminal or computer stops it.
+
+For every-day links to production, dashboards, repositories, and the local-development workflow, use the [Frontline Forecast launchpad](START_HERE.md).
