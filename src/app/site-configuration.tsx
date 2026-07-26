@@ -17,20 +17,45 @@ const tokenMap: Record<string, string> = {
   radius: "--hq-radius",
 };
 
+const colorTokenKeys = new Set([
+  "colorBackground",
+  "colorSurface",
+  "colorText",
+  "colorMuted",
+  "colorAccent",
+]);
+
 export function SiteConfiguration() {
   useEffect(() => {
     let active = true;
+    let observer: MutationObserver | null = null;
     fetch("/api/site-config")
       .then((response) => response.ok ? response.json() as Promise<PublishedConfig> : null)
       .then((config) => {
         if (!active || !config) return;
         const tokens = config.themes?.[0]?.tokens ?? {};
-        for (const [key, cssVariable] of Object.entries(tokenMap)) {
-          const nextValue = tokens[key];
-          if (typeof nextValue === "string" && nextValue.length <= 120) {
-            document.documentElement.style.setProperty(cssVariable, nextValue);
+
+        const applyTokens = () => {
+          const darkMode = document.documentElement.dataset.theme === "dark";
+          for (const [key, cssVariable] of Object.entries(tokenMap)) {
+            const nextValue = tokens[key];
+            if (darkMode && colorTokenKeys.has(key)) {
+              document.documentElement.style.removeProperty(cssVariable);
+            } else if (typeof nextValue === "string" && nextValue.length <= 120) {
+              document.documentElement.style.setProperty(cssVariable, nextValue);
+            } else {
+              document.documentElement.style.removeProperty(cssVariable);
+            }
           }
-        }
+        };
+
+        applyTokens();
+        observer = new MutationObserver(applyTokens);
+        observer.observe(document.documentElement, {
+          attributes: true,
+          attributeFilter: ["data-theme"],
+        });
+
         const brand = config.content?.find((item) => item.content_key === "brand")?.value;
         if (brand) {
           const name = document.querySelector<HTMLElement>("[data-hq-content='brand.name']");
@@ -40,7 +65,10 @@ export function SiteConfiguration() {
         }
       })
       .catch(() => undefined);
-    return () => { active = false; };
+    return () => {
+      active = false;
+      observer?.disconnect();
+    };
   }, []);
   return null;
 }
