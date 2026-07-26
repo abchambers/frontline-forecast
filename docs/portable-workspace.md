@@ -6,7 +6,7 @@ Use [production Frontline Forecast](https://frontline-forecast-the-weather-desk.
 
 ## Develop from another computer
 
-1. Install the current Node.js LTS release and Git.
+1. Install Git and Node.js 24 (the repository records this in `.nvmrc`).
 2. Clone the repository:
 
    ```bash
@@ -17,7 +17,7 @@ Use [production Frontline Forecast](https://frontline-forecast-the-weather-desk.
 3. Install packages once:
 
    ```bash
-   npm install
+   npm ci
    ```
 
 4. Copy `.env.example` to `.env.local` and fill in the values from the existing development computer or the provider dashboards. The Supabase service-role key and cron secret are server-only; keep them private. `.env.local` is intentionally private and is not included in Git.
@@ -29,13 +29,14 @@ Use [production Frontline Forecast](https://frontline-forecast-the-weather-desk.
 
 6. Open the address printed by Next.js, usually `http://localhost:3000`.
 
-When changes are ready, commit and push them to `main`; Vercel deploys the production site from that branch.
+Run `npm run typecheck` and `npm run build` before committing. Push work to a review branch; Vercel creates a preview, and reviewed changes can then be promoted or merged to `main`.
 
 ## Important distinction
 
 - Closing a Terminal window stops only the local development server on that computer.
 - The Vercel production site, Supabase authentication/archive, and scheduled verification jobs keep running independently.
 - A local draft and browser preferences are stored per browser. Sign in to see the same cloud archive on another device; copy or recreate an unfinished local-only draft if you need it on a new machine.
+- Published wording and design tokens come from Company HQ with code-defined fallbacks. If HQ is unavailable, the last deployed application remains usable.
 
 ## Optional: show a running local build on another device
 

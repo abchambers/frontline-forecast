@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import "./verify-overrides.css";
+import { SiteConfiguration } from "./site-configuration";
 
 export const metadata: Metadata = {
   // Keep previews and social cards on the stable production hostname until a custom domain is adopted.
@@ -34,5 +35,5 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en"><body>{children}</body></html>;
+  return <html lang="en"><body><SiteConfiguration />{children}</body></html>;
 }
