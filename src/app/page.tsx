@@ -1174,6 +1174,7 @@ export default function Home() {
   }, [locationId]);
 
   useEffect(() => {
+    if (activeSection !== "radar") return;
     let isActive = true;
     const loadRadarTimeline = () => fetch("/api/radar/frames", { cache: "no-store" })
       .then(async (response) => {
@@ -1190,7 +1191,7 @@ export default function Home() {
     loadRadarTimeline();
     const refreshId = window.setInterval(loadRadarTimeline, 300_000);
     return () => { isActive = false; window.clearInterval(refreshId); };
-  }, []);
+  }, [activeSection]);
 
   useEffect(() => {
     if (!radarLoop || !radarPlaying || radarFrames.length < 2) return;
@@ -1483,6 +1484,7 @@ export default function Home() {
   }, [activeWorkspace, session]);
 
   useEffect(() => {
+    if (activeSection !== "dashboard" || dataPanel !== "sounding") return;
     fetch(`/api/sounding?location=${encodeURIComponent(locationId)}`)
       .then(async (response) => {
         const data = await response.json();
@@ -1491,9 +1493,10 @@ export default function Home() {
         setSoundingStatus("");
       })
       .catch((error: Error) => setSoundingStatus(error.message));
-  }, [locationId]);
+  }, [activeSection, dataPanel, locationId]);
 
   useEffect(() => {
+    if (activeSection !== "dashboard" || dataPanel !== "nbm") return;
     fetch(`/api/nbm?location=${encodeURIComponent(locationId)}`)
       .then(async (response) => {
         const data = await response.json();
@@ -1502,9 +1505,10 @@ export default function Home() {
         setNbmStatus("");
       })
       .catch((error: Error) => setNbmStatus(error.message));
-  }, [locationId]);
+  }, [activeSection, dataPanel, locationId]);
 
   useEffect(() => {
+    if (activeSection !== "dashboard" || dataPanel !== "models") return;
     setOpenMeteoStatus("Loading Open-Meteo guidance…");
     fetch(`/api/open-meteo?model=${openMeteoModel}&location=${encodeURIComponent(locationId)}`)
       .then(async (response) => {
@@ -1514,10 +1518,10 @@ export default function Home() {
         setOpenMeteoStatus("");
       })
       .catch((error: Error) => setOpenMeteoStatus(error.message));
-  }, [openMeteoModel, locationId]);
+  }, [activeSection, dataPanel, openMeteoModel, locationId]);
 
   useEffect(() => {
-    if (dataPanel !== "models" || openMeteoView !== "compare") return;
+    if (activeSection !== "dashboard" || dataPanel !== "models" || openMeteoView !== "compare") return;
     const models = [...new Set([comparisonLeftModel, comparisonRightModel])];
     let active = true;
     setComparisonStatus("Loading model comparison…");
@@ -1534,10 +1538,10 @@ export default function Home() {
       })
       .catch((error: Error) => active && setComparisonStatus(error.message));
     return () => { active = false; };
-  }, [dataPanel, openMeteoView, comparisonLeftModel, comparisonRightModel, locationId]);
+  }, [activeSection, dataPanel, openMeteoView, comparisonLeftModel, comparisonRightModel, locationId]);
 
   useEffect(() => {
-    if (dataPanel !== "ensembles") return;
+    if (activeSection !== "dashboard" || dataPanel !== "ensembles") return;
     let active = true;
     setEnsembleStatus("Loading GFS ensemble guidance…");
     fetch(`/api/ensembles?location=${encodeURIComponent(locationId)}`)
@@ -1551,9 +1555,10 @@ export default function Home() {
       })
       .catch((error: Error) => active && setEnsembleStatus(error.message));
     return () => { active = false; };
-  }, [dataPanel, locationId]);
+  }, [activeSection, dataPanel, locationId]);
 
   useEffect(() => {
+    if (activeSection !== "dashboard" || dataPanel !== "model-sounding") return;
     let active = true;
     setModelSounding(null);
     setModelSoundingStatus("Loading model sounding…");
@@ -1572,7 +1577,7 @@ export default function Home() {
       })
       .catch((error: Error) => active && setModelSoundingStatus(error.message));
     return () => { active = false; };
-  }, [soundingModel, soundingRunOffset, locationId]);
+  }, [activeSection, dataPanel, soundingModel, soundingRunOffset, locationId]);
 
   useEffect(() => {
     const storedArchives = window.localStorage.getItem(archiveStorageKey);
