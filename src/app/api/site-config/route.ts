@@ -1,18 +1,20 @@
 import { NextResponse } from "next/server";
 
+const noStore = { "Cache-Control": "no-store, max-age=0" };
+
 export async function GET() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !key) {
     return NextResponse.json({ content: [], themes: [] }, {
-      headers: { "Cache-Control": "public, max-age=60, s-maxage=300" },
+      headers: noStore,
     });
   }
 
   try {
     const response = await fetch(`${url}/rest/v1/site_content?select=key,value&is_public=eq.true`, {
       headers: { apikey: key, Authorization: `Bearer ${key}` },
-      next: { revalidate: 300, tags: ["site-config"] },
+      cache: "no-store",
     });
     if (!response.ok) return NextResponse.json({ content: [], themes: [] }, { status: response.status });
 
@@ -24,9 +26,7 @@ export async function GET() {
       .filter((row) => row.key === "theme.shared")
       .map((row) => ({ tokens: row.value }));
 
-    return NextResponse.json({ content, themes }, {
-      headers: { "Cache-Control": "public, max-age=60, s-maxage=300, stale-while-revalidate=86400" },
-    });
+    return NextResponse.json({ content, themes }, { headers: noStore });
   } catch {
     return NextResponse.json({ content: [], themes: [] }, { status: 503 });
   }

@@ -38,7 +38,7 @@ export function SiteConfiguration() {
   useEffect(() => {
     let active = true;
     let observer: MutationObserver | null = null;
-    fetch("/api/site-config")
+    fetch("/api/site-config", { cache: "no-store" })
       .then((response) => response.ok ? response.json() as Promise<PublishedConfig> : null)
       .then((config) => {
         if (!active || !config) return;
