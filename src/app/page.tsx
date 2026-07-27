@@ -16,7 +16,8 @@ type RadarMapView = "composite" | "satellite" | "base" | "precipitation_new" | "
 type RadarLegend = { title: string; left: string; middle: string; right: string; unit: string; gradient: string };
 type OpenMeteoModel = "best_match" | "hrrr_conus" | "nbm_conus" | "nam_conus" | "gfs_global" | "ecmwf_ifs" | "icon_global" | "gem_global";
 type WorkspaceSection = "dashboard" | "radar" | "forecast" | "verify" | "school" | "classroom" | "control";
-type PublicNavigationItem = { id: string; label: string; target: "weather" | "radar" | "learn" | "login"; access: "public" | "member" | "staff" | "owner"; enabled: boolean };
+type PublicNavigationItem = { id: string; label: string; target: "weather" | "radar" | "about" | "login"; access: "public" | "member" | "staff" | "owner"; enabled: boolean };
+type HomepageContent = { title: string; description: string; primaryAction: string; secondaryAction: string };
 type ClassroomHubTab = "today" | "assignments" | "outlook" | "progress";
 type LiveWeather = {
   location: string;
@@ -146,19 +147,21 @@ const writeSharedTheme = (theme: "light" | "dark") => {
 const defaultPublicNavigation: PublicNavigationItem[] = [
   { id: "weather", label: "Weather", target: "weather", access: "public", enabled: true },
   { id: "radar", label: "Radar", target: "radar", access: "public", enabled: true },
-  { id: "learn", label: "How it works", target: "learn", access: "public", enabled: true },
+  { id: "about", label: "About", target: "about", access: "public", enabled: true },
   { id: "login", label: "Sign in", target: "login", access: "public", enabled: true },
 ];
+const defaultHomepageContent: HomepageContent = { title: "Forecast with evidence.", description: "Use live observations, radar, guidance, and verification to make better weather decisions.", primaryAction: "View local weather", secondaryAction: "Sign in to forecast" };
 
 function publishedNavigation(value: unknown): PublicNavigationItem[] {
   if (!value || typeof value !== "object" || !Array.isArray((value as { items?: unknown }).items)) return defaultPublicNavigation;
-  const validTargets = new Set(["weather", "radar", "learn", "login"]);
+  const validTargets = new Set(["weather", "radar", "about", "login"]);
   const validAccess = new Set(["public", "member", "staff", "owner"]);
   const items = (value as { items: unknown[] }).items.flatMap((entry, index) => {
     if (!entry || typeof entry !== "object") return [];
     const record = entry as Record<string, unknown>;
     const fallback = defaultPublicNavigation[index] ?? defaultPublicNavigation[0];
-    const target = typeof record.target === "string" && validTargets.has(record.target) ? record.target : (typeof record.id === "string" && validTargets.has(record.id) ? record.id : fallback.target);
+    const rawTarget = typeof record.target === "string" ? record.target === "learn" ? "about" : record.target : typeof record.id === "string" && record.id === "learn" ? "about" : record.id;
+    const target = typeof rawTarget === "string" && validTargets.has(rawTarget) ? rawTarget : fallback.target;
     return [{ id: typeof record.id === "string" ? record.id : `tab-${index}`, label: typeof record.label === "string" ? record.label : fallback.label, target, access: typeof record.access === "string" && validAccess.has(record.access) ? record.access : "public", enabled: record.enabled !== false } as PublicNavigationItem];
   });
   return items.length ? items : defaultPublicNavigation;
@@ -958,8 +961,8 @@ export default function Home() {
   const [rememberMe, setRememberMe] = useState(true);
   const [authMessage, setAuthMessage] = useState("");
   const [loginMenuOpen, setLoginMenuOpen] = useState(false);
-  const [howItWorksOpen, setHowItWorksOpen] = useState(false);
   const [publicNavigation, setPublicNavigation] = useState<PublicNavigationItem[]>(defaultPublicNavigation);
+  const [homepageContent, setHomepageContent] = useState<HomepageContent>(defaultHomepageContent);
   const [locationMenuOpen, setLocationMenuOpen] = useState(false);
   const [forecastRun, setForecastRun] = useState<ForecastRunDraft>(() => ({ id: crypto.randomUUID(), initialHorizonDays: 1, days: [createForecastDay(nextForecastDate())] }));
   const [selectedForecastDay, setSelectedForecastDay] = useState(0);
@@ -1010,9 +1013,9 @@ export default function Home() {
   const hasAcademicReviewAccess = Boolean(session && (hasControlAccess || (activeWorkspace?.kind !== "personal" && activeWorkspace?.kind !== "all" && workspaceRoleCanReview)));
   const canManageActiveClassroom = Boolean(session && activeWorkspace?.kind === "classroom" && (hasControlAccess || ["owner", "admin", "instructor", "assistant"].includes(activeWorkspace.role ?? "")));
   const openPublicNavigation = (target: PublicNavigationItem["target"]) => {
-    if (target === "weather") { setHowItWorksOpen(false); setActiveSection("dashboard"); }
-    if (target === "radar") { setHowItWorksOpen(false); setActiveSection("radar"); }
-    if (target === "learn") setHowItWorksOpen(true);
+    if (target === "weather") setActiveSection("dashboard");
+    if (target === "radar") setActiveSection("radar");
+    if (target === "about") window.location.assign("/about");
     if (target === "login" && !session) setLoginMenuOpen(true);
   };
   const selectedClassroomAssignment = classroomAssignments.find((assignment) => assignment.id === selectedClassroomAssignmentId) ?? null;
@@ -1072,7 +1075,12 @@ export default function Home() {
     const applyNavigation = (event: Event) => {
       const config = (event as CustomEvent<{ content?: Array<{ content_key: string; value: unknown }> }>).detail;
       const navigation = config?.content?.find((item) => item.content_key === "navigation")?.value;
+      const homepage = config?.content?.find((item) => item.content_key === "homepage")?.value;
       setPublicNavigation(publishedNavigation(navigation));
+      if (homepage && typeof homepage === "object") {
+        const value = homepage as Record<string, unknown>;
+        setHomepageContent({ title: typeof value.title === "string" ? value.title : defaultHomepageContent.title, description: typeof value.description === "string" ? value.description : defaultHomepageContent.description, primaryAction: typeof value.primaryAction === "string" ? value.primaryAction : defaultHomepageContent.primaryAction, secondaryAction: typeof value.secondaryAction === "string" ? value.secondaryAction : defaultHomepageContent.secondaryAction });
+      }
     };
     window.addEventListener("frontline-site-config", applyNavigation);
     return () => window.removeEventListener("frontline-site-config", applyNavigation);
@@ -2140,16 +2148,16 @@ export default function Home() {
       </header>
 
       <nav aria-label="Main navigation" className="navigation">
-        {visiblePublicNavigation.map((item) => <button key={item.id} className={(item.target === "weather" && activeSection === "dashboard") || (item.target === "radar" && activeSection === "radar") || (item.target === "learn" && howItWorksOpen) ? "active" : ""} onClick={() => openPublicNavigation(item.target)}>{item.label}</button>)}
+        {visiblePublicNavigation.map((item) => <button key={item.id} className={(item.target === "weather" && activeSection === "dashboard") || (item.target === "radar" && activeSection === "radar") ? "active" : ""} onClick={() => openPublicNavigation(item.target)}>{item.label}</button>)}
         {session && <><button className={activeSection === "forecast" ? "active" : ""} onClick={() => setActiveSection("forecast")}>Forecast</button><button className={activeSection === "verify" ? "active" : ""} onClick={() => setActiveSection("verify")}>Records</button></>}
         {session && activeWorkspace?.kind === "organization" && <button className={activeSection === "school" ? "active" : ""} onClick={() => setActiveSection("school")}>School</button>}
         {session && activeWorkspace?.kind === "classroom" && <button className={activeSection === "classroom" ? "active" : ""} onClick={() => setActiveSection("classroom")}>Class</button>}
         {session && <button className={activeSection === "control" ? "active" : ""} onClick={() => setActiveSection("control")}>Control</button>}
       </nav>
-      {howItWorksOpen && <section className="how-it-works" aria-label="How Frontline Forecast works"><div><p className="eyebrow">How it works</p><h2>Evidence first. Forecast second. Learn from the result.</h2></div><ol><li><strong>Read</strong><span>Observations, radar, alerts, and guidance in one place.</span></li><li><strong>Forecast</strong><span>Build a clear, time-bound local forecast.</span></li><li><strong>Verify</strong><span>Compare the forecast with what actually happened.</span></li></ol><button type="button" onClick={() => setHowItWorksOpen(false)}>Close</button></section>}
       {workspaceNotice && <aside className="workspace-notice" role="status"><div><strong>Reference data added</strong><span>{workspaceNotice.message}</span></div><div>{workspaceNotice.targetDate && <button type="button" onClick={() => { const index = forecastRun.days.findIndex((day) => day.date === workspaceNotice.targetDate); if (index >= 0) setSelectedForecastDay(index); setActiveSection("forecast"); setWorkspaceNotice(null); }}>View forecast</button>}<button type="button" aria-label="Dismiss confirmation" onClick={() => setWorkspaceNotice(null)}>×</button></div></aside>}
 
       {activeSection === "dashboard" && <>
+      <section className="home-intro"><div><p className="eyebrow">Local weather desk</p><h2>{homepageContent.title}</h2><p>{homepageContent.description}</p></div><div><button type="button" onClick={() => setActiveSection("dashboard")}>{homepageContent.primaryAction}</button><button type="button" onClick={() => session ? setActiveSection("forecast") : setLoginMenuOpen(true)}>{homepageContent.secondaryAction}</button></div></section>
       <section className="outlook-strip" aria-label="Seven-day NWS guidance">
         <div className="outlook-heading"><div><h2>7-day outlook</h2><p>Local forecast guidance</p></div><span>Live</span></div>
         <div className="outlook-cards">{outlook.length ? outlook.map((day) => <article key={day.date}><strong>{day.label}</strong><b aria-hidden="true">{weatherIcon(day.shortForecast)}</b><span>{day.shortForecast}</span><em>{day.high}° / {day.low}°</em><small>{day.precipitationChance ?? 0}% PoP</small></article>) : <p>Loading 7-day NWS guidance…</p>}</div>
