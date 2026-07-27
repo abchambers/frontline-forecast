@@ -16,7 +16,7 @@ export default function OpenGraphImage() {
           <div style={{ display: "flex", flexDirection: "column" }}>
             <div style={{ color: "#78b7ff", fontSize: "27px", fontWeight: 700, letterSpacing: "0.18em", textTransform: "uppercase" }}>Human-first forecasting</div>
             <div style={{ fontSize: "76px", fontWeight: 800, letterSpacing: "-0.055em", marginTop: "14px" }}>Frontline Forecast</div>
-            <div style={{ color: "#c9d9ef", fontSize: "31px", marginTop: "23px" }}>Weather analysis, evidence, and learning in one workspace.</div>
+            <div style={{ color: "#c9d9ef", fontSize: "31px", marginTop: "23px" }}>Weather analysis, forecasting, and verification.</div>
           </div>
         </div>
       </div>

@@ -11,18 +11,18 @@ export const metadata: Metadata = {
     default: "Frontline Forecast",
     template: "%s | Frontline Forecast",
   },
-  description: "A human-first weather forecasting workspace for analysis, forecasts, and learning.",
+  description: "Weather analysis, forecasting, and verification.",
   applicationName: "Frontline Forecast",
   openGraph: {
     title: "Frontline Forecast",
-    description: "A human-first weather forecasting workspace for analysis, forecasts, and learning.",
+    description: "Weather analysis, forecasting, and verification.",
     siteName: "Frontline Forecast",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
     title: "Frontline Forecast",
-    description: "A human-first weather forecasting workspace for analysis, forecasts, and learning.",
+    description: "Weather analysis, forecasting, and verification.",
   },
   robots: {
     index: false,
