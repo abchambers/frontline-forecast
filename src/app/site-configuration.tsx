@@ -25,6 +25,15 @@ const colorTokenKeys = new Set([
   "colorAccent",
 ]);
 
+function applySharedAppearance(tokens: Record<string, unknown>) {
+  const root = document.documentElement;
+  root.dataset.accent = typeof tokens.accent === "string" ? tokens.accent : "weather-blue";
+  root.dataset.radius = typeof tokens.radius === "string" ? tokens.radius : "medium";
+  root.dataset.density = typeof tokens.density === "string" ? tokens.density : "comfortable";
+  root.dataset.cards = typeof tokens.cardStyle === "string" ? tokens.cardStyle : "flat";
+  root.dataset.gradients = tokens.showGradients === true ? "on" : "off";
+}
+
 export function SiteConfiguration() {
   useEffect(() => {
     let active = true;
@@ -47,6 +56,7 @@ export function SiteConfiguration() {
               document.documentElement.style.removeProperty(cssVariable);
             }
           }
+          applySharedAppearance(tokens);
         };
 
         applyTokens();
