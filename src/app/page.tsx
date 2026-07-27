@@ -131,6 +131,16 @@ const locationStorageKey = "weather-desk-location";
 
 const assignmentDates = (assignment: ClassroomAssignment) => assignment.target_dates?.length ? assignment.target_dates : [assignment.target_date];
 const themeStorageKey = "weather-desk-theme";
+const themeCookieKey = "frontline-forecast-theme";
+
+const readSharedTheme = () => document.cookie
+  .split("; ")
+  .find((value) => value.startsWith(`${themeCookieKey}=`))
+  ?.split("=")[1];
+
+const writeSharedTheme = (theme: "light" | "dark") => {
+  document.cookie = `${themeCookieKey}=${theme}; Path=/; Domain=.frontline-forecast.com; Max-Age=31536000; SameSite=Lax; Secure`;
+};
 const workspaceSettingsStorageKey = "weather-desk-workspace-settings";
 const workspaceContextStoragePrefix = "weather-desk-active-workspace";
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -1047,7 +1057,7 @@ export default function Home() {
   useEffect(() => {
     const storedLocation = window.localStorage.getItem(locationStorageKey);
     if (storedLocation) setLocationId(weatherDeskLocation(storedLocation).id);
-    const storedTheme = window.localStorage.getItem(themeStorageKey);
+    const storedTheme = readSharedTheme() ?? window.localStorage.getItem(themeStorageKey);
     if (storedTheme === "dark" || storedTheme === "light") setTheme(storedTheme);
     try {
       const settings = JSON.parse(window.localStorage.getItem(workspaceSettingsStorageKey) ?? "{}") as Partial<WorkspacePreferences>;
@@ -1071,6 +1081,7 @@ export default function Home() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     window.localStorage.setItem(themeStorageKey, theme);
+    writeSharedTheme(theme);
   }, [theme]);
 
   useEffect(() => {
