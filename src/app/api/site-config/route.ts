@@ -1,23 +1,33 @@
 import { NextResponse } from "next/server";
 
 export async function GET() {
-  // Configuration publishing is deliberately opt-in. Until the shared HQ
-  // control-plane schema is reconciled and deployed, the weather product must
-  // keep its known-good built-in presentation rather than depend on an
-  // unfinished cross-site endpoint.
-  const url = process.env.COMPANY_HQ_CONFIG_URL;
-  if (!url) {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !key) {
     return NextResponse.json({ content: [], themes: [] }, {
       headers: { "Cache-Control": "public, max-age=60, s-maxage=300" },
     });
   }
+
   try {
-    const response = await fetch(url, { next: { revalidate: 300, tags: ["site-config"] } });
-    if (!response.ok) return NextResponse.json({ error: "No published configuration." }, { status: response.status });
-    return NextResponse.json(await response.json(), {
+    const response = await fetch(`${url}/rest/v1/site_content?select=key,value&is_public=eq.true`, {
+      headers: { apikey: key, Authorization: `Bearer ${key}` },
+      next: { revalidate: 300, tags: ["site-config"] },
+    });
+    if (!response.ok) return NextResponse.json({ content: [], themes: [] }, { status: response.status });
+
+    const rows = await response.json() as Array<{ key: string; value: Record<string, unknown> }>;
+    const content = rows
+      .filter((row) => row.key.endsWith(".public"))
+      .map((row) => ({ content_key: row.key.slice(0, -".public".length), value: row.value }));
+    const themes = rows
+      .filter((row) => row.key === "theme.shared")
+      .map((row) => ({ tokens: row.value }));
+
+    return NextResponse.json({ content, themes }, {
       headers: { "Cache-Control": "public, max-age=60, s-maxage=300, stale-while-revalidate=86400" },
     });
   } catch {
-    return NextResponse.json({ error: "Configuration unavailable." }, { status: 503 });
+    return NextResponse.json({ content: [], themes: [] }, { status: 503 });
   }
 }
