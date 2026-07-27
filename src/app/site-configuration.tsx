@@ -73,6 +73,7 @@ export function SiteConfiguration() {
           if (name && typeof brand.name === "string") name.textContent = brand.name;
           if (tagline && typeof brand.tagline === "string") tagline.textContent = brand.tagline;
         }
+        window.dispatchEvent(new CustomEvent("frontline-site-config", { detail: config }));
       })
       .catch(() => undefined);
     return () => {
