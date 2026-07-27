@@ -15,9 +15,10 @@ type GuidanceGroup = "high-res" | "global";
 type RadarMapView = "composite" | "satellite" | "base" | "precipitation_new" | "clouds_new" | "pressure_new" | "wind_new" | "temp_new" | "ndfd_maxt" | "ndfd_pop12" | "ndfd_windspd";
 type RadarLegend = { title: string; left: string; middle: string; right: string; unit: string; gradient: string };
 type OpenMeteoModel = "best_match" | "hrrr_conus" | "nbm_conus" | "nam_conus" | "gfs_global" | "ecmwf_ifs" | "icon_global" | "gem_global";
-type WorkspaceSection = "dashboard" | "radar" | "forecast" | "verify" | "school" | "classroom" | "control";
+type WorkspaceSection = "dashboard" | "radar" | "about" | "forecast" | "verify" | "school" | "classroom" | "control";
 type PublicNavigationItem = { id: string; label: string; target: "weather" | "radar" | "about" | "login"; access: "public" | "member" | "staff" | "owner"; enabled: boolean };
-type HomepageContent = { title: string; description: string; primaryAction: string; secondaryAction: string };
+type HomepageContent = { title: string; description: string; primaryAction: string; secondaryAction: string; outlookTitle: string; outlookCaption: string; radarTitle: string; radarCaption: string; referenceTitle: string; referenceCaption: string };
+type AboutContent = { title: string; description: string; principles: { title: string; body: string }[] };
 type ClassroomHubTab = "today" | "assignments" | "outlook" | "progress";
 type LiveWeather = {
   location: string;
@@ -150,7 +151,8 @@ const defaultPublicNavigation: PublicNavigationItem[] = [
   { id: "about", label: "About", target: "about", access: "public", enabled: true },
   { id: "login", label: "Sign in", target: "login", access: "public", enabled: true },
 ];
-const defaultHomepageContent: HomepageContent = { title: "Forecast with evidence.", description: "Use live observations, radar, guidance, and verification to make better weather decisions.", primaryAction: "View local weather", secondaryAction: "Sign in to forecast" };
+const defaultHomepageContent: HomepageContent = { title: "Forecast with evidence.", description: "Use live observations, radar, guidance, and verification to make better weather decisions.", primaryAction: "View local weather", secondaryAction: "Sign in to forecast", outlookTitle: "7-day outlook", outlookCaption: "Local forecast guidance", radarTitle: "Radar", radarCaption: "Live composite reflectivity", referenceTitle: "Forecast data", referenceCaption: "Reference data for your next forecast." };
+const defaultAboutContent: AboutContent = { title: "Weather tools built around context.", description: "Frontline Forecast brings observations, radar, guidance, and verification together so a forecast can show its reasoning—not just its result.", principles: [{ title: "Read the atmosphere", body: "Start with what is happening now, then make the evidence visible." }, { title: "Make the forecast useful", body: "Turn guidance into a clear, time-bound decision for a real place." }, { title: "Learn from the result", body: "Compare the forecast with what happened and keep improving the next call." }] };
 
 function publishedNavigation(value: unknown): PublicNavigationItem[] {
   if (!value || typeof value !== "object" || !Array.isArray((value as { items?: unknown }).items)) return defaultPublicNavigation;
@@ -901,7 +903,7 @@ function AssignmentAssessmentQueue({ assignment, submissions, studentName }: { a
 
 export default function Home() {
   const [dataPanel, setDataPanel] = useState<DataPanel>("nbm");
-  const [activeSection, setActiveSection] = useState<WorkspaceSection>("dashboard");
+  const [activeSection, setActiveSection] = useState<WorkspaceSection>(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("view") === "about" ? "about" : "dashboard");
   const [radarExpanded, setRadarExpanded] = useState(false);
   const [radarLoop, setRadarLoop] = useState(false);
   const [radarFrames, setRadarFrames] = useState<RadarTimelineFrame[]>([]);
@@ -963,6 +965,7 @@ export default function Home() {
   const [loginMenuOpen, setLoginMenuOpen] = useState(false);
   const [publicNavigation, setPublicNavigation] = useState<PublicNavigationItem[]>(defaultPublicNavigation);
   const [homepageContent, setHomepageContent] = useState<HomepageContent>(defaultHomepageContent);
+  const [aboutContent, setAboutContent] = useState<AboutContent>(defaultAboutContent);
   const [locationMenuOpen, setLocationMenuOpen] = useState(false);
   const [forecastRun, setForecastRun] = useState<ForecastRunDraft>(() => ({ id: crypto.randomUUID(), initialHorizonDays: 1, days: [createForecastDay(nextForecastDate())] }));
   const [selectedForecastDay, setSelectedForecastDay] = useState(0);
@@ -1013,9 +1016,9 @@ export default function Home() {
   const hasAcademicReviewAccess = Boolean(session && (hasControlAccess || (activeWorkspace?.kind !== "personal" && activeWorkspace?.kind !== "all" && workspaceRoleCanReview)));
   const canManageActiveClassroom = Boolean(session && activeWorkspace?.kind === "classroom" && (hasControlAccess || ["owner", "admin", "instructor", "assistant"].includes(activeWorkspace.role ?? "")));
   const openPublicNavigation = (target: PublicNavigationItem["target"]) => {
-    if (target === "weather") setActiveSection("dashboard");
-    if (target === "radar") setActiveSection("radar");
-    if (target === "about") window.location.assign("/about");
+    if (target === "weather") { window.history.replaceState({}, "", "/"); setActiveSection("dashboard"); }
+    if (target === "radar") { window.history.replaceState({}, "", "/"); setActiveSection("radar"); }
+    if (target === "about") { window.history.pushState({}, "", "/?view=about"); setActiveSection("about"); window.scrollTo({ top: 0, behavior: "smooth" }); }
     if (target === "login" && !session) setLoginMenuOpen(true);
   };
   const selectedClassroomAssignment = classroomAssignments.find((assignment) => assignment.id === selectedClassroomAssignmentId) ?? null;
@@ -1076,10 +1079,16 @@ export default function Home() {
       const config = (event as CustomEvent<{ content?: Array<{ content_key: string; value: unknown }> }>).detail;
       const navigation = config?.content?.find((item) => item.content_key === "navigation")?.value;
       const homepage = config?.content?.find((item) => item.content_key === "homepage")?.value;
+      const about = config?.content?.find((item) => item.content_key === "about")?.value;
       setPublicNavigation(publishedNavigation(navigation));
       if (homepage && typeof homepage === "object") {
         const value = homepage as Record<string, unknown>;
-        setHomepageContent({ title: typeof value.title === "string" ? value.title : defaultHomepageContent.title, description: typeof value.description === "string" ? value.description : defaultHomepageContent.description, primaryAction: typeof value.primaryAction === "string" ? value.primaryAction : defaultHomepageContent.primaryAction, secondaryAction: typeof value.secondaryAction === "string" ? value.secondaryAction : defaultHomepageContent.secondaryAction });
+        setHomepageContent({ title: typeof value.title === "string" ? value.title : defaultHomepageContent.title, description: typeof value.description === "string" ? value.description : defaultHomepageContent.description, primaryAction: typeof value.primaryAction === "string" ? value.primaryAction : defaultHomepageContent.primaryAction, secondaryAction: typeof value.secondaryAction === "string" ? value.secondaryAction : defaultHomepageContent.secondaryAction, outlookTitle: typeof value.outlookTitle === "string" ? value.outlookTitle : defaultHomepageContent.outlookTitle, outlookCaption: typeof value.outlookCaption === "string" ? value.outlookCaption : defaultHomepageContent.outlookCaption, radarTitle: typeof value.radarTitle === "string" ? value.radarTitle : defaultHomepageContent.radarTitle, radarCaption: typeof value.radarCaption === "string" ? value.radarCaption : defaultHomepageContent.radarCaption, referenceTitle: typeof value.referenceTitle === "string" ? value.referenceTitle : defaultHomepageContent.referenceTitle, referenceCaption: typeof value.referenceCaption === "string" ? value.referenceCaption : defaultHomepageContent.referenceCaption });
+      }
+      if (about && typeof about === "object") {
+        const value = about as Record<string, unknown>;
+        const principles = Array.isArray(value.principles) ? value.principles.flatMap((entry) => entry && typeof entry === "object" && typeof (entry as Record<string, unknown>).title === "string" && typeof (entry as Record<string, unknown>).body === "string" ? [{ title: String((entry as Record<string, unknown>).title), body: String((entry as Record<string, unknown>).body) }] : []) : defaultAboutContent.principles;
+        setAboutContent({ title: typeof value.title === "string" ? value.title : defaultAboutContent.title, description: typeof value.description === "string" ? value.description : defaultAboutContent.description, principles: principles.length ? principles : defaultAboutContent.principles });
       }
     };
     window.addEventListener("frontline-site-config", applyNavigation);
@@ -2148,7 +2157,7 @@ export default function Home() {
       </header>
 
       <nav aria-label="Main navigation" className="navigation">
-        {visiblePublicNavigation.map((item) => <button key={item.id} className={(item.target === "weather" && activeSection === "dashboard") || (item.target === "radar" && activeSection === "radar") ? "active" : ""} onClick={() => openPublicNavigation(item.target)}>{item.label}</button>)}
+        {visiblePublicNavigation.map((item) => <button key={item.id} className={(item.target === "weather" && activeSection === "dashboard") || (item.target === "radar" && activeSection === "radar") || (item.target === "about" && activeSection === "about") ? "active" : ""} onClick={() => openPublicNavigation(item.target)}>{item.label}</button>)}
         {session && <><button className={activeSection === "forecast" ? "active" : ""} onClick={() => setActiveSection("forecast")}>Forecast</button><button className={activeSection === "verify" ? "active" : ""} onClick={() => setActiveSection("verify")}>Records</button></>}
         {session && activeWorkspace?.kind === "organization" && <button className={activeSection === "school" ? "active" : ""} onClick={() => setActiveSection("school")}>School</button>}
         {session && activeWorkspace?.kind === "classroom" && <button className={activeSection === "classroom" ? "active" : ""} onClick={() => setActiveSection("classroom")}>Class</button>}
@@ -2156,15 +2165,16 @@ export default function Home() {
       </nav>
       {workspaceNotice && <aside className="workspace-notice" role="status"><div><strong>Reference data added</strong><span>{workspaceNotice.message}</span></div><div>{workspaceNotice.targetDate && <button type="button" onClick={() => { const index = forecastRun.days.findIndex((day) => day.date === workspaceNotice.targetDate); if (index >= 0) setSelectedForecastDay(index); setActiveSection("forecast"); setWorkspaceNotice(null); }}>View forecast</button>}<button type="button" aria-label="Dismiss confirmation" onClick={() => setWorkspaceNotice(null)}>×</button></div></aside>}
 
+      {activeSection === "about" && <section className="in-app-about"><div><p className="eyebrow">About Frontline Forecast</p><h2>{aboutContent.title}</h2><p>{aboutContent.description}</p></div><div className="in-app-about-points">{aboutContent.principles.map((principle, index) => <article key={`${principle.title}-${index}`}><span>0{index + 1}</span><h3>{principle.title}</h3><p>{principle.body}</p></article>)}</div></section>}
       {activeSection === "dashboard" && <>
       <section className="home-intro"><div><p className="eyebrow">Local weather desk</p><h2>{homepageContent.title}</h2><p>{homepageContent.description}</p></div><div><button type="button" onClick={() => setActiveSection("dashboard")}>{homepageContent.primaryAction}</button><button type="button" onClick={() => session ? setActiveSection("forecast") : setLoginMenuOpen(true)}>{homepageContent.secondaryAction}</button></div></section>
       <section className="outlook-strip" aria-label="Seven-day NWS guidance">
-        <div className="outlook-heading"><div><h2>7-day outlook</h2><p>Local forecast guidance</p></div><span>Live</span></div>
+        <div className="outlook-heading"><div><h2>{homepageContent.outlookTitle}</h2><p>{homepageContent.outlookCaption}</p></div><span>Live</span></div>
         <div className="outlook-cards">{outlook.length ? outlook.map((day) => <article key={day.date}><strong>{day.label}</strong><b aria-hidden="true">{weatherIcon(day.shortForecast)}</b><span>{day.shortForecast}</span><em>{day.high}° / {day.low}°</em><small>{day.precipitationChance ?? 0}% PoP</small></article>) : <p>Loading 7-day NWS guidance…</p>}</div>
       </section>
       <section className="dashboard-grid">
         <article className="radar-card">
-          <div className="card-heading"><div><h2>{radarMapView === "satellite" ? "Satellite" : ["ndfd_maxt", "ndfd_pop12", "ndfd_windspd"].includes(radarMapView) ? "Forecast map" : "Radar"}</h2><p>{radarMapView === "composite" ? `Live composite reflectivity · centered on ${selectedLocation.name}` : radarMapView === "satellite" ? `GOES-East GeoColor · current CONUS picture for ${selectedLocation.name}` : ["ndfd_maxt", "ndfd_pop12", "ndfd_windspd"].includes(radarMapView) ? `NWS gridded forecast map · centered on ${selectedLocation.name}` : `OpenWeather map layer · centered on ${selectedLocation.name}`}</p></div><div className="actions">{radarMapView === "composite" && <button onClick={() => { setRadarLoop((value) => !value); setRadarPlaying(false); }}>{radarLoop ? "Interactive map" : "Radar timeline"}</button>}<button onClick={() => setRadarRecenterToken((value) => value + 1)}>Recenter</button><button onClick={() => setRadarRefreshToken((value) => value + 1)}>Refresh</button><button onClick={() => setRadarExpanded((value) => !value)}>{radarExpanded ? "Exit expanded view" : "Expand radar"}</button></div></div>
+          <div className="card-heading"><div><h2>{radarMapView === "satellite" ? "Satellite" : ["ndfd_maxt", "ndfd_pop12", "ndfd_windspd"].includes(radarMapView) ? "Forecast map" : homepageContent.radarTitle}</h2><p>{radarMapView === "composite" ? `${homepageContent.radarCaption} · centered on ${selectedLocation.name}` : radarMapView === "satellite" ? `GOES-East GeoColor · current CONUS picture for ${selectedLocation.name}` : ["ndfd_maxt", "ndfd_pop12", "ndfd_windspd"].includes(radarMapView) ? `NWS gridded forecast map · centered on ${selectedLocation.name}` : `OpenWeather map layer · centered on ${selectedLocation.name}`}</p></div><div className="actions">{radarMapView === "composite" && <button onClick={() => { setRadarLoop((value) => !value); setRadarPlaying(false); }}>{radarLoop ? "Interactive map" : "Radar timeline"}</button>}<button onClick={() => setRadarRecenterToken((value) => value + 1)}>Recenter</button><button onClick={() => setRadarRefreshToken((value) => value + 1)}>Refresh</button><button onClick={() => setRadarExpanded((value) => !value)}>{radarExpanded ? "Exit expanded view" : "Expand radar"}</button></div></div>
           <div className="radar"><details className="radar-tools"><summary aria-label="Open radar controls">☰</summary><div><div className="radar-product-picker"><span>Data layer</span><div><button type="button" className={radarMapView === "composite" ? "active" : ""} onClick={() => selectRadarView("composite")}>Radar</button><button type="button" className={radarMapView === "satellite" ? "active" : ""} onClick={() => selectRadarView("satellite")}>Satellite</button><button type="button" className={["precipitation_new", "clouds_new", "pressure_new", "wind_new", "temp_new"].includes(radarMapView) ? "active" : ""} onClick={() => selectRadarView("precipitation_new")}>Weather fields</button><button type="button" className={["ndfd_maxt", "ndfd_pop12", "ndfd_windspd"].includes(radarMapView) ? "active" : ""} onClick={() => selectRadarView("ndfd_maxt")}>Forecast maps</button></div></div>{radarMapView !== "satellite" && <><label className="alert-overlay-toggle"><input type="checkbox" checked={showNwsAlerts} onChange={(event) => { setShowNwsAlerts(event.target.checked); window.dispatchEvent(new CustomEvent("weather-desk-alert-overlay", { detail: event.target.checked })); event.currentTarget.closest("details")?.removeAttribute("open"); }} /> NWS watches &amp; warnings</label><label>Opacity <input type="range" min="20" max="100" value={radarOpacity} onChange={(event) => setRadarOpacity(Number(event.target.value))} /> <span>{radarOpacity}%</span></label></>}<small>{radarMapView === "satellite" ? "Official NOAA GOES-East GeoColor · visible by day and infrared overnight" : radarMapView === "composite" ? (radarLoop ? radarTimelineStatus : `NOAA composite reflectivity · ${selectedLocation.radarSite}`) : ["ndfd_maxt", "ndfd_pop12", "ndfd_windspd"].includes(radarMapView) ? "NWS National Digital Forecast Database · gridded forecast field" : "Weather fields are an OpenWeather layer; choose the field below."}</small>{["precipitation_new", "clouds_new", "pressure_new", "wind_new", "temp_new"].includes(radarMapView) && <div className="radar-field-picker">{(["precipitation_new", "clouds_new", "pressure_new", "wind_new", "temp_new"] as RadarMapView[]).map((view) => <button type="button" key={view} className={radarMapView === view ? "active" : ""} onClick={() => selectRadarView(view)}>{({ precipitation_new: "Precip", clouds_new: "Cloud", pressure_new: "Pressure", wind_new: "Wind", temp_new: "Temp" } as Record<string, string>)[view]}</button>)}</div>}{["ndfd_maxt", "ndfd_pop12", "ndfd_windspd"].includes(radarMapView) && <div className="radar-field-picker">{(["ndfd_maxt", "ndfd_pop12", "ndfd_windspd"] as RadarMapView[]).map((view) => <button type="button" key={view} className={radarMapView === view ? "active" : ""} onClick={() => selectRadarView(view)}>{({ ndfd_maxt: "High temp", ndfd_pop12: "PoP", ndfd_windspd: "Wind" } as Record<string, string>)[view]}</button>)}</div>}</div></details>{radarLoop && radarMapView === "composite" && <div className="radar-playback"><button type="button" aria-label="Previous radar frame" disabled={!radarFrames.length} onClick={() => { setRadarPlaying(false); setRadarFrameIndex((index) => Math.max(0, index - 1)); }}>‹</button><button type="button" disabled={radarFrames.length < 2} onClick={() => setRadarPlaying((playing) => !playing)}>{radarPlaying ? "Pause" : "Play"}</button><button type="button" aria-label="Next radar frame" disabled={!radarFrames.length} onClick={() => { setRadarPlaying(false); setRadarFrameIndex((index) => Math.min(radarFrames.length - 1, index + 1)); }}>›</button><span>{radarFrameTime}</span></div>}{radarMapView === "satellite" ? <figure className="satellite-view"><img src={`https://cdn.star.nesdis.noaa.gov/GOES19/ABI/CONUS/GEOCOLOR/1250x750.jpg?refresh=${radarRefreshToken}`} alt="Latest NOAA GOES-East GeoColor image for the continental United States" /><figcaption>GOES-East GeoColor · {selectedLocation.name} is within this regional view</figcaption></figure> : <RadarMap location={selectedLocation} opacity={radarOpacity / 100} showReflectivity={radarMapView === "composite"} refreshToken={radarRefreshToken} recenterToken={radarRecenterToken} timelineTileUrl={radarLoop && radarMapView === "composite" ? radarFrame?.tileUrl : null} />}</div>
           <div className="card-footer radar-footer"><RadarLegendStrip view={radarMapView} /></div>
         </article>
@@ -2180,7 +2190,7 @@ export default function Home() {
       </section>
 
       <section className="data-desk">
-        <div className="section-heading data-desk-heading"><div><h2>Forecast data</h2><p>Reference data for your next forecast.</p></div></div>
+        <div className="section-heading data-desk-heading"><div><h2>{homepageContent.referenceTitle}</h2><p>{homepageContent.referenceCaption}</p></div></div>
         <div className="tabs" role="tablist" aria-label="Forecast data sources">
           <button className={dataPanel === "nbm" ? "active" : ""} onClick={() => setDataPanel("nbm")}>NBM full text</button>
           <button className={dataPanel === "sounding" ? "active" : ""} onClick={() => setDataPanel("sounding")}>Sounding</button>
