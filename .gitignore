@@ -3,4 +3,7 @@ node_modules
 .env
 .env.local
 npm-debug.log*
+.DS_Store
+# Company HQ is an independent repository with its own deployment lifecycle.
+company-hq/
 *.tsbuildinfo
