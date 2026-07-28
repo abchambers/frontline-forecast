@@ -4,9 +4,9 @@ import "./verify-overrides.css";
 import { SiteConfiguration } from "./site-configuration";
 
 export const metadata: Metadata = {
-  // Keep previews and social cards on the stable production hostname until a custom domain is adopted.
+  // Keep previews and social cards on the canonical production hostname.
   // Auth redirects use the browser's current origin, so this does not override a user's sign-in return URL.
-  metadataBase: new URL("https://frontline-forecast-the-weather-desk.vercel.app"),
+  metadataBase: new URL("https://frontline-forecast.com"),
   title: {
     default: "Frontline Forecast",
     template: "%s | Frontline Forecast",
