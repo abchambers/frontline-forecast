@@ -948,6 +948,8 @@ export default function Home() {
   const [submissionToken, setSubmissionToken] = useState("");
   const [liveWeather, setLiveWeather] = useState<LiveWeather | null>(null);
   const [weatherError, setWeatherError] = useState("");
+  const [weatherLoading, setWeatherLoading] = useState(true);
+  const [weatherSyncedAt, setWeatherSyncedAt] = useState<number | null>(null);
   const [nbmText, setNbmText] = useState("");
   const [nbmStatus, setNbmStatus] = useState("Loading latest KAHN NBM bulletin…");
   const [soundingText, setSoundingText] = useState("");
@@ -1031,6 +1033,14 @@ export default function Home() {
   const [revisionParentRunId, setRevisionParentRunId] = useState<string | null>(null);
   const [assignmentMessage, setAssignmentMessage] = useState("");
   const selectedLocation = weatherDeskLocation(locationId);
+  const liveDataStatus = weatherError
+    ? { label: "Not synced", tone: "attention" }
+    : weatherLoading || !liveWeather
+      ? { label: "Syncing", tone: "loading" }
+      : { label: "Live", tone: "healthy" };
+  const liveDataTimestamp = weatherSyncedAt
+    ? new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(weatherSyncedAt)
+    : null;
   const hasControlAccess = role === "admin" || role === "owner";
   const visiblePublicNavigation = publicNavigation.filter((item) => item.enabled && (item.access === "public" || (item.access === "member" && Boolean(session)) || (item.access === "staff" && hasControlAccess) || (item.access === "owner" && role === "owner")));
   const visibleWorkspace = (id: WorkspaceNavigationItem["id"]) => {
@@ -1184,6 +1194,7 @@ export default function Home() {
 
   useEffect(() => {
     let isActive = true;
+    setWeatherLoading(true);
     const loadWeather = () => fetch(`/api/weather?location=${encodeURIComponent(locationId)}`, { cache: "no-store" })
       .then(async (response) => {
         const data = await response.json();
@@ -1191,9 +1202,15 @@ export default function Home() {
         if (isActive) {
           setLiveWeather(data);
           setWeatherError("");
+          setWeatherLoading(false);
+          setWeatherSyncedAt(Date.now());
         }
       })
-      .catch((error: Error) => isActive && setWeatherError(error.message));
+      .catch((error: Error) => {
+        if (!isActive) return;
+        setWeatherError(error.message);
+        setWeatherLoading(false);
+      });
     loadWeather();
     const refreshId = window.setInterval(loadWeather, 60_000);
     return () => {
@@ -2202,9 +2219,9 @@ export default function Home() {
 
       {activeSection === "about" && <section className="in-app-about"><div><p className="eyebrow">{aboutContent.eyebrow || "About Frontline Forecast"}</p><h2>{aboutContent.title}</h2><p>{aboutContent.description}</p></div><div className="in-app-about-points">{aboutContent.principles.map((principle, index) => <article key={`${principle.title}-${index}`}><span>0{index + 1}</span><h3>{principle.title}</h3><p>{principle.body}</p></article>)}</div></section>}
       {activeSection === "dashboard" && <>
-      <section className="home-intro"><div className="home-intro-copy"><h2>{homepageContent.title}</h2><p>{homepageContent.description}</p></div><div className="home-intro-actions"><button type="button" onClick={() => setActiveSection("dashboard")}>{homepageContent.primaryAction}</button><button type="button" onClick={() => session ? setActiveSection("forecast") : setLoginMenuOpen(true)}>{homepageContent.secondaryAction}</button></div></section>
+      <section className="home-intro"><div className="home-intro-copy"><div className="data-state-line" aria-live="polite"><span className={`sync-pill ${liveDataStatus.tone}`}><i aria-hidden="true" />{liveDataStatus.label}</span>{liveDataTimestamp && <small>Updated {liveDataTimestamp}</small>}</div><h2>{homepageContent.title}</h2><p>{homepageContent.description}</p></div><div className="home-intro-actions"><button type="button" onClick={() => setActiveSection("dashboard")}>{homepageContent.primaryAction}</button><button type="button" onClick={() => session ? setActiveSection("forecast") : setLoginMenuOpen(true)}>{homepageContent.secondaryAction}</button></div></section>
       {homepageContent.showOutlook && <section className="outlook-strip" aria-label="Seven-day NWS guidance">
-        <div className="outlook-heading"><div><h2>{homepageContent.outlookTitle}</h2><p>{homepageContent.outlookCaption}</p></div><span>Live</span></div>
+        <div className="outlook-heading"><div><h2>{homepageContent.outlookTitle}</h2><p>{homepageContent.outlookCaption}</p></div><span className={`sync-pill ${liveDataStatus.tone}`} title={weatherError || (liveDataTimestamp ? `Last successful update ${liveDataTimestamp}` : "Checking weather data")}><i aria-hidden="true" />{liveDataStatus.label}</span></div>
         <div className="outlook-cards">{outlook.length ? outlook.map((day) => <article key={day.date}><strong>{day.label}</strong><b aria-hidden="true">{weatherIcon(day.shortForecast)}</b><span>{day.shortForecast}</span><em>{day.high}° / {day.low}°</em><small>{day.precipitationChance ?? 0}% PoP</small></article>) : <p>Loading 7-day NWS guidance…</p>}</div>
       </section>}
       <section className="dashboard-grid">
