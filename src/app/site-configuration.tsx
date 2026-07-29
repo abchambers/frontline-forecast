@@ -38,10 +38,14 @@ export function SiteConfiguration() {
   useEffect(() => {
     let active = true;
     let observer: MutationObserver | null = null;
+    const reveal = () => requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (active) document.documentElement.dataset.siteContent = "ready";
+    }));
     fetch("/api/site-config", { cache: "no-store" })
       .then((response) => response.ok ? response.json() as Promise<PublishedConfig> : null)
       .then((config) => {
-        if (!active || !config) return;
+        if (!active) return;
+        if (!config) { reveal(); return; }
         const tokens = config.themes?.[0]?.tokens ?? {};
 
         const applyTokens = () => {
@@ -73,9 +77,11 @@ export function SiteConfiguration() {
           if (name && typeof brand.name === "string") name.textContent = brand.name;
           if (tagline && typeof brand.tagline === "string") tagline.textContent = brand.tagline;
         }
+        (window as Window & { __frontlineSiteConfig?: PublishedConfig }).__frontlineSiteConfig = config;
         window.dispatchEvent(new CustomEvent("frontline-site-config", { detail: config }));
+        reveal();
       })
-      .catch(() => undefined);
+      .catch(reveal);
     return () => {
       active = false;
       observer?.disconnect();

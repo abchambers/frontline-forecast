@@ -1131,6 +1131,8 @@ export default function Home() {
       }
     };
     window.addEventListener("frontline-site-config", applyNavigation);
+    const initial = (window as Window & { __frontlineSiteConfig?: unknown }).__frontlineSiteConfig;
+    if (initial) applyNavigation({ detail: initial } as CustomEvent<{ content?: Array<{ content_key: string; value: unknown }> }>);
     return () => window.removeEventListener("frontline-site-config", applyNavigation);
   }, []);
 
