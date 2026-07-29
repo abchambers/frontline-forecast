@@ -33,7 +33,7 @@ type ForecastPeriod = {
   probabilityOfPrecipitation: { value: number | null };
 };
 
-type AlertProperties = { event: string; headline: string | null };
+type AlertProperties = { event: string; headline: string | null; severity?: string | null; expires?: string | null };
 
 async function nws<T>(url: string) {
   const response = await fetch(url, {
@@ -149,6 +149,8 @@ export async function GET(request: Request) {
         alerts: alerts.features.slice(0, 3).map(({ properties }) => ({
           event: properties.event,
           headline: properties.headline,
+          severity: properties.severity ?? "Unknown",
+          expires: properties.expires ?? null,
         })),
         alertsAvailable,
         fetchedAt: new Date().toISOString(),

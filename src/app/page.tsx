@@ -26,7 +26,7 @@ type LiveWeather = {
   observation: { station: string; stationName: string; observedAt: string; description: string; temperatureF: number | null; temperatureSource: "observation" | "forecast estimate"; dewpointF: number | null; windMph: number | null; windDirection: string | null };
   forecast: { period: string; temperature: number; temperatureUnit: string; shortForecast: string; detailedForecast: string; precipitationChance: number | null } | null;
   forecastPeriods: { name: string; startTime: string; temperature: number; temperatureUnit: string; shortForecast: string; precipitationChance: number | null; icon: string | null }[];
-  alerts: { event: string; headline: string | null }[];
+  alerts: { event: string; headline: string | null; severity: string; expires: string | null }[];
   alertsAvailable: boolean;
   fetchedAt: string;
 };
@@ -292,6 +292,13 @@ function weatherIcon(description: string) {
   if (text.includes("cloud")) return "☁️";
   if (text.includes("fog")) return "🌫";
   return "☀️";
+}
+
+function alertTone(severity: string) {
+  const normalized = severity.toLowerCase();
+  if (normalized === "extreme" || normalized === "severe") return "urgent";
+  if (normalized === "moderate") return "warning";
+  return "advisory";
 }
 
 function openMeteoWeatherLabel(code: number | null) {
@@ -2222,6 +2229,7 @@ export default function Home() {
       {activeSection === "about" && <section className="in-app-about"><div><p className="eyebrow">{aboutContent.eyebrow || "About Frontline Forecast"}</p><h2>{aboutContent.title}</h2><p>{aboutContent.description}</p></div><div className="in-app-about-points">{aboutContent.principles.map((principle, index) => <article key={`${principle.title}-${index}`}><span>0{index + 1}</span><h3>{principle.title}</h3><p>{principle.body}</p></article>)}</div></section>}
       {activeSection === "dashboard" && <>
       <section className="home-intro"><div className="home-intro-copy"><div className="data-state-line" aria-live="polite"><span className={`sync-pill ${liveDataStatus.tone}`}><i aria-hidden="true" />{liveDataStatus.label}</span>{liveDataTimestamp && <small>Updated {liveDataTimestamp}</small>}</div><h2>{homepageContent.title}</h2><p>{homepageContent.description}</p></div><div className="home-intro-actions"><button type="button" onClick={() => setActiveSection("dashboard")}>{homepageContent.primaryAction}</button><button type="button" onClick={() => session ? setActiveSection("forecast") : setLoginMenuOpen(true)}>{homepageContent.secondaryAction}</button></div></section>
+      {liveWeather?.alerts.length ? <section className={`hazard-banner ${alertTone(liveWeather.alerts[0].severity)}`} role="status" aria-label="Active National Weather Service alerts"><div><span className="hazard-label">Active NWS alert</span><strong>{liveWeather.alerts[0].event}</strong><p>{liveWeather.alerts[0].headline || "An active National Weather Service alert applies to this location."}</p>{liveWeather.alerts[0].expires ? <small>Expires {new Intl.DateTimeFormat("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(liveWeather.alerts[0].expires))}</small> : null}</div><a href="https://www.weather.gov/" target="_blank" rel="noreferrer">Official NWS alerts ↗</a></section> : null}
       {homepageContent.showOutlook && <section className="outlook-strip" aria-label="Seven-day NWS guidance">
         <div className="outlook-heading"><div><h2>{homepageContent.outlookTitle}</h2><p>{homepageContent.outlookCaption}</p></div><span className={`sync-pill ${liveDataStatus.tone}`} title={weatherError || (liveDataTimestamp ? `Last successful update ${liveDataTimestamp}` : "Checking weather data")}><i aria-hidden="true" />{liveDataStatus.label}</span></div>
         <div className="outlook-cards">{outlook.length ? outlook.map((day) => <article key={day.date}><strong>{day.label}</strong><b aria-hidden="true">{weatherIcon(day.shortForecast)}</b><span>{day.shortForecast}</span><em>{day.high}° / {day.low}°</em><small>{day.precipitationChance ?? 0}% PoP</small></article>) : <p>Loading 7-day NWS guidance…</p>}</div>
