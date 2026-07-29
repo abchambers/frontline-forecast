@@ -1,3 +1,84 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 620" role="img" aria-label="Frontline Forecast">
-  <image href="/brand/frontline-forecast-mark.png" width="620" height="620" />
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" data-name="Layer 1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108.82 213.93">
+  <defs>
+    <style>
+      .cls-1 {
+        fill: #e6e7e8;
+        stroke-linecap: round;
+      }
+
+      .cls-1, .cls-2 {
+        stroke: #fff;
+        stroke-miterlimit: 10;
+      }
+
+      .cls-2 {
+        fill: none;
+      }
+
+      .cls-3, .cls-4 {
+        fill: #fff;
+      }
+
+      .cls-5 {
+        letter-spacing: -.03em;
+      }
+
+      .cls-6 {
+        fill: #005;
+        font-family: AcuminConcept-ExtraCondBold, 'Acumin Variable Concept';
+        font-size: 196.9px;
+        font-variation-settings: 'wght' 700, 'wdth' 50, 'slnt' 0;
+        font-weight: 700;
+      }
+
+      .cls-7 {
+        letter-spacing: .02em;
+      }
+
+      .cls-4 {
+        font-family: Arial-Black, 'Arial Black';
+        font-size: 8px;
+        font-weight: 800;
+      }
+    </style>
+  </defs>
+  <text class="cls-6" transform="translate(0 167.56) scale(1.74 1)"><tspan x="0" y="0">F</tspan></text>
+  <rect class="cls-3" x="50.92" y="83.86" width="4.23" height="32.34"/>
+  <rect class="cls-3" x="31.39" y="38.59" width="4.23" height="36.83" transform="translate(-23.46 90.56) rotate(-90.05)"/>
+  <path class="cls-2" d="M15.07,139.42c26.31-22.38,29.53-80.56,29.53-80.56"/>
+  <path class="cls-2" d="M44.61,54.95c.08-17.08,43.11-10.12,43.11-19.96"/>
+  <path class="cls-2" d="M18.05,133.82l-.78.78c-.25-.25-.1-.81.32-1.23s.98-.57,1.23-.32l-.78.78Z"/>
+  <path class="cls-2" d="M24.58,124.7l-.61.92c-.29-.2-.26-.77.07-1.27s.85-.76,1.14-.56l-.61.92Z"/>
+  <path class="cls-2" d="M30.16,113.76l-.49.98c-.32-.16-.35-.73-.08-1.27s.75-.85,1.07-.7l-.49.98Z"/>
+  <path class="cls-2" d="M34.58,101.88l-.38,1.03c-.33-.12-.43-.69-.23-1.25s.65-.93.98-.81l-.38,1.03Z"/>
+  <path class="cls-2" d="M37.64,90.82l-.29,1.06c-.34-.09-.49-.65-.33-1.23s.57-.99.91-.89l-.29,1.06Z"/>
+  <path class="cls-2" d="M40.11,78.91l-.2,1.08c-.35-.06-.54-.61-.43-1.2s.49-1.03.83-.96l-.2,1.08Z"/>
+  <path class="cls-2" d="M41.83,65.9l-.15,1.09c-.35-.05-.57-.58-.49-1.18s.44-1.05.79-1l-.15,1.09Z"/>
+  <path class="cls-2" d="M48.89,44.92l-.95.55c-.18-.31.11-.81.63-1.11s1.1-.3,1.28,0l-.95.55Z"/>
+  <path class="cls-2" d="M61.2,41.37l-1.08.21c-.07-.35.36-.73.96-.84s1.14.07,1.2.42l-1.08.21Z"/>
+  <path class="cls-2" d="M75.89,39.1l-1.08.18c-.06-.35.38-.72.98-.82s1.13.1,1.19.45l-1.08.18Z"/>
+  <polygon class="cls-1" points="30.93 121.24 31.63 119.79 32.35 121.04 30.93 121.24"/>
+  <polygon class="cls-1" points="24.5 131.64 25.5 130.39 25.93 131.75 24.5 131.64"/>
+  <polygon class="cls-1" points="36.17 109.08 36.73 107.57 37.56 108.74 36.17 109.08"/>
+  <polygon class="cls-1" points="39.61 97.87 40 96.31 40.95 97.38 39.61 97.87"/>
+  <polygon class="cls-1" points="42.54 86.09 42.84 84.52 43.85 85.53 42.54 86.09"/>
+  <polygon class="cls-1" points="44.65 73.69 44.85 72.1 45.93 73.04 44.65 73.69"/>
+  <polygon class="cls-1" points="46.58 53.71 46.99 52.16 47.93 53.24 46.58 53.71"/>
+  <polygon class="cls-1" points="55.32 46.3 56.86 45.84 56.44 47.21 55.32 46.3"/>
+  <polygon class="cls-1" points="68.52 43.58 70.11 43.35 69.48 44.64 68.52 43.58"/>
+  <polygon class="cls-1" points="84.04 40.56 85.52 39.95 85.24 41.35 84.04 40.56"/>
+  <rect class="cls-1" x="55.19" y="98.63" width="43.72" height=".43"/>
+  <text class="cls-4" transform="translate(55.54 96.16)"><tspan class="cls-5" x="0" y="0">F</tspan><tspan class="cls-7" x="5.06" y="0">r</tspan><tspan x="8.74" y="0">ontline</tspan></text>
+  <text class="cls-4" transform="translate(55.84 106.97)"><tspan class="cls-5" x="0" y="0">F</tspan><tspan x="5.06" y="0">o</tspan><tspan class="cls-7" x="10.4" y="0">r</tspan><tspan x="14.08" y="0">ecast</tspan></text>
+  <ellipse class="cls-3" cx="17.13" cy="37.66" rx="5.46" ry="4.79"/>
+  <polygon class="cls-1" points="17.78 43.9 17.04 43.9 17.41 45.9 17.78 43.9"/>
+  <polygon class="cls-1" points="22.52 41.77 21.97 42.27 23.61 43.48 22.52 41.77"/>
+  <polygon class="cls-1" points="24 37.36 23.97 38.1 25.98 37.8 24 37.36"/>
+  <ellipse class="cls-3" cx="43.18" cy="162.72" rx="3.33" ry="3.58"/>
+  <ellipse class="cls-3" cx="46.75" cy="159.95" rx="2.88" ry="2.84"/>
+  <ellipse class="cls-3" cx="49.98" cy="162.09" rx="4.5" ry="3.33"/>
+  <ellipse class="cls-3" cx="39.12" cy="165.48" rx="3.96" ry="3.78"/>
+  <ellipse class="cls-3" cx="46.61" cy="166.83" rx="4.73" ry="4.32"/>
+  <path class="cls-3" d="M107.28,51.69c0,2.88-2.43,5.23-5.41,5.23-1.51,0-2.87-.6-3.86-1.55-.71.61-1.61.98-2.59.98h-.08c-.81.92-2.15,1.52-3.66,1.52-2.47,0-4.46-1.58-4.46-3.51s1.83-3.4,4.17-3.51c.43-1.98,2.07-3.46,4.04-3.46.9,0,1.73.32,2.41.83.99-1.07,2.43-1.75,4.04-1.75,2.98,0,5.41,2.34,5.41,5.23Z"/>
 </svg>

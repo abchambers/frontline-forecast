@@ -30,7 +30,7 @@ export const metadata: Metadata = {
     googleBot: { index: false, follow: false },
   },
   icons: {
-    icon: "/icon.png",
+    icon: "/brand/frontline-forecast-official.svg",
   },
 };
 
