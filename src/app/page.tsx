@@ -106,6 +106,7 @@ type OrganizationWorkspace = { id: string; name: string; kind: "company" | "scho
 type ClassroomWorkspace = { id: string; name: string; term: string | null; organization_id: string };
 type OrganizationMember = { id: string; organization_id: string; user_id: string; role: WorkspaceRole; status: "active" | "invited" | "suspended"; profiles: Pick<Profile, "id" | "email" | "display_name" | "person_type"> | null };
 type ClassroomMember = { id: string; classroom_id: string; user_id: string; role: "instructor" | "student" | "assistant"; status: "active" | "invited" | "suspended"; profiles: Pick<Profile, "id" | "email" | "display_name" | "person_type"> | null };
+type ClassroomJoinCode = { id: string; classroom_id: string; label: string | null; code_hint: string; active: boolean; expires_at: string | null; max_uses: number | null; use_count: number; created_at: string };
 type ReviewTarget = { userId: string; label: string; organizationId: string; classroomId?: string };
 type AcademicRosterMember = ReviewTarget & { role: string; email: string | null; personType: Profile["person_type"] };
 type InstructorForecastSnapshot = { saved_at: string; location_name: string; days: ForecastDayDraft[] };
@@ -737,9 +738,31 @@ function buildClassForecastSnapshot(assignment: ClassroomAssignment, submissions
   return { generated_at: new Date().toISOString(), target_date: assignment.target_date, submitted_count: latest.length, total_students: studentIds.size, day: primary.day, night: primary.night, days };
 }
 
-function SchoolDesk({ workspace, classrooms, onOpenClassroom }: { workspace: WorkspaceContext; classrooms: WorkspaceContext[]; onOpenClassroom: (workspace: WorkspaceContext) => void }) {
+function SchoolDesk({ workspace, classrooms, members, codes, onOpenClassroom, onCreateClassroom, onRenameClassroom, onAssignInstructor, onCreateCode, onRetireCode, message }: { workspace: WorkspaceContext; classrooms: WorkspaceContext[]; members: OrganizationMember[]; codes: ClassroomJoinCode[]; onOpenClassroom: (workspace: WorkspaceContext) => void; onCreateClassroom: (name: string, term: string) => void; onRenameClassroom: (classroom: WorkspaceContext, name: string, term: string) => void; onAssignInstructor: (classroomId: string, userId: string) => void; onCreateCode: (classroomId: string, label: string, maxUses: number | null, expiresAt: string | null) => Promise<string | null>; onRetireCode: (id: string) => void; message: string }) {
+  const canManage = ["owner", "admin", "instructor"].includes(workspace.role ?? "");
+  const canCoordinate = ["owner", "admin"].includes(workspace.role ?? "");
   const instructionalClasses = classrooms.filter((classroom) => ["owner", "admin", "instructor", "assistant"].includes(classroom.role ?? ""));
-  return <section className="school-desk"><header className="section-heading"><div><p className="eyebrow">School desk</p><h2>{workspaceDeskLabel(workspace)}</h2><p>Manage class assignments, feedback, and class outlooks in one private school space.</p></div></header><div className="school-status-grid"><article><span>Classes</span><strong>{classrooms.length}</strong><small>available to this account</small></article><article><span>Teaching access</span><strong>{instructionalClasses.length}</strong><small>classes you can manage or review</small></article></div><section className="school-class-directory"><header><div><p className="eyebrow">Classes</p><h3>Choose a class desk</h3><p>Each class keeps its assignments, student work, feedback, and official class outlook together.</p></div></header><div>{classrooms.map((classroom) => <button type="button" key={classroom.key} onClick={() => onOpenClassroom(classroom)}><span><strong>{workspaceDeskLabel(classroom)}</strong><small>{classroom.detail}</small></span><em>{classroom.role ?? "member"}</em><b>Open</b></button>)}{!classrooms.length && <p className="empty">No classes are assigned to this school workspace yet.</p>}</div></section></section>;
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newTerm, setNewTerm] = useState("");
+  const [openClassroomId, setOpenClassroomId] = useState<string | null>(null);
+  const [codeResult, setCodeResult] = useState<Record<string, string>>({});
+  const teachingMembers = members.filter((member) => ["owner", "admin", "instructor"].includes(member.role));
+  const displayName = (member: OrganizationMember) => member.profiles?.display_name || member.profiles?.email || "School member";
+  const readableDate = (value: string | null) => value ? new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "America/New_York" }).format(new Date(value)) : "No expiry";
+  return <section className="school-desk"><header className="section-heading"><div><p className="eyebrow">School workspace</p><h2>{workspaceDeskLabel(workspace)}</h2><p>Classes and enrollment stay inside the school’s licensed allocation.</p></div>{canManage && <button type="button" className="button primary" onClick={() => setShowCreate((open) => !open)}>{showCreate ? "Close" : "Add class"}</button>}</header><div className="school-status-grid"><article><span>Classes</span><strong>{classrooms.length}</strong><small>available to this account</small></article><article><span>Teaching access</span><strong>{instructionalClasses.length}</strong><small>classrooms you can run</small></article><article><span>School contact</span><strong>{canCoordinate ? "Coordinator" : canManage ? "Instructor" : "Student"}</strong><small>{canCoordinate ? "Can organize the school’s class list" : canManage ? "Can run assigned classes" : "Use a class code to enroll"}</small></article></div>{showCreate && <form className="school-class-create" onSubmit={(event) => { event.preventDefault(); if (!newName.trim()) return; onCreateClassroom(newName.trim(), newTerm.trim()); setNewName(""); setNewTerm(""); setShowCreate(false); }}><label>Class name<input value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="Meteorology 101" required /></label><label>Term<input value={newTerm} onChange={(event) => setNewTerm(event.target.value)} placeholder="Fall 2026" /></label><button type="submit">Create within allocation</button></form>}<section className="school-class-directory"><header><div><p className="eyebrow">Classes</p><h3>Class list</h3><p>Open a class to teach. Coordinators can rename a class or assign its instructor; codes enroll students only while capacity remains.</p></div></header><div>{classrooms.map((classroom) => { const isOpen = openClassroomId === classroom.classroomId; const classCodes = codes.filter((code) => code.classroom_id === classroom.classroomId); return <details key={classroom.key} open={isOpen} onToggle={(event) => setOpenClassroomId((event.currentTarget as HTMLDetailsElement).open ? classroom.classroomId! : null)}><summary><span><strong>{workspaceDeskLabel(classroom)}</strong><small>{classroom.detail}</small></span><em>{classroom.role ?? (canCoordinate ? "coordinator" : "member")}</em><b>Manage</b></summary><div className="school-class-detail"><div className="school-class-actions"><button type="button" onClick={() => onOpenClassroom(classroom)}>Open class</button></div>{canManage && <ClassroomSettings classroom={classroom} members={teachingMembers} canCoordinate={canCoordinate} onRename={onRenameClassroom} onAssignInstructor={onAssignInstructor} displayName={displayName} />}{canManage && <ClassroomCodeManager classroomId={classroom.classroomId!} codes={classCodes} onCreate={onCreateCode} onRetire={onRetireCode} codeResult={codeResult[classroom.classroomId!] ?? ""} onResult={(value) => setCodeResult((all) => ({ ...all, [classroom.classroomId!]: value }))} readableDate={readableDate} />}</div></details>; })}{!classrooms.length && <p className="empty">No classes are assigned to this school workspace yet.</p>}</div></section>{message && <p className="control-message" role="status">{message}</p>}</section>;
+}
+
+function ClassroomSettings({ classroom, members, canCoordinate, onRename, onAssignInstructor, displayName }: { classroom: WorkspaceContext; members: OrganizationMember[]; canCoordinate: boolean; onRename: (classroom: WorkspaceContext, name: string, term: string) => void; onAssignInstructor: (classroomId: string, userId: string) => void; displayName: (member: OrganizationMember) => string }) {
+  const [name, setName] = useState(classroom.label);
+  const [term, setTerm] = useState(classroom.detail.split(" · ").slice(1).join(" · "));
+  const [instructorId, setInstructorId] = useState("");
+  return <section className="classroom-settings"><div><label>Class name<input value={name} onChange={(event) => setName(event.target.value)} /></label><label>Term<input value={term === classroom.detail ? "" : term} onChange={(event) => setTerm(event.target.value)} placeholder="Optional" /></label><button type="button" onClick={() => onRename(classroom, name.trim(), term.trim())}>Save class details</button></div>{canCoordinate && <div><label>Instructor<select value={instructorId} onChange={(event) => setInstructorId(event.target.value)}><option value="">Choose school instructor</option>{members.map((member) => <option key={member.user_id} value={member.user_id}>{displayName(member)}</option>)}</select></label><button type="button" disabled={!instructorId} onClick={() => { onAssignInstructor(classroom.classroomId!, instructorId); setInstructorId(""); }}>Assign instructor</button></div>}</section>;
+}
+
+function ClassroomCodeManager({ classroomId, codes, onCreate, onRetire, codeResult, onResult, readableDate }: { classroomId: string; codes: ClassroomJoinCode[]; onCreate: (classroomId: string, label: string, maxUses: number | null, expiresAt: string | null) => Promise<string | null>; onRetire: (id: string) => void; codeResult: string; onResult: (value: string) => void; readableDate: (value: string | null) => string }) {
+  const [label, setLabel] = useState(""); const [maxUses, setMaxUses] = useState(""); const [expiresAt, setExpiresAt] = useState(""); const [busy, setBusy] = useState(false);
+  return <section className="classroom-code-manager"><header><div><p className="eyebrow">Enrollment</p><h4>Class codes</h4><p>Codes can add students only while school and class capacity remain.</p></div></header><form onSubmit={async (event) => { event.preventDefault(); setBusy(true); const code = await onCreate(classroomId, label, maxUses ? Number(maxUses) : null, expiresAt || null); setBusy(false); if (code) { onResult(code); setLabel(""); setMaxUses(""); setExpiresAt(""); } }}><label>Label<input value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Period 2 roster" /></label><label>Use limit<input type="number" min="1" value={maxUses} onChange={(event) => setMaxUses(event.target.value)} placeholder="Class capacity" /></label><label>Expires<input type="date" value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} /></label><button type="submit" disabled={busy}>{busy ? "Creating…" : "Generate code"}</button></form>{codeResult && <div className="class-code-reveal" role="status"><strong>New code</strong><code>{codeResult}</code><small>Share this once through the school’s approved channel. It will not be shown again.</small></div>}<div className="class-code-list">{codes.map((code) => <article key={code.id}><span><strong>{code.label || `Class code ••••${code.code_hint}`}</strong><small>{code.active ? `${code.use_count}${code.max_uses ? `/${code.max_uses}` : ""} redeemed · ${readableDate(code.expires_at)}` : "Retired"}</small></span><b className={code.active ? "status-ready" : "status-pending"}>{code.active ? "Active" : "Retired"}</b>{code.active && <button type="button" onClick={() => onRetire(code.id)}>Retire</button>}</article>)}{!codes.length && <p className="empty">No class codes have been issued.</p>}</div></section>;
 }
 
 function ClassroomToday({ assignment, submissions, roster, canManage, canOpenForecast, onOpenForecast }: { assignment: ClassroomAssignment | null; submissions: ClassroomAssignmentSubmission[]; roster: AcademicRosterMember[]; canManage: boolean; canOpenForecast: boolean; onOpenForecast: () => void }) {
@@ -1026,7 +1049,13 @@ export default function Home() {
   const [managedClassrooms, setManagedClassrooms] = useState<ClassroomWorkspace[]>([]);
   const [organizationMembers, setOrganizationMembers] = useState<OrganizationMember[]>([]);
   const [classroomMembers, setClassroomMembers] = useState<ClassroomMember[]>([]);
+  const [schoolMembers, setSchoolMembers] = useState<OrganizationMember[]>([]);
+  const [classroomJoinCodes, setClassroomJoinCodes] = useState<ClassroomJoinCode[]>([]);
   const [accessMessage, setAccessMessage] = useState("");
+  const [workspaceRefreshToken, setWorkspaceRefreshToken] = useState(0);
+  const [joinPanelOpen, setJoinPanelOpen] = useState(false);
+  const [joinCode, setJoinCode] = useState("");
+  const [joinMessage, setJoinMessage] = useState("");
   const [reviewTarget, setReviewTarget] = useState<ReviewTarget | null>(null);
   const [reviewRuns, setReviewRuns] = useState<ReviewRun[]>([]);
   const [reviewNotes, setReviewNotes] = useState<Record<string, ForecastReview[]>>({});
@@ -1414,6 +1443,30 @@ export default function Home() {
   useEffect(() => { loadAccessManagement(); }, [session, role, profiles]);
 
   useEffect(() => {
+    if (!session || !supabaseUrl || !supabaseKey || activeWorkspace?.kind !== "organization" || !activeWorkspace.organizationId) {
+      setSchoolMembers([]);
+      setClassroomJoinCodes([]);
+      return;
+    }
+    const headers = { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` };
+    const organizationId = activeWorkspace.organizationId;
+    Promise.all([
+      fetch(`${supabaseUrl}/rest/v1/organization_memberships?select=id,organization_id,user_id,role,status&organization_id=eq.${organizationId}&status=eq.active&order=created_at.asc`, { headers }),
+      fetch(`${supabaseUrl}/rest/v1/workspace_join_codes?select=id,classroom_id,label,code_hint,active,expires_at,max_uses,use_count,created_at&organization_id=is.null&order=created_at.desc`, { headers }),
+    ]).then(async ([membersResponse, codesResponse]) => {
+      if (!membersResponse.ok) throw new Error("School members could not be loaded.");
+      const members = await membersResponse.json() as Omit<OrganizationMember, "profiles">[];
+      const ids = members.map((member) => member.user_id);
+      const profilesResponse = ids.length ? await fetch(`${supabaseUrl}/rest/v1/profiles?select=id,email,display_name,person_type&id=in.(${ids.join(",")})`, { headers }) : null;
+      const people = profilesResponse?.ok ? await profilesResponse.json() as Pick<Profile, "id" | "email" | "display_name" | "person_type">[] : [];
+      const peopleById = new Map(people.map((profile) => [profile.id, profile]));
+      setSchoolMembers(members.map((member) => ({ ...member, profiles: peopleById.get(member.user_id) ?? null })));
+      const rawCodes = codesResponse.ok ? await codesResponse.json() as ClassroomJoinCode[] : [];
+      setClassroomJoinCodes(rawCodes.filter((code) => Boolean(code.classroom_id)));
+    }).catch((error: Error) => setAccessMessage(error.message));
+  }, [activeWorkspaceKey, session]);
+
+  useEffect(() => {
     if (!session || !hasAcademicReviewAccess || !supabaseUrl || !supabaseKey || !activeWorkspace || (activeWorkspace.kind !== "classroom" && activeWorkspace.kind !== "organization")) {
       setAcademicRoster([]);
       setAcademicMessage("");
@@ -1541,7 +1594,7 @@ export default function Home() {
       setWorkspaceContextStatus(error.message);
       setWorkspaceContexts([{ key: "personal", kind: "personal", label: "Personal desk", detail: "Private forecasts and drafts" }]);
     });
-  }, [role, session]);
+  }, [role, session, workspaceRefreshToken]);
 
   useEffect(() => {
     if (!session || !activeWorkspace) return;
@@ -2115,6 +2168,7 @@ export default function Home() {
     await fetch(`${supabaseUrl}/rest/v1/classroom_memberships`, { method: "POST", headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" }, body: JSON.stringify({ classroom_id: rows[0].id, user_id: session.user.id, role: "instructor", status: "active" }) });
     setAccessMessage(`${name} was created.`);
     loadAccessManagement();
+    setWorkspaceRefreshToken((value) => value + 1);
   }
 
   async function addOrganizationMember(organizationId: string, userId: string, nextRole: WorkspaceRole) {
@@ -2143,6 +2197,56 @@ export default function Home() {
     const response = await fetch(`${supabaseUrl}/rest/v1/classroom_memberships?id=eq.${membership.id}`, { method: "DELETE", headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` } });
     setAccessMessage(response.ok ? "Classroom access removed." : "Classroom access could not be removed.");
     if (response.ok) loadAccessManagement();
+  }
+
+  async function renameSchoolClassroom(classroom: WorkspaceContext, name: string, term: string) {
+    if (!session || !supabaseUrl || !supabaseKey || !classroom.classroomId || !name) return;
+    setAccessMessage("Saving class details…");
+    const response = await fetch(`${supabaseUrl}/rest/v1/classrooms?id=eq.${classroom.classroomId}`, { method: "PATCH", headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json", Prefer: "return=representation" }, body: JSON.stringify({ name, term: term || null }) });
+    if (!response.ok) { setAccessMessage("Class details could not be saved."); return; }
+    setAccessMessage("Class details saved.");
+    setWorkspaceRefreshToken((value) => value + 1);
+  }
+
+  async function assignSchoolInstructor(classroomId: string, userId: string) {
+    if (!session || !supabaseUrl || !supabaseKey) return;
+    setAccessMessage("Assigning instructor…");
+    const response = await fetch(`${supabaseUrl}/rest/v1/classroom_memberships?on_conflict=classroom_id,user_id`, { method: "POST", headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ classroom_id: classroomId, user_id: userId, role: "instructor", status: "active" }) });
+    setAccessMessage(response.ok ? "Instructor assigned." : "Instructor could not be assigned. Confirm they have school access first.");
+    if (response.ok) setWorkspaceRefreshToken((value) => value + 1);
+  }
+
+  async function createSchoolClassCode(classroomId: string, label: string, maxUses: number | null, expiresAt: string | null) {
+    if (!session || !supabaseUrl || !supabaseKey) return null;
+    setAccessMessage("Creating class code…");
+    const expiration = expiresAt ? new Date(`${expiresAt}T23:59:59`).toISOString() : null;
+    const response = await fetch(`${supabaseUrl}/rest/v1/rpc/create_classroom_join_code`, { method: "POST", headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" }, body: JSON.stringify({ target_classroom: classroomId, code_label: label || null, code_expires_at: expiration, code_max_uses: maxUses }) });
+    const rows = await response.json().catch(() => []);
+    if (!response.ok || !rows?.[0]?.raw_code) { setAccessMessage(rows?.message || "Class code could not be created."); return null; }
+    setAccessMessage("Class code created. It is shown once below.");
+    setWorkspaceRefreshToken((value) => value + 1);
+    return rows[0].raw_code as string;
+  }
+
+  async function retireSchoolClassCode(id: string) {
+    if (!session || !supabaseUrl || !supabaseKey) return;
+    const response = await fetch(`${supabaseUrl}/rest/v1/workspace_join_codes?id=eq.${id}`, { method: "PATCH", headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" }, body: JSON.stringify({ active: false }) });
+    setAccessMessage(response.ok ? "Class code retired." : "Class code could not be retired.");
+    if (response.ok) setWorkspaceRefreshToken((value) => value + 1);
+  }
+
+  async function redeemSchoolOrClassCode() {
+    if (!session || !supabaseUrl || !supabaseKey || !joinCode.trim()) return;
+    setJoinMessage("Checking code…");
+    const headers = { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" };
+    let response = await fetch(`${supabaseUrl}/rest/v1/rpc/redeem_organization_license`, { method: "POST", headers, body: JSON.stringify({ raw_code: joinCode }) });
+    if (!response.ok) response = await fetch(`${supabaseUrl}/rest/v1/rpc/redeem_classroom_join_code`, { method: "POST", headers, body: JSON.stringify({ raw_code: joinCode }) });
+    const rows = await response.json().catch(() => []);
+    if (!response.ok) { setJoinMessage(rows?.message || "This access code could not be redeemed."); return; }
+    const record = rows?.[0];
+    setJoinMessage(record?.classroom_name ? `Joined ${record.classroom_name}.` : `Joined ${record?.organization_name ?? "the school workspace"}.`);
+    setJoinCode("");
+    setWorkspaceRefreshToken((value) => value + 1);
   }
 
   async function createClassroomAssignment(fields: ClassroomAssignmentFields) {
@@ -2234,7 +2338,7 @@ export default function Home() {
       <header className="header">
         <div className="brand-lockup"><span className="theme-brand-mark" aria-hidden="true"><img className="brand-mark-light" src="/brand/frontline-forecast-logo-light.svg" alt="" /><img className="brand-mark-dark" src="/brand/frontline-forecast-logo-dark.svg" alt="" /></span><div><strong className="brand-name">Frontline Forecast</strong><p className="eyebrow" data-hq-content="brand.tagline">Human-first forecasting workspace</p></div></div>
         <div className="header-meta">
-          {session && <div className="workspace-menu-wrap"><button type="button" className="workspace-trigger" aria-expanded={workspaceMenuOpen} onClick={() => setWorkspaceMenuOpen((open) => !open)}><strong>{workspaceDeskLabel(activeWorkspace)}</strong><i aria-hidden="true">⌄</i></button>{workspaceMenuOpen && <div className="workspace-menu"><strong>Your desks</strong><div>{workspaceContexts.map((workspace) => <button type="button" key={workspace.key} className={workspace.key === activeWorkspaceKey ? "active" : ""} onClick={() => switchWorkspace(workspace)}><strong>{workspaceDeskLabel(workspace)}</strong><span>{workspace.detail}{workspace.role ? ` · ${workspace.role}` : ""}</span></button>)}</div>{workspaceContextStatus && <em>{workspaceContextStatus}</em>}</div>}</div>}
+          {session && <div className="workspace-menu-wrap"><button type="button" className="workspace-trigger" aria-expanded={workspaceMenuOpen} onClick={() => setWorkspaceMenuOpen((open) => !open)}><strong>{workspaceDeskLabel(activeWorkspace)}</strong><i aria-hidden="true">⌄</i></button>{workspaceMenuOpen && <div className="workspace-menu"><strong>Your desks</strong><div>{workspaceContexts.map((workspace) => <button type="button" key={workspace.key} className={workspace.key === activeWorkspaceKey ? "active" : ""} onClick={() => switchWorkspace(workspace)}><strong>{workspaceDeskLabel(workspace)}</strong><span>{workspace.detail}{workspace.role ? ` · ${workspace.role}` : ""}</span></button>)}</div><button type="button" className="workspace-join-action" onClick={() => { setJoinPanelOpen(true); setWorkspaceMenuOpen(false); }}>Join a school or class</button>{workspaceContextStatus && <em>{workspaceContextStatus}</em>}</div>}</div>}
           <div className="location-menu-wrap"><button type="button" className="location-trigger" aria-expanded={locationMenuOpen} onClick={() => setLocationMenuOpen((open) => !open)}><span>Location</span><strong>{selectedLocation.name}</strong><i aria-hidden="true">⌄</i></button>{locationMenuOpen && <div className="location-menu"><strong>Workspace location</strong><small>Radar, observations, model guidance, and new forecasts update together.</small><div>{weatherDeskLocations.map((location) => <button type="button" key={location.id} className={location.id === locationId ? "active" : ""} onClick={() => { setLocationId(location.id); setLocationMenuOpen(false); }}><strong>{location.name}</strong><span>{location.observationStation} observation · K{location.upperAirStation} upper air</span></button>)}</div></div>}</div>
           <div className="header-account"><button type="button" className="theme-toggle" onClick={() => setTheme((value) => value === "light" ? "dark" : "light")}>{theme === "light" ? "Dark mode" : "Light mode"}</button>{session ? <><span>{session.user.email}</span><button type="button" onClick={() => { window.localStorage.removeItem(sessionStorageKey); window.sessionStorage.removeItem(sessionStorageKey); setSession(null); setWeatherIconStyle("traditional"); setAuthMessage("Signed out."); }}>Sign out</button></> : <div className="login-menu-wrap"><button type="button" onClick={() => setLoginMenuOpen((open) => !open)}>Log in</button>{loginMenuOpen && <form className="login-menu" onSubmit={(event) => { event.preventDefault(); authenticate(); }}><strong>Frontline Forecast account</strong><input aria-label="Email" type="email" placeholder="Email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} /><input aria-label="Password" type="password" placeholder="Password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} /><label className="remember-me"><input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} /> Remember me on this browser</label><div><button type="submit">Sign in</button></div>{authMessage && <small>{authMessage}</small>}</form>}</div>}</div>
         </div>
@@ -2364,7 +2468,8 @@ export default function Home() {
       {archiveMenu && <div className="tab-menu" style={{ left: archiveMenuPosition.left, top: archiveMenuPosition.top }}><strong>{archiveVersionTitle(archiveMenu)}</strong><small>{archiveMenu.status === "draft" ? "Draft records may be permanently removed." : archiveMenu.runId ? "Withdrawal removes this entire forecast run from your working archive while retaining an audit record." : "Withdrawal removes this submission from your working archive while retaining an audit record."}</small><div><button type="button" onClick={() => { setSelectedArchiveId(archiveMenu.id); setArchiveMenuId(null); setActiveSection("verify"); }}>Open</button><button type="button" onClick={() => reviseArchive(archiveMenu)}>Revise</button></div><button type="button" onClick={() => requestArchiveRemoval(archiveMenu)}>{archiveMenu.status === "draft" ? "Delete draft" : archiveMenu.runId ? "Withdraw forecast run" : "Withdraw submission"}</button></div>}
       {pendingArchiveRemoval && <div className="archive-confirmation" role="alertdialog" aria-modal="true" aria-labelledby="archive-confirmation-title"><div><p className="eyebrow">Confirm archive action</p><h2 id="archive-confirmation-title">{pendingArchiveRemoval.status === "draft" ? "Delete this draft?" : "Withdraw this forecast?"}</h2><p>{pendingArchiveRemoval.status === "draft" ? "This draft will be permanently deleted from your archive." : "This forecast will be hidden from your working archive and excluded from grading. Its protected audit record remains available to administrators."}</p><small>{forecastTargetTitle(pendingArchiveRemoval.targetDate)} · V{pendingArchiveRemoval.versionNumber}</small><div><button type="button" onClick={() => setPendingArchiveRemovalId(null)}>Cancel</button><button type="button" className="danger" onClick={() => { if (pendingArchiveRemoval.status === "draft") deleteArchive(pendingArchiveRemoval); else withdrawArchive(pendingArchiveRemoval); setPendingArchiveRemovalId(null); }}>{pendingArchiveRemoval.status === "draft" ? "Delete draft" : "Withdraw forecast"}</button></div></div></div>}
       {activeSection === "control" && hasAcademicReviewAccess && !hasControlAccess && activeWorkspace && <section className="workspace-card"><AcademicReviewDesk workspace={activeWorkspace} roster={academicRoster} onReviewMember={setReviewTarget} message={academicMessage} /></section>}
-      {activeSection === "school" && session && activeWorkspace?.kind === "organization" && <section className="workspace-card school-workspace"><SchoolDesk workspace={activeWorkspace} classrooms={workspaceContexts.filter((workspace) => workspace.kind === "classroom" && workspace.organizationId === activeWorkspace.organizationId)} onOpenClassroom={switchWorkspace} /></section>}
+      {activeSection === "school" && session && activeWorkspace?.kind === "organization" && <section className="workspace-card school-workspace"><SchoolDesk workspace={activeWorkspace} classrooms={workspaceContexts.filter((workspace) => workspace.kind === "classroom" && workspace.organizationId === activeWorkspace.organizationId)} members={schoolMembers} codes={classroomJoinCodes} onOpenClassroom={switchWorkspace} onCreateClassroom={(name, term) => createClassroom(activeWorkspace.organizationId!, name, term)} onRenameClassroom={renameSchoolClassroom} onAssignInstructor={assignSchoolInstructor} onCreateCode={createSchoolClassCode} onRetireCode={retireSchoolClassCode} message={accessMessage} /></section>}
+      {joinPanelOpen && <section className="workspace-card enrollment-panel"><header className="section-heading"><div><p className="eyebrow">School access</p><h2>Join a school or class</h2><p>Enter the code supplied by your school or instructor. Your access remains within that school’s licensed seats.</p></div><button type="button" onClick={() => { setJoinPanelOpen(false); setJoinMessage(""); }}>Close</button></header><form onSubmit={(event) => { event.preventDefault(); redeemSchoolOrClassCode(); }}><label>Access code<input value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase())} placeholder="FF-XXXXXXXXXXXX" autoComplete="off" /></label><button type="submit" disabled={!joinCode.trim()}>Join</button></form>{joinMessage && <p className="control-message" role="status">{joinMessage}</p>}</section>}
       {activeSection === "classroom" && session && activeWorkspace?.kind === "classroom" && <section className="workspace-card classroom-workspace">
         <div className="section-heading"><div><p className="eyebrow">Classroom desk</p><h2>{workspaceDeskLabel(activeWorkspace)}</h2><p>{canManageActiveClassroom ? "Plan assignments, assess submissions, and follow class progress in one private space." : "Find assignments, build a forecast, and learn from private feedback."}</p></div><span>{activeWorkspace.role ?? "member"}</span></div>
         <nav className="classroom-hub-tabs" aria-label="Classroom sections">
