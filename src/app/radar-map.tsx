@@ -7,7 +7,7 @@ declare global {
   interface Window { L?: any }
 }
 
-type RadarMapProps = { opacity?: number; showReflectivity?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string } };
+type RadarMapProps = { opacity?: number; showReflectivity?: boolean; weatherLayer?: string; showAlerts?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string } };
 
 const ndfdLayers: Record<string, string> = {
   ndfd_maxt: "ndfd.conus.maxt",
@@ -15,14 +15,13 @@ const ndfdLayers: Record<string, string> = {
   ndfd_windspd: "ndfd.conus.windspd",
 };
 
-export default function RadarMap({ opacity = 0.72, showReflectivity = true, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, location }: RadarMapProps) {
+export default function RadarMap({ opacity = 0.72, showReflectivity = true, weatherLayer = "none", showAlerts = true, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, location }: RadarMapProps) {
   const mapElement = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const radarLayerRef = useRef<any>(null);
   const weatherLayerRef = useRef<any>(null);
   const alertLayerRef = useRef<any>(null);
   const [leafletLoaded, setLeafletLoaded] = useState(false);
-  const [alertsEnabled, setAlertsEnabled] = useState(true);
 
   useEffect(() => {
     if (window.L) setLeafletLoaded(true);
@@ -56,16 +55,10 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, refr
   }, [leafletLoaded, location.latitude, location.longitude, recenterToken]);
 
   useEffect(() => {
-    const update = (event: Event) => setAlertsEnabled(Boolean((event as CustomEvent<boolean>).detail));
-    window.addEventListener("weather-desk-alert-overlay", update);
-    return () => window.removeEventListener("weather-desk-alert-overlay", update);
-  }, []);
-
-  useEffect(() => {
     if (!leafletLoaded || !mapRef.current || !window.L) return;
     if (alertLayerRef.current) mapRef.current.removeLayer(alertLayerRef.current);
     alertLayerRef.current = null;
-    if (!alertsEnabled) return;
+    if (!showAlerts) return;
     let active = true;
     fetch(`/api/alerts?location=${encodeURIComponent(location.id)}`)
       .then(async (response) => {
@@ -83,7 +76,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, refr
       })
       .catch(() => undefined);
     return () => { active = false; };
-  }, [leafletLoaded, alertsEnabled, location.id]);
+  }, [leafletLoaded, showAlerts, location.id]);
 
   useEffect(() => {
     if (!leafletLoaded || !mapRef.current || !window.L) return;
@@ -106,32 +99,27 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, refr
 
   useEffect(() => {
     if (!leafletLoaded || !mapRef.current || !window.L) return;
-    const updateWeatherLayer = (event: Event) => {
-      const layer = (event as CustomEvent<string>).detail ?? "none";
-      if (weatherLayerRef.current) mapRef.current.removeLayer(weatherLayerRef.current);
-      weatherLayerRef.current = null;
-      if (layer === "none") return;
-      if (ndfdLayers[layer]) {
-        weatherLayerRef.current = window.L.tileLayer.wms("https://digital.weather.gov/ndfd.conus/wms", {
-          layers: ndfdLayers[layer],
-          format: "image/png",
-          transparent: true,
-          version: "1.3.0",
-          opacity: 0.62,
-          maxZoom: 18,
-          attribution: 'Forecast maps: <a href="https://digital.weather.gov/staticpages/mapservices.php" target="_blank">NOAA/NWS NDFD</a>',
-        }).addTo(mapRef.current);
-        return;
-      }
-      weatherLayerRef.current = window.L.tileLayer(`/api/radar/openweather/${layer}/{z}/{x}/{y}`, {
-        opacity: 0.55,
+    if (weatherLayerRef.current) mapRef.current.removeLayer(weatherLayerRef.current);
+    weatherLayerRef.current = null;
+    if (weatherLayer === "none") return;
+    if (ndfdLayers[weatherLayer]) {
+      weatherLayerRef.current = window.L.tileLayer.wms("https://digital.weather.gov/ndfd.conus/wms", {
+        layers: ndfdLayers[weatherLayer],
+        format: "image/png",
+        transparent: true,
+        version: "1.3.0",
+        opacity,
         maxZoom: 18,
-        attribution: 'Weather layers: <a href="https://openweathermap.org/" target="_blank">OpenWeather</a>',
+        attribution: 'Forecast maps: <a href="https://digital.weather.gov/staticpages/mapservices.php" target="_blank">NOAA/NWS NDFD</a>',
       }).addTo(mapRef.current);
-    };
-    window.addEventListener("weather-desk-radar-layer", updateWeatherLayer);
-    return () => window.removeEventListener("weather-desk-radar-layer", updateWeatherLayer);
-  }, [leafletLoaded]);
+      return;
+    }
+    weatherLayerRef.current = window.L.tileLayer(`/api/radar/openweather/${weatherLayer}/{z}/{x}/{y}`, {
+      opacity,
+      maxZoom: 18,
+      attribution: 'Weather layers: <a href="https://openweathermap.org/" target="_blank">OpenWeather</a>',
+    }).addTo(mapRef.current);
+  }, [leafletLoaded, opacity, weatherLayer]);
 
   return (
     <>
