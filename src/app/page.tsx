@@ -101,6 +101,7 @@ type WorkspaceContext = { key: string; kind: "personal" | "all" | "organization"
 type OrganizationMembershipRow = { organization_id: string; role: string; organizations: { id: string; name: string; kind: string } | null };
 type ClassroomMembershipRow = { classroom_id: string; role: string; classrooms: { id: string; name: string; term: string | null; organization_id: string; organizations: { name: string } | null } | null };
 type OrganizationRow = { id: string; name: string; kind: string };
+type OrganizationBranding = { organization_id: string; school_name: string | null; logo_path: string | null; logo_alt: string | null };
 type ClassroomRow = { id: string; name: string; term: string | null; organization_id: string; organizations: { name: string } | null };
 type OrganizationWorkspace = { id: string; name: string; kind: "company" | "school" | "personal" };
 type ClassroomWorkspace = { id: string; name: string; term: string | null; organization_id: string };
@@ -147,6 +148,8 @@ const readSharedTheme = () => document.cookie
 const writeSharedTheme = (theme: "light" | "dark") => {
   document.cookie = `${themeCookieKey}=${theme}; Path=/; Domain=.frontline-forecast.com; Max-Age=31536000; SameSite=Lax; Secure`;
 };
+
+const schoolLogoUrl = (url: string, path: string) => `${url}/storage/v1/object/public/organization-branding/${path.split("/").map(encodeURIComponent).join("/")}`;
 
 const defaultPublicNavigation: PublicNavigationItem[] = [
   { id: "weather", label: "Weather", target: "weather", access: "public", enabled: true },
@@ -1042,6 +1045,7 @@ export default function Home() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [profileMessage, setProfileMessage] = useState("");
   const [workspaceContexts, setWorkspaceContexts] = useState<WorkspaceContext[]>([{ key: "personal", kind: "personal", label: "Personal desk", detail: "Private forecasts and drafts" }]);
+  const [organizationBranding, setOrganizationBranding] = useState<Record<string, OrganizationBranding>>({});
   const [activeWorkspaceKey, setActiveWorkspaceKey] = useState("personal");
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const [workspaceContextStatus, setWorkspaceContextStatus] = useState("");
@@ -1092,6 +1096,8 @@ export default function Home() {
     return item.access === "public" || (item.access === "member" && Boolean(session)) || (item.access === "staff" && hasControlAccess) || (item.access === "owner" && role === "owner");
   };
   const activeWorkspace = workspaceContexts.find((workspace) => workspace.key === activeWorkspaceKey) ?? workspaceContexts[0];
+  const activeSchoolBranding = activeWorkspace?.organizationId ? organizationBranding[activeWorkspace.organizationId] : null;
+  const activeSchoolLogoPath = activeSchoolBranding?.logo_path ?? null;
   const workspaceRoleCanReview = ["owner", "admin", "instructor", "reviewer", "assistant"].includes(activeWorkspace?.role ?? "");
   const hasAcademicReviewAccess = Boolean(session && (hasControlAccess || (activeWorkspace?.kind !== "personal" && activeWorkspace?.kind !== "all" && workspaceRoleCanReview)));
   const canManageActiveClassroom = Boolean(session && activeWorkspace?.kind === "classroom" && (hasControlAccess || ["owner", "admin", "instructor", "assistant"].includes(activeWorkspace.role ?? "")));
@@ -1548,6 +1554,7 @@ export default function Home() {
   useEffect(() => {
     if (!session || !supabaseUrl || !supabaseKey) {
       setWorkspaceContexts([{ key: "personal", kind: "personal", label: "Personal desk", detail: "Private forecasts and drafts" }]);
+      setOrganizationBranding({});
       setActiveWorkspaceKey("personal");
       return;
     }
@@ -1585,6 +1592,12 @@ export default function Home() {
         ...classroomOrganizations,
         ...classrooms,
       ];
+      const organizationIds = [...new Set(contexts.flatMap((workspace) => workspace.organizationId ? [workspace.organizationId] : []))];
+      const brandingResponse = organizationIds.length
+        ? await fetch(`${supabaseUrl}/rest/v1/organization_branding?select=organization_id,school_name,logo_path,logo_alt&organization_id=in.(${organizationIds.join(",")})`, { headers })
+        : null;
+      const brandingRows = brandingResponse?.ok ? await brandingResponse.json() as OrganizationBranding[] : [];
+      setOrganizationBranding(brandingRows.reduce<Record<string, OrganizationBranding>>((all, branding) => ({ ...all, [branding.organization_id]: branding }), {}));
       setWorkspaceContexts(contexts);
       const storedKey = window.localStorage.getItem(`${workspaceContextStoragePrefix}:${session.user.id}`);
       const defaultKey = isOwner ? "all" : "personal";
@@ -1593,6 +1606,7 @@ export default function Home() {
     }).catch((error: Error) => {
       setWorkspaceContextStatus(error.message);
       setWorkspaceContexts([{ key: "personal", kind: "personal", label: "Personal desk", detail: "Private forecasts and drafts" }]);
+      setOrganizationBranding({});
     });
   }, [role, session, workspaceRefreshToken]);
 
@@ -2336,7 +2350,7 @@ export default function Home() {
   return (
     <main className={`${radarExpanded ? "app radar-expanded" : "app"} desk-${activeWorkspace?.kind ?? "public"}`}>
       <header className="header">
-        <div className="brand-lockup"><span className="theme-brand-mark" aria-hidden="true"><img className="brand-mark-light" src="/brand/frontline-forecast-logo-light.svg" alt="" /><img className="brand-mark-dark" src="/brand/frontline-forecast-logo-dark.svg" alt="" /></span><div><strong className="brand-name">Frontline Forecast</strong><p className="eyebrow" data-hq-content="brand.tagline">Human-first forecasting workspace</p></div></div>
+        <div className="brand-lockup"><span className="theme-brand-mark" aria-hidden="true"><img className="brand-mark-light" src="/brand/frontline-forecast-logo-light.svg" alt="" /><img className="brand-mark-dark" src="/brand/frontline-forecast-logo-dark.svg" alt="" /></span><div><strong className="brand-name">Frontline Forecast</strong><p className="eyebrow" data-hq-content="brand.tagline">Human-first forecasting workspace</p></div>{session && activeSchoolBranding && <div className="school-brand-lockup" aria-label={`${activeSchoolBranding.school_name || activeWorkspace.label} school workspace`}><span aria-hidden="true">×</span>{supabaseUrl && activeSchoolLogoPath && <img src={schoolLogoUrl(supabaseUrl, activeSchoolLogoPath)} alt={activeSchoolBranding.logo_alt || `${activeSchoolBranding.school_name || activeWorkspace.label} logo`} />}<strong>{activeSchoolBranding.school_name || activeWorkspace.label}</strong></div>}</div>
         <div className="header-meta">
           {session && <div className="workspace-menu-wrap"><button type="button" className="workspace-trigger" aria-expanded={workspaceMenuOpen} onClick={() => setWorkspaceMenuOpen((open) => !open)}><strong>{workspaceDeskLabel(activeWorkspace)}</strong><i aria-hidden="true">⌄</i></button>{workspaceMenuOpen && <div className="workspace-menu"><strong>Your desks</strong><div>{workspaceContexts.map((workspace) => <button type="button" key={workspace.key} className={workspace.key === activeWorkspaceKey ? "active" : ""} onClick={() => switchWorkspace(workspace)}><strong>{workspaceDeskLabel(workspace)}</strong><span>{workspace.detail}{workspace.role ? ` · ${workspace.role}` : ""}</span></button>)}</div><button type="button" className="workspace-join-action" onClick={() => { setJoinPanelOpen(true); setWorkspaceMenuOpen(false); }}>Join a school or class</button>{workspaceContextStatus && <em>{workspaceContextStatus}</em>}</div>}</div>}
           <div className="location-menu-wrap"><button type="button" className="location-trigger" aria-expanded={locationMenuOpen} onClick={() => setLocationMenuOpen((open) => !open)}><span>Location</span><strong>{selectedLocation.name}</strong><i aria-hidden="true">⌄</i></button>{locationMenuOpen && <div className="location-menu"><strong>Workspace location</strong><small>Radar, observations, model guidance, and new forecasts update together.</small><div>{weatherDeskLocations.map((location) => <button type="button" key={location.id} className={location.id === locationId ? "active" : ""} onClick={() => { setLocationId(location.id); setLocationMenuOpen(false); }}><strong>{location.name}</strong><span>{location.observationStation} observation · K{location.upperAirStation} upper air</span></button>)}</div></div>}</div>
