@@ -1091,7 +1091,7 @@ export default function Home() {
     ? new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(weatherSyncedAt)
     : null;
   const hasControlAccess = role === "admin" || role === "owner";
-  const visiblePublicNavigation = publicNavigation.filter((item) => item.enabled && (item.access === "public" || (item.access === "member" && Boolean(session)) || (item.access === "staff" && hasControlAccess) || (item.access === "owner" && role === "owner")));
+  const visiblePublicNavigation = publicNavigation.filter((item) => item.enabled && (item.target !== "login" || !session) && (item.access === "public" || (item.access === "member" && Boolean(session)) || (item.access === "staff" && hasControlAccess) || (item.access === "owner" && role === "owner")));
   const visibleWorkspace = (id: WorkspaceNavigationItem["id"]) => {
     const item = workspaceNavigation.find((candidate) => candidate.id === id);
     if (!item?.enabled) return false;
@@ -1276,7 +1276,7 @@ export default function Home() {
   }, [locationId]);
 
   useEffect(() => {
-    if (activeSection !== "radar") return;
+    if (activeSection !== "radar" && !radarLoop) return;
     let isActive = true;
     const loadRadarTimeline = () => fetch("/api/radar/frames", { cache: "no-store" })
       .then(async (response) => {
@@ -1293,7 +1293,7 @@ export default function Home() {
     loadRadarTimeline();
     const refreshId = window.setInterval(loadRadarTimeline, 300_000);
     return () => { isActive = false; window.clearInterval(refreshId); };
-  }, [activeSection]);
+  }, [activeSection, radarLoop]);
 
   useEffect(() => {
     if (!radarLoop || !radarPlaying || radarFrames.length < 2) return;
