@@ -7,3 +7,5 @@ npm-debug.log*
 # Company HQ is an independent repository with its own deployment lifecycle.
 company-hq/
 *.tsbuildinfo
+.vercel
+.env*

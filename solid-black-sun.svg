@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>Solid black geometric sun</title>
+  <desc>Editable solid black sun icon designed to match the Frontline Forecast mark.</desc>
+  <g id="solid-black-sun" fill="#10131A">
+    <circle id="sun-disc" cx="256" cy="256" r="92"/>
+    <path id="ray-top" d="M244 126 H268 L256 38 Z"/>
+    <path id="ray-bottom" d="M244 386 H268 L256 474 Z"/>
+    <path id="ray-left" d="M126 244 V268 L38 256 Z"/>
+    <path id="ray-right" d="M386 244 V268 L474 256 Z"/>
+    <path id="ray-upper-left" d="M160 177 L177 160 L113 96 Z"/>
+    <path id="ray-upper-right" d="M335 177 L352 160 L416 96 Z"/>
+    <path id="ray-lower-left" d="M160 335 L177 352 L113 416 Z"/>
+    <path id="ray-lower-right" d="M335 335 L352 352 L416 416 Z"/>
+  </g>
+</svg>

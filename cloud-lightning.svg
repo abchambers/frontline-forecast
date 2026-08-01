@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>Cloud with lightning bolt</title>
+  <desc>Editable vector weather icon with a rounded cloud and lightning bolt.</desc>
+
+  <!-- Cloud: editable fill and outline -->
+  <g id="cloud" fill="#363A9D" stroke="#10131A" stroke-width="12" stroke-linejoin="round">
+    <path d="M119 342
+             C82 342 54 313 54 278
+             C54 244 80 216 113 213
+             C121 164 163 128 214 128
+             C258 128 296 155 311 195
+             C322 190 335 187 349 187
+             C393 187 429 219 434 263
+             C468 271 491 300 491 335
+             C491 378 457 412 414 412
+             H119
+             C80 412 54 383 54 348
+             C54 346 54 344 55 342 Z"/>
+  </g>
+
+  <!-- Lightning bolt: separate editable object -->
+  <g id="lightning-bolt" fill="#42A5F5" stroke="#10131A" stroke-width="10" stroke-linejoin="round">
+    <path d="M274 330 L341 330 L302 391 L335 391 L239 500 L264 417 L229 417 Z"/>
+  </g>
+</svg>

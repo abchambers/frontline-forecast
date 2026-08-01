@@ -25,5 +25,5 @@ h2 { margin: 18px 0 9px; letter-spacing: -.04em; font-size: 1.55rem; }
 .mini-lines i:nth-child(2) { width: 78%; background: linear-gradient(90deg, #64d8ff, #7c93ff); }.mini-lines i:nth-child(3) { width: 57%; background: linear-gradient(90deg, #697bff, #d26cc7); }
 .foundation { display: grid; grid-template-columns: 1fr 1fr; gap: 42px; margin-top: 16px; padding: 30px; border: 1px solid #345477; border-radius: 20px; background: linear-gradient(105deg, #123b70, #0b1f37); }
 .foundation h2 { margin: 0; font-size: 1.85rem; }.foundation p:last-child { color: #c1d2e5; line-height: 1.65; }
-footer { padding-top: 28px; color: #7f98b4; font-size: .82rem; text-align: center; }
+footer { padding-top: 28px; color: #7f98b4; font-size: .82rem; text-align: center; } footer a { color:#9cc5ff; }
 @media (max-width: 760px) { .shell { width: min(100% - 28px, 1120px); }.masthead { align-items: flex-start; gap: 14px; }.concept-label { max-width: 140px; text-align: right; }.hero { padding: 62px 0 38px; }.product-grid, .foundation { grid-template-columns: 1fr; }.product { min-height: 250px; }.product p { min-height: auto; }.foundation { gap: 12px; } }

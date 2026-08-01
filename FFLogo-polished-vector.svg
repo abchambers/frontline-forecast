@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900">
+  <title>Frontline Forecast — polished editable logo</title>
+  <desc>Editable vector recreation of the modular F logo with clipped weather front, balanced weather icons, and company name lockup.</desc>
+
+  <rect id="artboard" width="1200" height="900" fill="#FFFFFF"/>
+
+  <!-- Main modular F -->
+  <g id="modular-f" fill="#363A9D">
+    <rect id="top-bar" x="220" y="130" width="650" height="102"/>
+    <rect id="vertical-bar" x="220" y="260" width="118" height="490"/>
+    <rect id="name-box" x="390" y="350" width="480" height="118"/>
+  </g>
+
+  <!-- Front line clipped by construction to the blue blocks -->
+  <g id="front-line" fill="none" stroke="#10131A" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+    <path id="vertical-front-line" d="M220 566 C220 505 238 435 276 370 C296 336 316 300 338 260"/>
+    <path id="top-front-line" d="M338 260 C371 218 432 193 510 188 C620 181 751 169 870 130"/>
+  </g>
+
+  <!-- Red half-circles, consistently offset above the local front-line curve -->
+  <g id="red-half-circles" fill="#F04438">
+    <path d="M0 0 A11 11 0 0 1 22 0 Z" transform="translate(211 526) rotate(-73 11 0)"/>
+    <path d="M0 0 A11 11 0 0 1 22 0 Z" transform="translate(230 459) rotate(-63 11 0)"/>
+    <path d="M0 0 A11 11 0 0 1 22 0 Z" transform="translate(253 396) rotate(-56 11 0)"/>
+    <path d="M0 0 A11 11 0 0 1 22 0 Z" transform="translate(282 339) rotate(-47 11 0)"/>
+    <path d="M0 0 A11 11 0 0 1 22 0 Z" transform="translate(326 284) rotate(-34 11 0)"/>
+    <path d="M0 0 A11 11 0 0 1 22 0 Z" transform="translate(390 220) rotate(-18 11 0)"/>
+    <path d="M0 0 A11 11 0 0 1 22 0 Z" transform="translate(475 190) rotate(-5 11 0)"/>
+    <path d="M0 0 A11 11 0 0 1 22 0 Z" transform="translate(580 177) rotate(4 11 0)"/>
+    <path d="M0 0 A11 11 0 0 1 22 0 Z" transform="translate(695 165) rotate(9 11 0)"/>
+    <path d="M0 0 A11 11 0 0 1 22 0 Z" transform="translate(810 141) rotate(19 11 0)"/>
+  </g>
+
+  <!-- Blue triangles, consistently offset below the local front-line curve -->
+  <g id="blue-triangles" fill="#42A5F5">
+    <path d="M0 -11 L19 0 L0 11 Z" transform="translate(242 503) rotate(-73)"/>
+    <path d="M0 -11 L19 0 L0 11 Z" transform="translate(264 438) rotate(-63)"/>
+    <path d="M0 -11 L19 0 L0 11 Z" transform="translate(288 376) rotate(-56)"/>
+    <path d="M0 -11 L19 0 L0 11 Z" transform="translate(320 319) rotate(-47)"/>
+    <path d="M0 -11 L19 0 L0 11 Z" transform="translate(368 262) rotate(-34)"/>
+    <path d="M0 -11 L19 0 L0 11 Z" transform="translate(430 214) rotate(-18)"/>
+    <path d="M0 -11 L19 0 L0 11 Z" transform="translate(515 194) rotate(-5)"/>
+    <path d="M0 -11 L19 0 L0 11 Z" transform="translate(620 184) rotate(4)"/>
+    <path d="M0 -11 L19 0 L0 11 Z" transform="translate(735 169) rotate(9)"/>
+  </g>
+
+  <!-- Sun: balanced, solid black geometric icon -->
+  <g id="sun" fill="#10131A" transform="translate(274 180)">
+    <circle cx="0" cy="0" r="27"/>
+    <g stroke="#10131A" stroke-width="6" stroke-linecap="square">
+      <line x1="0" y1="-43" x2="0" y2="-58"/><line x1="0" y1="43" x2="0" y2="58"/>
+      <line x1="-43" y1="0" x2="-58" y2="0"/><line x1="43" y1="0" x2="58" y2="0"/>
+      <line x1="-31" y1="-31" x2="-42" y2="-42"/><line x1="31" y1="31" x2="42" y2="42"/>
+      <line x1="31" y1="-31" x2="42" y2="-42"/><line x1="-31" y1="31" x2="-42" y2="42"/>
+    </g>
+  </g>
+
+  <!-- Cloud with lightning: scaled to support the sun without competing with the line -->
+  <g id="cloud-lightning" transform="translate(775 179) scale(.38)">
+    <path d="M119 342 C82 342 54 313 54 278 C54 244 80 216 113 213 C121 164 163 128 214 128 C258 128 296 155 311 195 C322 190 335 187 349 187 C393 187 429 219 434 263 C468 271 491 300 491 335 C491 378 457 412 414 412 H119 C80 412 54 383 54 348 C54 346 54 344 55 342 Z" fill="#10131A"/>
+    <path d="M274 330 L341 330 L302 391 L335 391 L239 500 L264 417 L229 417 Z" fill="#42A5F5"/>
+  </g>
+
+  <!-- Refined company-name lockup inside the side box -->
+  <g id="company-name" fill="#FFFFFF" font-family="Arial, Helvetica, sans-serif">
+    <text x="425" y="392" font-size="31" font-weight="700" letter-spacing="6">FRONTLINE</text>
+    <rect x="425" y="410" width="128" height="3" fill="#42A5F5"/>
+    <text x="425" y="447" font-size="23" font-weight="400" letter-spacing="10">FORECAST</text>
+  </g>
+</svg>

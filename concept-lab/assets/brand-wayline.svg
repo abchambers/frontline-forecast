@@ -1,12 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-labelledby="title desc">
-  <title id="title">Frontline Forecast FF front-line mark</title>
-  <desc id="desc">Two letter F forms made from blue cold-front and red warm-front symbols over a radar field.</desc>
+  <title id="title">Frontline Forecast swept-front mark</title>
+  <desc id="desc">A sweeping weather front that subtly forms the letter F over a radar horizon.</desc>
   <rect x="8" y="8" width="144" height="144" rx="38" fill="#0b1c34"/>
-  <path d="M29 110a52 52 0 0 1 72-70" fill="none" stroke="#23549d" stroke-linecap="round" stroke-width="5" opacity=".72"/>
-  <path d="M32 126a67 67 0 0 1 95-85" fill="none" stroke="#71b2fa" stroke-linecap="round" stroke-width="4" opacity=".36"/>
-  <path d="M43 112V48h42M43 79h31" fill="none" stroke="#3281ff" stroke-linecap="round" stroke-linejoin="round" stroke-width="9"/>
-  <path d="M50 48l9-7v14zm21 0 9-7v14z" fill="#a8d0ff"/>
-  <path d="M89 112V62h31M89 88h23" fill="none" stroke="#ed5b5f" stroke-linecap="round" stroke-linejoin="round" stroke-width="9"/>
-  <path d="M101 57a6 6 0 0 1 0 10h-5V57zm17 0a6 6 0 0 1 0 10h-5V57z" fill="#ffc1bd"/>
-  <path d="M38 124c20-9 43-9 68 0" fill="none" stroke="#f7fbff" stroke-linecap="round" stroke-width="5" opacity=".92"/>
+  <path d="M30 104a52 52 0 0 1 81-63" fill="none" stroke="#2a61b5" stroke-linecap="round" stroke-width="5" opacity=".58"/>
+  <path d="M29 117a66 66 0 0 1 96-72" fill="none" stroke="#7ab8ff" stroke-linecap="round" stroke-width="4" opacity=".3"/>
+  <path d="M52 113c-10-22-9-47 2-67M54 48c20-8 42-5 61 7M48 78c19-7 37-5 52 3" fill="none" stroke="#f7fbff" stroke-linecap="round" stroke-linejoin="round" stroke-width="11"/>
+  <path d="M30 49h100" stroke="#3281ff" stroke-linecap="round" stroke-width="8"/>
+  <circle cx="106" cy="49" r="8" fill="#ed5b5f"/>
+  <path d="m69 49 10-2-5 10m22 1 10-2-5 10" fill="#72b8ff"/>
+  <path d="M69 78a6 6 0 0 1 0 10h-5V78zm17 0a6 6 0 0 1 0 10h-5V78z" fill="#ed5b5f" opacity=".92"/>
 </svg>

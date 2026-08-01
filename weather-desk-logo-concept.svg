@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900">
+  <title>Frontline Forecast — editable logo concept</title>
+  <desc>Refined editable version of the original modular F mark. The weather front line is the primary element; half-circles float above it and triangles sit below it.</desc>
+
+  <rect id="artboard-background" width="1200" height="900" fill="#FFFFFF"/>
+
+  <!-- Original modular F construction -->
+  <g id="modular-F" fill="#363A9D">
+    <rect id="top-block" x="220" y="135" width="660" height="92"/>
+    <rect id="vertical-block" x="220" y="245" width="112" height="470"/>
+    <rect id="name-block" x="365" y="338" width="515" height="110"/>
+  </g>
+
+  <!-- Single smooth front line. The markers are placed from this curve with a deliberate gap. -->
+  <path id="front-line"
+    d="M220 585 C220 508 239 430 276 363 C302 316 325 280 352 248 C410 201 478 187 558 187 C665 187 774 176 880 135"
+    fill="none" stroke="#10131A" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Parallel guide curves keep the markers at a constant visual distance from the front line. -->
+  <path id="upper-marker-guide" d="M202 548 C202 495 220 420 258 350 C287 297 316 264 345 232 C405 184 478 168 560 168 C670 168 775 156 881 115"
+    fill="none" stroke="none"/>
+  <path id="lower-marker-guide" d="M243 604 C243 520 258 446 294 377 C320 330 342 296 369 264 C423 218 488 205 560 205 C665 205 770 195 879 154"
+    fill="none" stroke="none"/>
+
+  <!-- Red half-circles: evenly spaced on the upper parallel guide, never touching the front line. -->
+  <g id="red-half-circles" fill="#F04438">
+    <path d="M0 0 A10 10 0 0 1 20 0 Z" transform="translate(208 524) rotate(-73 10 0)"/>
+    <path d="M0 0 A10 10 0 0 1 20 0 Z" transform="translate(245 405) rotate(-58 10 0)"/>
+    <path d="M0 0 A10 10 0 0 1 20 0 Z" transform="translate(310 294) rotate(-39 10 0)"/>
+    <path d="M0 0 A10 10 0 0 1 20 0 Z" transform="translate(405 210) rotate(-15 10 0)"/>
+    <path d="M0 0 A10 10 0 0 1 20 0 Z" transform="translate(520 175) rotate(-3 10 0)"/>
+    <path d="M0 0 A10 10 0 0 1 20 0 Z" transform="translate(665 160) rotate(7 10 0)"/>
+    <path d="M0 0 A10 10 0 0 1 20 0 Z" transform="translate(805 125) rotate(20 10 0)"/>
+  </g>
+
+  <!-- Blue triangles: evenly spaced on the lower parallel guide, with matching tangent rotation. -->
+  <g id="blue-triangles" fill="#42A5F5">
+    <path d="M0 -11 L19 0 L0 11 Z" transform="translate(249 574) rotate(-73)"/>
+    <path d="M0 -11 L19 0 L0 11 Z" transform="translate(282 456) rotate(-58)"/>
+    <path d="M0 -11 L19 0 L0 11 Z" transform="translate(347 345) rotate(-39)"/>
+    <path d="M0 -11 L19 0 L0 11 Z" transform="translate(442 263) rotate(-15)"/>
+    <path d="M0 -11 L19 0 L0 11 Z" transform="translate(557 220) rotate(-3)"/>
+    <path d="M0 -11 L19 0 L0 11 Z" transform="translate(702 197) rotate(7)"/>
+    <path d="M0 -11 L19 0 L0 11 Z" transform="translate(840 163) rotate(20)"/>
+  </g>
+
+  <!-- Restrained company-name lockup inside the empty block. -->
+  <g id="company-name" fill="#FFFFFF" font-family="Arial, Helvetica, sans-serif">
+    <text x="418" y="385" font-size="28" font-weight="700" letter-spacing="7">FRONTLINE</text>
+    <text x="418" y="421" font-size="28" font-weight="700" letter-spacing="7">FORECAST</text>
+    <rect x="418" y="429" width="112" height="3" fill="#42A5F5"/>
+  </g>
+</svg>
