@@ -981,7 +981,13 @@ function ClassroomAssignmentDesk(props: { assignments: ClassroomAssignment[]; su
 
 export default function Home() {
   const [dataPanel, setDataPanel] = useState<DataPanel>("nbm");
-  const [activeSection, setActiveSection] = useState<WorkspaceSection>(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("view") === "about" ? "about" : "dashboard");
+  const [activeSection, setActiveSection] = useState<WorkspaceSection>(() => {
+    if (typeof window === "undefined") return "dashboard";
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("view") === "about") return "about";
+    if (params.get("class")) return "classroom";
+    return "dashboard";
+  });
   const [radarExpanded, setRadarExpanded] = useState(false);
   const [radarLoop, setRadarLoop] = useState(false);
   const [radarFrames, setRadarFrames] = useState<RadarTimelineFrame[]>([]);
@@ -1099,7 +1105,11 @@ export default function Home() {
   const [assignmentSubmissions, setAssignmentSubmissions] = useState<ClassroomAssignmentSubmission[]>([]);
   const [assignmentSubmissionRefreshToken, setAssignmentSubmissionRefreshToken] = useState(0);
   const [selectedClassroomAssignmentId, setSelectedClassroomAssignmentId] = useState("");
-  const [classroomHubTab, setClassroomHubTab] = useState<ClassroomHubTab>("assignments");
+  const [classroomHubTab, setClassroomHubTab] = useState<ClassroomHubTab>(() => {
+    if (typeof window === "undefined") return "assignments";
+    const tab = new URLSearchParams(window.location.search).get("tab");
+    return tab === "today" || tab === "outlook" || tab === "progress" ? tab : "assignments";
+  });
   const [publishInstructorForecast, setPublishInstructorForecast] = useState(false);
   const [revisionParentRunId, setRevisionParentRunId] = useState<string | null>(null);
   const [assignmentMessage, setAssignmentMessage] = useState("");
@@ -1185,6 +1195,24 @@ export default function Home() {
     window.addEventListener("weather-desk-review-student", openReview);
     return () => window.removeEventListener("weather-desk-review-student", openReview);
   }, []); */
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const previous = params.toString();
+    if (activeSection === "classroom" && activeWorkspace?.kind === "classroom") {
+      params.set("class", activeWorkspace.key);
+      params.set("tab", classroomHubTab);
+      if (selectedClassroomAssignmentId) params.set("assignment", selectedClassroomAssignmentId); else params.delete("assignment");
+      if (reviewTarget && reviewTarget.classroomId === activeWorkspace.classroomId) params.set("student", reviewTarget.userId); else params.delete("student");
+    } else {
+      params.delete("class"); params.delete("tab"); params.delete("assignment"); params.delete("student");
+      if (activeSection === "about") params.set("view", "about"); else params.delete("view");
+    }
+    if (params.toString() === previous) return;
+    const query = params.toString();
+    window.history.replaceState(null, "", query ? `?${query}` : window.location.pathname);
+  }, [activeSection, activeWorkspace, classroomHubTab, selectedClassroomAssignmentId, reviewTarget]);
 
   useEffect(() => {
     const applyNavigation = (event: Event) => {
@@ -1541,7 +1569,7 @@ export default function Home() {
     setAssignmentMessage("Loading class assignments…");
     fetch(`${supabaseUrl}/rest/v1/classroom_assignments?select=id,classroom_id,title,instructions,target_date,target_dates,due_at,status,instructor_forecast,instructor_forecast_updated_at,class_forecast,class_forecast_updated_at,class_forecast_published_at,created_at&classroom_id=eq.${activeWorkspace.classroomId}&order=target_date.asc`, { headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` } })
       .then((response) => response.ok ? response.json() : Promise.reject(new Error("Class assignments could not be loaded. Apply the academic assignments migration, then refresh.")))
-      .then((assignments: ClassroomAssignment[]) => { setClassroomAssignments(assignments); setSelectedClassroomAssignmentId((selected) => assignments.some((assignment) => assignment.id === selected) ? selected : assignments.find((assignment) => assignment.status === "open")?.id ?? ""); setAssignmentMessage(""); })
+      .then((assignments: ClassroomAssignment[]) => { setClassroomAssignments(assignments); setSelectedClassroomAssignmentId((selected) => { if (assignments.some((assignment) => assignment.id === selected)) return selected; const urlAssignmentId = new URLSearchParams(window.location.search).get("assignment"); if (urlAssignmentId && assignments.some((assignment) => assignment.id === urlAssignmentId)) return urlAssignmentId; return assignments.find((assignment) => assignment.status === "open")?.id ?? ""; }); setAssignmentMessage(""); })
       .catch((error: Error) => { setClassroomAssignments([]); setAssignmentMessage(error.message); });
   }, [activeWorkspaceKey, session]);
 
@@ -1635,8 +1663,9 @@ export default function Home() {
       const soleKey = !isOwner && organizations.length === 0 && classrooms.length === 1 ? classrooms[0].key : null;
       setSoleStudentDeskKey(soleKey);
       const storedKey = window.localStorage.getItem(`${workspaceContextStoragePrefix}:${session.user.id}`);
+      const urlKey = new URLSearchParams(window.location.search).get("class");
       const defaultKey = isOwner ? "all" : soleKey ?? "personal";
-      setActiveWorkspaceKey(contexts.some((workspace) => workspace.key === storedKey) ? storedKey! : defaultKey);
+      setActiveWorkspaceKey(urlKey && contexts.some((workspace) => workspace.key === urlKey) ? urlKey : contexts.some((workspace) => workspace.key === storedKey) ? storedKey! : defaultKey);
       setWorkspaceContextStatus(organizations.length || classroomOrganizations.length || classrooms.length ? "" : "No shared workspaces are assigned to this account yet.");
     }).catch((error: Error) => {
       setWorkspaceContextStatus(error.message);
