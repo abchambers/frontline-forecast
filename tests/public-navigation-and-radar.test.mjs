@@ -12,7 +12,17 @@ test("the dashboard timeline can load frames after it is opened", async () => {
   assert.match(page, /if \(activeSection !== "radar" && !radarLoop\) return;/);
 });
 
-test("school-contact grants explain an inactive license before the membership write", async () => {
-  const actions = await readFile(new URL("../company-hq/app/actions.ts", import.meta.url), "utf8");
-  assert.match(actions, /Set the school license to Trial or Active before assigning school contacts\./);
+test("the public configuration endpoint returns only published public content", async () => {
+  const route = await readFile(new URL("../src/app/api/site-config/route.ts", import.meta.url), "utf8");
+
+  assert.match(route, /site_content\?select=key,value&is_public=eq\.true/);
+  assert.match(route, /row\.key\.endsWith\("\.public"\)/);
+  assert.match(route, /Cache-Control.*no-store/);
+});
+
+test("the radar timeline endpoint limits its public frame response", async () => {
+  const route = await readFile(new URL("../src/app/api/radar/frames/route.ts", import.meta.url), "utf8");
+
+  assert.match(route, /slice\(-12\)/);
+  assert.match(route, /No radar frames were available/);
 });
