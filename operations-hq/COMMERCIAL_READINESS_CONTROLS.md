@@ -34,5 +34,5 @@ provider accounts or through a selected operational service.
 Do not remove the private-workspace posture or open school self-service until
 the selected legal, privacy, authentication, backup, monitoring, and durable
 rate-limit controls have documented owners. Re-run the checks in
-[production verification](production-verification.md) after each security or
+[production verification](PRODUCTION_VERIFICATION.md) after each security or
 database release.

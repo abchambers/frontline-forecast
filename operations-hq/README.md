@@ -13,6 +13,10 @@ Operations HQ is the private planning and operating workspace for Frontline Fore
 | [Project and URL transition](PROJECT_AND_URL_TRANSITION.md) | Safe move from the legacy Vercel name before a custom domain |
 | [Pilot program](PILOT_PROGRAM.md) | How to run a small, measurable first classroom pilot |
 | [Provider register](PROVIDER_REGISTER.md) | Current data sources, commercial gates, attribution, and ownership |
+| [Commercial readiness controls](COMMERCIAL_READINESS_CONTROLS.md) | Minimum checklist before accepting money, schools, or student records |
+| [Production verification](PRODUCTION_VERIFICATION.md) | Read-only checks to run after a schema or access-control deployment |
+| [Migration baseline](MIGRATION_BASELINE.md) | How the production Supabase migration history was reconciled |
+| [Foundation hardening plan](FOUNDATION_HARDENING_PLAN.md) / [design](FOUNDATION_HARDENING_DESIGN.md) | Historical record of the 2026-07-31 security/reliability hardening pass |
 | [Company workspace](../docs/COMPANY_WORKSPACE.md) | Longer-horizon company, revenue, architecture, and risk plan |
 
 ## HQ rules

@@ -19,7 +19,7 @@ allocations, customer records, or user memberships.
 
 1. Confirm the target is the production project, `qklixlnhzpabrewixkub`.
 2. Confirm there is no concurrent school-branding or licensing deployment.
-3. Run the read-only checks in [production verification](production-verification.md).
+3. Run the read-only checks in [production verification](PRODUCTION_VERIFICATION.md).
 
 ## After applying
 
