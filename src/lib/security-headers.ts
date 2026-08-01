@@ -4,7 +4,7 @@ const contentSecurityPolicy = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-inline' https://unpkg.com",
   "style-src 'self' 'unsafe-inline' https://unpkg.com",
-  "img-src 'self' data: blob: https://*.supabase.co https://*.tile.openstreetmap.org https://opengeo.ncep.noaa.gov https://digital.weather.gov https://*.rainviewer.com https://cdn.star.nesdis.noaa.gov https://www.spc.noaa.gov",
+  "img-src 'self' data: blob: https://*.supabase.co https://*.tile.openstreetmap.org https://basemaps.cartocdn.com https://opengeo.ncep.noaa.gov https://digital.weather.gov https://*.rainviewer.com https://cdn.star.nesdis.noaa.gov https://www.spc.noaa.gov",
   "font-src 'self' data:",
   "connect-src 'self' https://*.supabase.co wss://*.supabase.co",
   "object-src 'none'",
