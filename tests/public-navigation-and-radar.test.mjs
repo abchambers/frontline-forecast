@@ -7,9 +7,15 @@ test("signed-in users do not receive a redundant public sign-in tab", async () =
   assert.match(page, /item\.target !== "login" \|\| !session/);
 });
 
-test("the dashboard timeline can load frames after it is opened", async () => {
+test("radar frames load proactively on the dashboard and radar sections, not only after the timeline is opened", async () => {
   const page = await readFile(new URL("../src/app/page.tsx", import.meta.url), "utf8");
-  assert.match(page, /if \(activeSection !== "radar" && !radarLoop\) return;/);
+  assert.match(page, /if \(activeSection !== "radar" && activeSection !== "dashboard" && !radarLoop\) return;/);
+});
+
+test("live and timeline radar views share the same RainViewer frame source", async () => {
+  const page = await readFile(new URL("../src/app/page.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(page, /radarLoop && radarMapView === "composite" \? radarFrame\?\.tileUrl : null/);
+  assert.match(page, /timelineTileUrl=\{radarMapView === "composite" \? radarFrame\?\.tileUrl : null\}/);
 });
 
 test("the public configuration endpoint returns only published public content", async () => {
