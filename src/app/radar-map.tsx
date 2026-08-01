@@ -7,7 +7,12 @@ declare global {
   interface Window { L?: any }
 }
 
-type RadarMapProps = { opacity?: number; showReflectivity?: boolean; weatherLayer?: string; showAlerts?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string } };
+type RadarMapProps = { opacity?: number; showReflectivity?: boolean; weatherLayer?: string; showAlerts?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; theme?: "light" | "dark"; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string } };
+
+const basemapTiles = {
+  light: { url: "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
+  dark: { url: "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
+};
 
 const ndfdLayers: Record<string, string> = {
   ndfd_maxt: "ndfd.conus.maxt",
@@ -15,9 +20,10 @@ const ndfdLayers: Record<string, string> = {
   ndfd_windspd: "ndfd.conus.windspd",
 };
 
-export default function RadarMap({ opacity = 0.72, showReflectivity = true, weatherLayer = "none", showAlerts = true, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, location }: RadarMapProps) {
+export default function RadarMap({ opacity = 0.72, showReflectivity = true, weatherLayer = "none", showAlerts = true, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, theme = "light", location }: RadarMapProps) {
   const mapElement = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
+  const baseLayerRef = useRef<any>(null);
   const radarLayerRef = useRef<any>(null);
   const weatherLayerRef = useRef<any>(null);
   const alertLayerRef = useRef<any>(null);
@@ -31,16 +37,15 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, weat
     if (!leafletLoaded || !mapElement.current || !window.L) return;
 
     const coordinates = [location.latitude, location.longitude] as const;
-    const map = window.L.map(mapElement.current, { zoomControl: true, scrollWheelZoom: false }).setView(coordinates, 8);
+    const map = window.L.map(mapElement.current, { zoomControl: false, scrollWheelZoom: false }).setView(coordinates, 8);
+    window.L.control.zoom({ position: "bottomleft" }).addTo(map);
     mapRef.current = map;
-    window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    }).addTo(map);
     window.L.circleMarker(coordinates, { color: "#18222f", fillColor: "#ffffff", fillOpacity: 1, weight: 2, radius: 6 })
       .bindPopup(`${location.name} · nearest radar ${location.radarSite}`)
       .addTo(map);
 
     return () => {
+      baseLayerRef.current = null;
       radarLayerRef.current = null;
       weatherLayerRef.current = null;
       alertLayerRef.current = null;
@@ -48,6 +53,15 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, weat
       map.remove();
     };
   }, [leafletLoaded, location]);
+
+  useEffect(() => {
+    if (!leafletLoaded || !mapRef.current || !window.L) return;
+    if (baseLayerRef.current) mapRef.current.removeLayer(baseLayerRef.current);
+    const tiles = theme === "dark" ? basemapTiles.dark : basemapTiles.light;
+    const nextBaseLayer = window.L.tileLayer(tiles.url, { attribution: tiles.attribution, maxZoom: 19 }).addTo(mapRef.current);
+    nextBaseLayer.bringToBack();
+    baseLayerRef.current = nextBaseLayer;
+  }, [leafletLoaded, theme]);
 
   useEffect(() => {
     if (!leafletLoaded || !mapRef.current) return;
@@ -78,24 +92,45 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, weat
     return () => { active = false; };
   }, [leafletLoaded, showAlerts, location.id]);
 
+  const opacityRef = useRef(opacity);
+  useEffect(() => { opacityRef.current = opacity; radarLayerRef.current?.setOpacity(opacity); }, [opacity]);
+
   useEffect(() => {
     if (!leafletLoaded || !mapRef.current || !window.L) return;
-    if (radarLayerRef.current) mapRef.current.removeLayer(radarLayerRef.current);
-    if (!showReflectivity) { radarLayerRef.current = null; return; }
-    radarLayerRef.current = timelineTileUrl
+    if (!showReflectivity) {
+      if (radarLayerRef.current) mapRef.current.removeLayer(radarLayerRef.current);
+      radarLayerRef.current = null;
+      return;
+    }
+    // Add the next frame at opacity 0 and fade it in once its tiles finish loading, rather than
+    // removing the previous frame immediately — avoids a flash to the bare basemap between frames.
+    const previousLayer = radarLayerRef.current;
+    const nextLayer = timelineTileUrl
       ? window.L.tileLayer(timelineTileUrl, {
-        opacity,
+        opacity: 0,
         // RainViewer publishes radar tiles through zoom 7. Leaflet can keep
         // the user's closer map view by scaling the nearest supported tile.
         maxNativeZoom: 7,
         maxZoom: 18,
         attribution: 'Radar: <a href="https://www.rainviewer.com/" target="_blank">RainViewer</a>',
-      }).addTo(mapRef.current)
+      })
       : window.L.tileLayer.wms("https://opengeo.ncep.noaa.gov/geoserver/conus/conus_bref_qcd/ows", {
-        layers: "conus_bref_qcd", format: "image/png", transparent: true, opacity, version: "1.3.0", cache: Date.now() + refreshToken,
+        layers: "conus_bref_qcd", format: "image/png", transparent: true, opacity: 0, version: "1.3.0", cache: Date.now() + refreshToken,
         attribution: 'Radar: <a href="https://www.weather.gov/gis/cloudgiswebservices">NOAA/NWS</a>',
-      }).addTo(mapRef.current);
-  }, [leafletLoaded, opacity, showReflectivity, refreshToken, timelineTileUrl]);
+      });
+    nextLayer.addTo(mapRef.current);
+    radarLayerRef.current = nextLayer;
+    let settled = false;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      nextLayer.setOpacity(opacityRef.current);
+      if (previousLayer && mapRef.current) mapRef.current.removeLayer(previousLayer);
+    };
+    nextLayer.once("load", settle);
+    const fallback = window.setTimeout(settle, 700);
+    return () => window.clearTimeout(fallback);
+  }, [leafletLoaded, showReflectivity, refreshToken, timelineTileUrl]);
 
   useEffect(() => {
     if (!leafletLoaded || !mapRef.current || !window.L) return;
