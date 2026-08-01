@@ -11,22 +11,30 @@
 
 ## Authentication configuration
 
-For the current production URL, Supabase Authentication → URL Configuration should include:
+Current production URLs (confirmed live via `vercel project ls` on 2026-07-31):
 
 ```text
-Site URL: https://frontline-forecast-the-weather-desk.vercel.app
+Public app:  https://frontline-forecast.com
+Company HQ:  https://hq.frontline-forecast.com
+```
+
+Supabase Authentication → URL Configuration should include:
+
+```text
+Site URL: https://frontline-forecast.com
 Redirect URLs:
-  https://frontline-forecast-the-weather-desk.vercel.app/**
+  https://frontline-forecast.com/**
+  https://*-the-weather-desk.vercel.app/** (Vercel previews)
   http://localhost:3001/**
 ```
 
 Vercel Production environment also needs:
 
 ```text
-NEXT_PUBLIC_SITE_URL=https://frontline-forecast-the-weather-desk.vercel.app
+NEXT_PUBLIC_SITE_URL=https://frontline-forecast.com
 ```
 
-When a custom domain is adopted, replace the Site URL with the canonical custom domain and keep the Vercel URL only as an intentional fallback.
+**Open verification item:** the custom domains above are confirmed live in Vercel, but the Supabase Site URL/redirect allow-list has not been independently re-confirmed against them since the domain migration. Verify this before relying on password-reset/confirmation email links.
 
 ## Provider or source incident
 

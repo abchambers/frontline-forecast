@@ -1,5 +1,7 @@
 # Project and URL transition
 
+> **Status (2026-07-31):** superseded — custom domains are now live (`frontline-forecast.com`, `hq.frontline-forecast.com`). See `DECISION_LOG.md`. The rest of this document is kept as the historical record of the pre-custom-domain migration; do not use its URLs for current configuration.
+
 This records the controlled transition from the legacy technical project name to Frontline Forecast **before** a custom domain is purchased.
 
 ## Decision

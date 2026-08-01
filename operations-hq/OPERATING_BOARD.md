@@ -9,6 +9,7 @@ Update this board when work changes state. It is the company-facing source of pl
 | Production confirmation return | New users finish registration on the real app, not localhost | Supabase Site URL/redirect allow-list configured; confirmation opens the production app; one end-to-end sign-up tested | Supabase dashboard configuration |
 | Licensing data foundation | Schools can eventually be licensed without hand-managing every student | Migration applied; RLS reviewed; redemption transaction tested with a pilot organization | Apply licensing migration |
 | Pilot journey audit | One instructor and one student can use the education loop without intervention | Register → join → assignment → submit → review is documented and tested | Confirmation return |
+| Separate HQ data from the public site's database | Internal-only data (employee records, security controls, documents, roadmap, accounts, expenses) currently lives in the same Supabase project as the public consumer app instead of the dedicated Company HQ project, increasing exposure risk beyond RLS alone | HQ-only tables migrated to the Company HQ Supabase project; public app reads/writes HQ data only through narrow server-side endpoints, never direct DB access from the client; stale duplicate data in the Company HQ project reconciled or cleared | See decision log 2026-07-31 |
 
 ## Next — productization
 
