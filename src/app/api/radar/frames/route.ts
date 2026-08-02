@@ -1,24 +1,27 @@
 import { NextResponse } from "next/server";
 import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
-type RainViewerFrame = { time: number; path: string };
-type RainViewerResponse = { host?: string; radar?: { past?: RainViewerFrame[] } };
+// Iowa Environmental Mesonet's NEXRAD mosaic tile cache — the same NWS/MRMS-standard reflectivity
+// color table used on weather.gov, free and keyless. Past frames are exact minute-offsets of the
+// same rendering pipeline as "now" (nexrad-n0q-900913-m05m, -m10m, ... -m55m), so the live view and
+// the timeline loop are guaranteed to look identical instead of coming from two different providers.
+const PAST_MINUTES_AGO = [55, 50, 45, 40, 35, 30, 25, 20, 15, 10, 5];
+
+function tileUrlFor(minutesAgo: number) {
+  const suffix = minutesAgo > 0 ? `-m${String(minutesAgo).padStart(2, "0")}m` : "";
+  return `https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913${suffix}/{z}/{x}/{y}.png`;
+}
 
 export async function GET(request: Request) {
   const limit = checkRateLimit(request, "radar-frames", 60, 60_000);
   if (limit.limited) return rateLimitResponse(limit.retryAfterSeconds);
-  try {
-    const response = await fetch("https://api.rainviewer.com/public/weather-maps.json", { cache: "no-store" });
-    if (!response.ok) throw new Error(`Radar timeline request failed (${response.status})`);
-    const data = await response.json() as RainViewerResponse;
-    const host = data.host ?? "https://tilecache.rainviewer.com";
-    const frames = (data.radar?.past ?? []).slice(-12).map((frame) => ({
-      time: frame.time,
-      tileUrl: `${host}${frame.path}/256/{z}/{x}/{y}/2/1_1.png`,
-    }));
-    if (!frames.length) throw new Error("No radar frames were available.");
-    return NextResponse.json({ provider: "RainViewer", frames, fetchedAt: new Date().toISOString() }, { headers: { "Cache-Control": "public, s-maxage=300, stale-while-revalidate=300" } });
-  } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to load the radar timeline." }, { status: 502 });
-  }
+  const now = Date.now();
+  const frames = [...PAST_MINUTES_AGO, 0].map((minutesAgo) => ({
+    time: Math.floor((now - minutesAgo * 60_000) / 1000),
+    tileUrl: tileUrlFor(minutesAgo),
+  }));
+  return NextResponse.json(
+    { provider: "IEM NEXRAD Mosaic", frames, fetchedAt: new Date().toISOString() },
+    { headers: { "Cache-Control": "public, s-maxage=120, stale-while-revalidate=120" } },
+  );
 }
