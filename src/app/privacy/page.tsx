@@ -17,7 +17,7 @@ export default function PrivacyPolicyPage() {
       <p className="legal-draft-notice">
         Frontline Forecast is currently in a pre-launch, proof-of-concept phase. This policy describes our
         practices today and will be reviewed by counsel before any commercial or public launch. If you have
-        questions, contact <a href="mailto:privacy@frontline-forecast.com">privacy@frontline-forecast.com</a>.
+        questions, contact <a href="mailto:support@frontline-forecast.com">support@frontline-forecast.com</a>.
       </p>
 
       <h2>1. Who this applies to</h2>
@@ -77,7 +77,7 @@ export default function PrivacyPolicyPage() {
       <h2>7. Data retention and deletion</h2>
       <p>
         You can request deletion of your account from the Control Panel, or by emailing{" "}
-        <a href="mailto:privacy@frontline-forecast.com">privacy@frontline-forecast.com</a>. Deleting your
+        <a href="mailto:support@frontline-forecast.com">support@frontline-forecast.com</a>. Deleting your
         account removes your login credentials and personal profile information. Where a school has an
         educational-record interest in your submitted classwork (for example, an instructor&rsquo;s grading
         record), that classwork may be retained in de-identified form as part of the school&rsquo;s records
@@ -95,7 +95,7 @@ export default function PrivacyPolicyPage() {
       <p>We will update the effective date above when this policy changes, and will notify school administrators of material changes.</p>
 
       <h2>10. Contact</h2>
-      <p>Questions about this policy or your data can be sent to <a href="mailto:privacy@frontline-forecast.com">privacy@frontline-forecast.com</a>.</p>
+      <p>Questions about this policy or your data can be sent to <a href="mailto:support@frontline-forecast.com">support@frontline-forecast.com</a>.</p>
 
       <p className="legal-back"><Link href="/">Back to Frontline Forecast</Link></p>
     </div>

@@ -17,7 +17,7 @@ export default function TermsOfServicePage() {
       <p className="legal-draft-notice">
         Frontline Forecast is currently in a pre-launch, proof-of-concept phase. These terms will be reviewed
         by counsel before any commercial or public launch. Questions can be sent to{" "}
-        <a href="mailto:hello@frontline-forecast.com">hello@frontline-forecast.com</a>.
+        <a href="mailto:help@frontline-forecast.com">help@frontline-forecast.com</a>.
       </p>
 
       <h2>1. Accounts</h2>
@@ -87,7 +87,7 @@ export default function TermsOfServicePage() {
       <p>We will update the effective date above when these terms change, and will notify school administrators of material changes.</p>
 
       <h2>10. Contact</h2>
-      <p>Questions about these terms can be sent to <a href="mailto:hello@frontline-forecast.com">hello@frontline-forecast.com</a>.</p>
+      <p>Questions about these terms can be sent to <a href="mailto:help@frontline-forecast.com">help@frontline-forecast.com</a>.</p>
 
       <p className="legal-back"><Link href="/">Back to Frontline Forecast</Link></p>
     </div>
