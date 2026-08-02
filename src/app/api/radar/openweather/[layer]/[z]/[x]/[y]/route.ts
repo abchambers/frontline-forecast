@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
+import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 const ALLOWED_LAYERS = new Set(["precipitation_new", "clouds_new", "pressure_new", "wind_new", "temp_new"]);
 
-export async function GET(_: Request, { params }: { params: Promise<{ layer: string; z: string; x: string; y: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ layer: string; z: string; x: string; y: string }> }) {
+  const limit = checkRateLimit(request, "radar-openweather-tile", 300, 60_000);
+  if (limit.limited) return rateLimitResponse(limit.retryAfterSeconds);
   const { layer, z, x, y } = await params;
   const key = process.env.OPENWEATHER_API_KEY;
   if (!key) return NextResponse.json({ error: "OpenWeather map layers are not configured." }, { status: 503 });

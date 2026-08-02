@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { weatherDeskLocation } from "@/lib/locations";
 import { canonicalObservation, celsiusToFahrenheit, metersPerSecondToMph, windDirectionLabel } from "@/lib/weather-data";
+import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 type NwsFeature<T> = { properties: T };
 
@@ -51,6 +52,8 @@ async function nws<T>(url: string) {
 }
 
 export async function GET(request: Request) {
+  const limit = checkRateLimit(request, "weather", 60, 60_000);
+  if (limit.limited) return rateLimitResponse(limit.retryAfterSeconds);
   try {
     const selectedLocation = weatherDeskLocation(new URL(request.url).searchParams.get("location"));
     const point = await nws<NwsFeature<PointProperties>>(

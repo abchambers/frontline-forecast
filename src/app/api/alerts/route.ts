@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { weatherDeskLocation } from "@/lib/locations";
+import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 type NwsAlertFeature = {
   type: "Feature";
@@ -10,6 +11,8 @@ type NwsAlertFeature = {
 type NwsAlertResponse = { features?: NwsAlertFeature[] };
 
 export async function GET(request: Request) {
+  const limit = checkRateLimit(request, "alerts", 60, 60_000);
+  if (limit.limited) return rateLimitResponse(limit.retryAfterSeconds);
   try {
     const location = weatherDeskLocation(new URL(request.url).searchParams.get("location"));
     const response = await fetch(`https://api.weather.gov/alerts/active?point=${location.latitude},${location.longitude}`, {

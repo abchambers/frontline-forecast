@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
+import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 const noStore = { "Cache-Control": "no-store, max-age=0" };
 
-export async function GET() {
+export async function GET(request: Request) {
+  const limit = checkRateLimit(request, "site-config", 120, 60_000);
+  if (limit.limited) return rateLimitResponse(limit.retryAfterSeconds);
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !key) {

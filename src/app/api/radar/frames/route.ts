@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
+import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 type RainViewerFrame = { time: number; path: string };
 type RainViewerResponse = { host?: string; radar?: { past?: RainViewerFrame[] } };
 
-export async function GET() {
+export async function GET(request: Request) {
+  const limit = checkRateLimit(request, "radar-frames", 60, 60_000);
+  if (limit.limited) return rateLimitResponse(limit.retryAfterSeconds);
   try {
     const response = await fetch("https://api.rainviewer.com/public/weather-maps.json", { cache: "no-store" });
     if (!response.ok) throw new Error(`Radar timeline request failed (${response.status})`);

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { weatherDeskLocation } from "@/lib/locations";
 import { celsiusToFahrenheit, metersPerSecondToMph } from "@/lib/weather-data";
 import type { ForecastPeriodActual } from "@/lib/forecast-verification";
+import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 type Observation = {
   properties: {
@@ -51,6 +52,8 @@ function summarize(observations: Observation[], start: Date, end: Date): Forecas
 }
 
 export async function GET(request: NextRequest) {
+  const limit = checkRateLimit(request, "verify", 60, 60_000);
+  if (limit.limited) return rateLimitResponse(limit.retryAfterSeconds);
   const date = request.nextUrl.searchParams.get("date");
   const location = weatherDeskLocation(request.nextUrl.searchParams.get("location"));
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return NextResponse.json({ error: "A valid forecast date is required." }, { status: 400 });

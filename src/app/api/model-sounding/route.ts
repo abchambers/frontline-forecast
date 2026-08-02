@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { weatherDeskLocation } from "@/lib/locations";
+import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 const LEVELS = [1000, 975, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200, 150, 100, 70, 50, 30];
 const MODELS = {
   // Open-Meteo's single-run archive exposes HRRR at its completed 6-hour archive cycles.
@@ -28,6 +29,8 @@ function initialRun(model: (typeof MODELS)[keyof typeof MODELS], offset: number)
 }
 
 export async function GET(request: Request) {
+  const limit = checkRateLimit(request, "model-sounding", 30, 60_000);
+  if (limit.limited) return rateLimitResponse(limit.retryAfterSeconds);
   const search = new URL(request.url).searchParams;
   const requested = search.get("model") ?? "hrrr";
   const model = MODELS[requested as keyof typeof MODELS] ?? MODELS.hrrr;

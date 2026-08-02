@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { weatherDeskLocation } from "@/lib/locations";
 import { canonicalModelPoint, round } from "@/lib/weather-data";
+import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 const MODELS = {
   best_match: { label: "Best match", endpoint: "https://api.open-meteo.com/v1/forecast", model: "best_match" },
   hrrr_conus: { label: "HRRR CONUS", endpoint: "https://api.open-meteo.com/v1/forecast", model: "ncep_hrrr_conus" },
@@ -27,6 +28,8 @@ function hourlyValue(source: OpenMeteoResponse["hourly"], field: string, index: 
 }
 
 export async function GET(request: Request) {
+  const limit = checkRateLimit(request, "open-meteo", 60, 60_000);
+  if (limit.limited) return rateLimitResponse(limit.retryAfterSeconds);
   const search = new URL(request.url).searchParams;
   const requestedModel = search.get("model") ?? "best_match";
   const location = weatherDeskLocation(search.get("location"));

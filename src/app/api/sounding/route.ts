@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { weatherDeskLocation } from "@/lib/locations";
+import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 function candidates() {
   const list: Date[] = [];
@@ -18,6 +19,8 @@ function stamp(date: Date) {
 }
 
 export async function GET(request: Request) {
+  const limit = checkRateLimit(request, "sounding", 30, 60_000);
+  if (limit.limited) return rateLimitResponse(limit.retryAfterSeconds);
   const location = weatherDeskLocation(new URL(request.url).searchParams.get("location"));
   for (const candidate of candidates()) {
     const cycle = stamp(candidate);
