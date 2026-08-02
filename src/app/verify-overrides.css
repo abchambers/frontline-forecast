@@ -100,6 +100,10 @@
 .model-guidance-grid article small { color:var(--muted); font-size:.76rem; line-height:1.35; }
 .model-attribution { font-size:.78rem; margin:0; }
 .model-workspace,.model-sounding-panel { display:grid; gap:16px; }
+.model-access-upsell { background:var(--soft); border:1px dashed var(--line); border-radius:12px; display:grid; gap:8px; justify-items:start; padding:24px; text-align:left; }
+.model-access-upsell h3 { margin:0; }
+.model-access-upsell p { color:var(--muted); font-size:.86rem; line-height:1.5; margin:0; max-width:52ch; }
+.model-access-upsell button { background:var(--accent); border:1px solid var(--accent); border-radius:8px; color:var(--accent-contrast); font-weight:700; margin-top:6px; padding:9px 16px; }
 .model-radar-panel { display:grid; gap:14px; }.model-radar-map { position:relative; }
 .ensemble-panel { display:grid; gap:16px; }
 .guidance-scope-toggle { display:flex; gap:5px; margin-top:6px; }.guidance-scope-toggle button { background:transparent; border:0; border-bottom:2px solid transparent; color:var(--muted); font:inherit; font-size:.84rem; font-weight:700; padding:5px 2px; }.guidance-scope-toggle button.active { border-color:var(--accent); color:var(--accent); }

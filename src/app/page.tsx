@@ -4,6 +4,7 @@ import { Component, useEffect, useState, type ErrorInfo, type ReactNode } from "
 import dynamic from "next/dynamic";
 import { defaultWeatherDeskLocation, weatherDeskLocation, weatherDeskLocations, type WeatherDeskLocation } from "@/lib/locations";
 import { automaticForecastScore, type ForecastPeriodActual } from "@/lib/forecast-verification";
+import { hasModelDataAccess, type PersonalTier } from "@/lib/access";
 
 const RadarMap = dynamic(() => import("./radar-map"), {
   ssr: false,
@@ -96,7 +97,7 @@ type AutomaticVerification = { station: string; fetchedAt: string; day: ActualPe
 type VerificationRow = { forecast_period_id: string; observed_data: ActualPeriod; score_data: { automaticScore?: number | null } | null };
 type WorkspaceRole = "owner" | "admin" | "instructor" | "reviewer" | "forecaster" | "student" | "member";
 type WeatherIconStyle = "traditional" | "minimal";
-type Profile = { id: string; email: string | null; role: WorkspaceRole; display_name: string | null; person_type: "employee" | "student" | "instructor" | "other" | null; employee_id: string | null; student_id: string | null; title: string | null; weather_icon_style: WeatherIconStyle | null };
+type Profile = { id: string; email: string | null; role: WorkspaceRole; display_name: string | null; person_type: "employee" | "student" | "instructor" | "other" | null; employee_id: string | null; student_id: string | null; title: string | null; weather_icon_style: WeatherIconStyle | null; personal_tier: PersonalTier };
 type WorkspaceContext = { key: string; kind: "personal" | "all" | "organization" | "classroom"; label: string; detail: string; organizationId?: string; classroomId?: string; role?: string };
 type OrganizationMembershipRow = { organization_id: string; role: string; organizations: { id: string; name: string; kind: string } | null };
 type ClassroomMembershipRow = { classroom_id: string; role: string; classrooms: { id: string; name: string; term: string | null; organization_id: string; organizations: { name: string } | null } | null };
@@ -411,6 +412,10 @@ function RadarLegendStrip({ view }: { view: RadarMapView }) {
   if (!legend) return <span className="radar-source-note">Base map · pan and zoom to explore</span>;
   const bands = radarLegendBands[view];
   return <div className="radar-legend" aria-label={`${legend.title} color scale`}><span>{legend.title}</span><div className="radar-legend-scale"><i style={{ background: legend.gradient }} />{bands.map((band) => <button type="button" key={band.label} aria-label={`${band.label}: ${band.description}`} onBlur={() => setHoveredBand(null)} onFocus={() => setHoveredBand(band)} onMouseLeave={() => setHoveredBand(null)} onMouseEnter={() => setHoveredBand(band)} />)}</div><div><small>{legend.left}</small><small>{legend.middle}</small><small>{legend.right}</small></div><em>{hoveredBand ? `${hoveredBand.label} · ${hoveredBand.description}` : `${legend.unit} · Hover a color band for guidance`}</em></div>;
+}
+
+function ModelAccessUpsell({ label, onOpenAccount }: { label: string; onOpenAccount: () => void }) {
+  return <section className="model-access-upsell"><p className="eyebrow">Personal+</p><h3>{label} is a Personal+ feature</h3><p>Model data, ensembles, and simulated reflectivity are part of the paid personal tier — free accounts see live observations, radar, and the forecast workspace. School accounts already have this included.</p><button type="button" onClick={onOpenAccount}>View your account</button></section>;
 }
 
 function ModelGuidanceTable({ guidance, view, compact = false }: { guidance: OpenMeteoGuidance; view: "hourly" | "daily"; compact?: boolean }) {
@@ -1065,6 +1070,7 @@ export default function Home() {
   const [defaultLocationId, setDefaultLocationId] = useState(defaultWeatherDeskLocation.id);
   const [defaultForecastDays, setDefaultForecastDays] = useState<1 | 3 | 7>(1);
   const [weatherIconStyle, setWeatherIconStyle] = useState<WeatherIconStyle>("traditional");
+  const [personalTier, setPersonalTier] = useState<PersonalTier>("free");
   const [settingsReady, setSettingsReady] = useState(false);
   const [controlMessage, setControlMessage] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -1192,6 +1198,9 @@ export default function Home() {
     ? new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(weatherSyncedAt)
     : null;
   const hasControlAccess = role === "admin" || role === "owner";
+  const hasSchoolMembership = workspaceContexts.some((workspace) => workspace.kind === "classroom" || (workspace.kind === "organization" && workspace.detail === "school workspace"));
+  const hasModelAccess = hasModelDataAccess({ personalTier, isPlatformAdmin: hasControlAccess, hasSchoolMembership });
+  const openAccountSection = () => setActiveSection("control");
   const visiblePublicNavigation = publicNavigation.filter((item) => item.enabled && (item.target !== "login" || !session) && (item.access === "public" || (item.access === "member" && Boolean(session)) || (item.access === "staff" && hasControlAccess) || (item.access === "owner" && role === "owner")));
   const visibleWorkspace = (id: WorkspaceNavigationItem["id"]) => {
     const item = workspaceNavigation.find((candidate) => candidate.id === id);
@@ -1463,7 +1472,7 @@ export default function Home() {
   }, [radarMapView]);
 
   useEffect(() => {
-    if (activeSection !== "dashboard" || dataPanel !== "model-radar") return;
+    if (activeSection !== "dashboard" || dataPanel !== "model-radar" || !hasModelAccess) return;
     let isActive = true;
     const loadFutureRadar = () => fetch("/api/radar/future-frames", { cache: "no-store" })
       .then(async (response) => {
@@ -1480,7 +1489,7 @@ export default function Home() {
     loadFutureRadar();
     const refreshId = window.setInterval(loadFutureRadar, 600_000);
     return () => { isActive = false; window.clearInterval(refreshId); };
-  }, [activeSection, dataPanel]);
+  }, [activeSection, dataPanel, hasModelAccess]);
 
   useEffect(() => {
     if (!futureRadarPlaying || futureRadarFrames.length < 2) return;
@@ -1620,7 +1629,7 @@ export default function Home() {
 
   useEffect(() => {
     if (!session || !hasControlAccess || !supabaseUrl || !supabaseKey) return;
-    fetch(`${supabaseUrl}/rest/v1/profiles?select=id,email,role,display_name,person_type,employee_id,student_id,title&order=created_at.asc`, { headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` } })
+    fetch(`${supabaseUrl}/rest/v1/profiles?select=id,email,role,display_name,person_type,employee_id,student_id,title,personal_tier&order=created_at.asc`, { headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` } })
       .then((response) => response.ok ? response.json() : Promise.reject(new Error("Unable to load users")))
       .then((rows: Profile[]) => setProfiles(rows))
       .catch((error: Error) => setProfileMessage(error.message));
@@ -1746,11 +1755,12 @@ export default function Home() {
 
   useEffect(() => {
     if (!session || !supabaseUrl || !supabaseKey) return;
-    fetch(`${supabaseUrl}/rest/v1/profiles?select=role,weather_icon_style&id=eq.${session.user.id}`, { headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` } })
+    fetch(`${supabaseUrl}/rest/v1/profiles?select=role,weather_icon_style,personal_tier&id=eq.${session.user.id}`, { headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` } })
       .then((response) => response.ok ? response.json() : [])
-      .then((rows: { role: string; weather_icon_style?: WeatherIconStyle | null }[]) => {
+      .then((rows: { role: string; weather_icon_style?: WeatherIconStyle | null; personal_tier?: PersonalTier | null }[]) => {
         setRole(rows[0]?.role ?? "student");
         setWeatherIconStyle(rows[0]?.weather_icon_style === "minimal" ? "minimal" : "traditional");
+        setPersonalTier(rows[0]?.personal_tier === "paid" ? "paid" : "free");
       });
   }, [session]);
 
@@ -1872,7 +1882,7 @@ export default function Home() {
   }, [activeSection, dataPanel]);
 
   useEffect(() => {
-    if (activeSection !== "dashboard" || dataPanel !== "models") return;
+    if (activeSection !== "dashboard" || dataPanel !== "models" || !hasModelAccess) return;
     setOpenMeteoStatus("Loading Open-Meteo guidance…");
     fetch(`/api/open-meteo?model=${openMeteoModel}&location=${encodeURIComponent(locationId)}`)
       .then(async (response) => {
@@ -1882,10 +1892,10 @@ export default function Home() {
         setOpenMeteoStatus("");
       })
       .catch((error: Error) => setOpenMeteoStatus(error.message));
-  }, [activeSection, dataPanel, openMeteoModel, locationId]);
+  }, [activeSection, dataPanel, openMeteoModel, locationId, hasModelAccess]);
 
   useEffect(() => {
-    if (activeSection !== "dashboard" || dataPanel !== "models" || openMeteoView !== "compare") return;
+    if (activeSection !== "dashboard" || dataPanel !== "models" || openMeteoView !== "compare" || !hasModelAccess) return;
     const models = [...new Set([comparisonLeftModel, comparisonRightModel])];
     let active = true;
     setComparisonStatus("Loading model comparison…");
@@ -1902,10 +1912,10 @@ export default function Home() {
       })
       .catch((error: Error) => active && setComparisonStatus(error.message));
     return () => { active = false; };
-  }, [activeSection, dataPanel, openMeteoView, comparisonLeftModel, comparisonRightModel, locationId]);
+  }, [activeSection, dataPanel, openMeteoView, comparisonLeftModel, comparisonRightModel, locationId, hasModelAccess]);
 
   useEffect(() => {
-    if (activeSection !== "dashboard" || dataPanel !== "ensembles") return;
+    if (activeSection !== "dashboard" || dataPanel !== "ensembles" || !hasModelAccess) return;
     let active = true;
     setEnsembleStatus("Loading GFS ensemble guidance…");
     fetch(`/api/ensembles?location=${encodeURIComponent(locationId)}`)
@@ -1919,10 +1929,10 @@ export default function Home() {
       })
       .catch((error: Error) => active && setEnsembleStatus(error.message));
     return () => { active = false; };
-  }, [activeSection, dataPanel, locationId]);
+  }, [activeSection, dataPanel, locationId, hasModelAccess]);
 
   useEffect(() => {
-    if (activeSection !== "dashboard" || dataPanel !== "model-sounding") return;
+    if (activeSection !== "dashboard" || dataPanel !== "model-sounding" || !hasModelAccess) return;
     let active = true;
     setModelSounding(null);
     setModelSoundingStatus("Loading model sounding…");
@@ -1941,7 +1951,7 @@ export default function Home() {
       })
       .catch((error: Error) => active && setModelSoundingStatus(error.message));
     return () => { active = false; };
-  }, [activeSection, dataPanel, soundingModel, soundingRunOffset, locationId]);
+  }, [activeSection, dataPanel, soundingModel, soundingRunOffset, locationId, hasModelAccess]);
 
   useEffect(() => {
     const storedArchives = window.localStorage.getItem(archiveStorageKey);
@@ -2678,7 +2688,7 @@ export default function Home() {
         <div className="header-meta">
           {session && soleStudentDeskKey && activeWorkspaceKey === soleStudentDeskKey ? <div className="workspace-menu-wrap workspace-menu-wrap-static"><span className="workspace-trigger-static"><strong>{workspaceDeskLabel(activeWorkspace)}</strong></span><button type="button" className="workspace-join-link" onClick={() => setJoinPanelOpen(true)}>Join another class</button></div> : session && <div className="workspace-menu-wrap"><button type="button" className="workspace-trigger" aria-expanded={workspaceMenuOpen} onClick={() => setWorkspaceMenuOpen((open) => !open)}><strong>{workspaceDeskLabel(activeWorkspace)}</strong><i aria-hidden="true">⌄</i></button>{workspaceMenuOpen && <div className="workspace-menu"><strong>Your desks</strong><div>{workspaceContexts.map((workspace) => <button type="button" key={workspace.key} className={workspace.key === activeWorkspaceKey ? "active" : ""} onClick={() => switchWorkspace(workspace)}><strong>{workspaceDeskLabel(workspace)}</strong><span>{workspace.detail}{workspace.role ? ` · ${workspace.role}` : ""}</span></button>)}</div><button type="button" className="workspace-join-action" onClick={() => { setJoinPanelOpen(true); setWorkspaceMenuOpen(false); }}>Join a school or class</button>{workspaceContextStatus && <em>{workspaceContextStatus}</em>}</div>}</div>}
           <div className="location-menu-wrap"><button type="button" className="location-trigger" aria-expanded={locationMenuOpen} onClick={() => setLocationMenuOpen((open) => !open)}><span>Location</span><strong>{selectedLocation.name}</strong><i aria-hidden="true">⌄</i></button>{locationMenuOpen && <div className="location-menu"><strong>Workspace location</strong><small>Radar, observations, model guidance, and new forecasts update together.</small><div>{weatherDeskLocations.map((location) => <button type="button" key={location.id} className={!customLocation && location.id === locationId ? "active" : ""} onClick={() => { setCustomLocation(null); setLocationId(location.id); setLocationMenuOpen(false); }}><strong>{location.name}</strong><span>{location.observationStation} observation · K{location.upperAirStation} upper air</span></button>)}{customLocation && <div className="location-menu-custom-active"><strong>{customLocation.name}</strong><span>{customLocation.observationStation} observation · {customLocation.upperAirStation} upper air</span></div>}</div><div className="location-custom-station"><small>Not on the list? Enter a station ID (e.g. KDFW).</small><div><input value={customStationInput} onChange={(event) => setCustomStationInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") lookupCustomStation(); }} placeholder="Station ID" maxLength={5} /><button type="button" onClick={lookupCustomStation}>Use station</button></div>{customStationStatus && <span className="location-custom-status">{customStationStatus}</span>}{customLocation && <button type="button" className="location-custom-clear" onClick={() => { setCustomLocation(null); setCustomStationStatus(""); }}>Back to preset locations</button>}</div></div>}</div>
-          <div className="header-account"><button type="button" className="theme-toggle" onClick={() => setTheme((value) => value === "light" ? "dark" : "light")}>{theme === "light" ? "Dark mode" : "Light mode"}</button>{session ? <><span>{session.user.email}</span><button type="button" onClick={() => { window.localStorage.removeItem(sessionStorageKey); window.sessionStorage.removeItem(sessionStorageKey); setSession(null); setWeatherIconStyle("traditional"); setAuthMessage("Signed out."); }}>Sign out</button></> : <div className="login-menu-wrap"><button type="button" onClick={() => setLoginMenuOpen((open) => !open)}>Log in</button>{loginMenuOpen && <form className="login-menu" onSubmit={(event) => { event.preventDefault(); authenticate(); }}><strong>Frontline Forecast account</strong><input aria-label="Email" type="email" placeholder="Email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} /><input aria-label="Password" type="password" placeholder="Password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} /><label className="remember-me"><input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} /> Remember me on this browser</label><div><button type="submit">Sign in</button></div>{authMessage && <small>{authMessage}</small>}</form>}</div>}</div>
+          <div className="header-account"><button type="button" className="theme-toggle" onClick={() => setTheme((value) => value === "light" ? "dark" : "light")}>{theme === "light" ? "Dark mode" : "Light mode"}</button>{session ? <><span>{session.user.email}</span><button type="button" onClick={() => { window.localStorage.removeItem(sessionStorageKey); window.sessionStorage.removeItem(sessionStorageKey); setSession(null); setWeatherIconStyle("traditional"); setPersonalTier("free"); setAuthMessage("Signed out."); }}>Sign out</button></> : <div className="login-menu-wrap"><button type="button" onClick={() => setLoginMenuOpen((open) => !open)}>Log in</button>{loginMenuOpen && <form className="login-menu" onSubmit={(event) => { event.preventDefault(); authenticate(); }}><strong>Frontline Forecast account</strong><input aria-label="Email" type="email" placeholder="Email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} /><input aria-label="Password" type="password" placeholder="Password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} /><label className="remember-me"><input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} /> Remember me on this browser</label><div><button type="submit">Sign in</button></div>{authMessage && <small>{authMessage}</small>}</form>}</div>}</div>
         </div>
       </header>
 
@@ -2737,14 +2747,18 @@ export default function Home() {
         {dataPanel === "mcd" && <section className="source-bulletin mcd-panel"><div className="model-guidance-heading"><div><strong>SPC Mesoscale Discussions</strong><span>Storm Prediction Center reasoning on evolving severe or winter-weather threats, nationwide</span></div><small>{mcdDiscussions.length ? `${mcdDiscussions.length} active` : mcdStatus}</small></div>{mcdDiscussions.length ? <div className="mcd-list">{mcdDiscussions.map((discussion, index) => <details key={discussion.id} open={index === 0}><summary>{discussion.title}{discussion.issuedAt ? ` · ${new Date(discussion.issuedAt).toLocaleString("en-US", { timeZone: selectedLocation.timezone, dateStyle: "medium", timeStyle: "short" })}` : ""}</summary>{discussion.imageUrl && <img src={discussion.imageUrl} alt={`${discussion.title} graphic`} className="mcd-image" />}<pre className="model-text">{discussion.text}</pre><a href={discussion.link} target="_blank" rel="noreferrer">Open on spc.noaa.gov ↗</a></details>)}</div> : <p className="empty">{mcdStatus}</p>}</section>}
         {dataPanel === "alerts" && <section className="source-bulletin alerts-panel"><div className="model-guidance-heading"><div><strong>Warnings and statements</strong><span>Active NWS watches, warnings, and advisories for {selectedLocation.name}</span></div><small>{liveWeather?.alerts.length ? `${liveWeather.alerts.length} active` : liveWeather?.alertsAvailable === false ? "Feed unavailable" : "No active alerts"}</small></div>{liveWeather?.alerts.length ? <div className="alerts-list">{liveWeather.alerts.map((alert, index) => <details key={`${alert.event}-${index}`} open={index === 0} className={alertTone(alert.severity)}><summary><strong>{alert.event}</strong><span>{alert.severity}{alert.areaDesc ? ` · ${alert.areaDesc}` : ""}</span></summary>{alert.headline && <p className="alert-headline">{alert.headline}</p>}<div className="alert-timing"><span>{alert.effective ? `Effective ${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: selectedLocation.timezone, timeZoneName: "short" }).format(new Date(alert.effective))}` : null}</span><span>{alert.expires ? `Expires ${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: selectedLocation.timezone, timeZoneName: "short" }).format(new Date(alert.expires))}` : null}</span></div>{alert.description && <pre className="model-text">{alert.description}</pre>}{alert.instruction && <div className="alert-instruction"><strong>Instructions</strong><p>{alert.instruction}</p></div>}<small>{alert.senderName ?? "National Weather Service"}</small></details>)} </div> : <p className="empty">{liveWeather?.alertsAvailable === false ? "NWS alert status could not be confirmed." : "No active NWS alerts for this location right now."}</p>}</section>}
         {dataPanel === "sounding" && <section className="observed-sounding-panel"><div className="model-guidance-heading"><div><strong>Latest observed K{selectedLocation.upperAirStation} sounding</strong><span>Nearest upper-air site for {selectedLocation.name} · official SPC analysis panel</span></div><a href={`https://www.spc.noaa.gov/exper/soundings/LATEST/${selectedLocation.upperAirStation}.gif`} target="_blank" rel="noreferrer">Open SPC source</a></div><img src={officialSoundingImageUrl(selectedLocation.upperAirStation)} alt={`Latest observed K${selectedLocation.upperAirStation} upper-air sounding from the Storm Prediction Center`} /><details><summary>Raw K{selectedLocation.upperAirStation} sounding text</summary><pre className="model-text">{soundingText || soundingStatus}</pre></details></section>}
-        {dataPanel === "models" && <section className="model-workspace">
+        {dataPanel === "models" && !hasModelAccess && <ModelAccessUpsell label="Model data" onOpenAccount={openAccountSection} />}
+        {dataPanel === "models" && hasModelAccess && <section className="model-workspace">
           <div className="model-desk-controls"><div><span>Open-Meteo model guidance</span><div className="guidance-scope-toggle"><button type="button" className={guidanceGroup === "high-res" ? "active" : ""} onClick={() => { setGuidanceGroup("high-res"); if (!guidanceModels["high-res"].some(([id]) => id === openMeteoModel)) setOpenMeteoModel("hrrr_conus"); }}>High-res</button><button type="button" className={guidanceGroup === "global" ? "active" : ""} onClick={() => { setGuidanceGroup("global"); if (!guidanceModels.global.some(([id]) => id === openMeteoModel)) setOpenMeteoModel("gfs_global"); }}>Global</button></div></div><div className="model-view-toggle"><button type="button" className={openMeteoView === "hourly" ? "active" : ""} onClick={() => setOpenMeteoView("hourly")}>Hourly</button><button type="button" className={openMeteoView === "daily" ? "active" : ""} onClick={() => setOpenMeteoView("daily")}>Daily</button><button type="button" className={openMeteoView === "compare" ? "active" : ""} onClick={() => { const left = openMeteoModel === "best_match" ? "hrrr_conus" : openMeteoModel; setComparisonLeftModel(left); setComparisonRightModel(guidanceGroup === "global" ? "ecmwf_ifs" : "nbm_conus"); setOpenMeteoView("compare"); }}>Compare</button></div></div>
           {openMeteoView !== "compare" && (openMeteoGuidance ? <><article className="single-model-table"><header><div className="model-picker">{guidanceModels[guidanceGroup].map(([id, label]) => <button type="button" key={id} className={openMeteoModel === id ? "active" : ""} onClick={() => setOpenMeteoModel(id)}>{label}</button>)}</div><strong>{openMeteoGuidance.model} · {selectedLocation.name}</strong><small>{openMeteoGuidance.current ? `${openMeteoGuidance.current.temperatureF ?? "—"}°F · feels ${openMeteoGuidance.current.feelsLikeF ?? "—"}°F · ${openMeteoWeatherLabel(openMeteoGuidance.current.weatherCode)}` : "Current model guidance unavailable"}</small></header><ModelGuidanceTable guidance={openMeteoGuidance} view={openMeteoView} /><div className="table-reference-action"><small>Attach this displayed guidance to matching forecast dates. A confirmation appears when it is saved.</small><button type="button" onClick={() => attachGuidanceSeries(openMeteoGuidance, openMeteoView)}>Add to forecast</button></div></article><p className="model-attribution">Model data: <a href={openMeteoGuidance.source} target="_blank" rel="noreferrer">Open-Meteo</a>. High-res guidance is for near-term detail; global models are for pattern and range.</p></> : <p className="empty">{openMeteoStatus}</p>)}
           {openMeteoView === "compare" && <section className="model-compare" aria-busy={Boolean(comparisonStatus)}>{comparisonStatus && <p className="model-loading" role="status">{comparisonStatus}</p>}<div className="comparison-columns">{[comparisonLeftModel, comparisonRightModel].map((id, index) => { const guidance = modelComparison[id]; const selectedModel = index === 0 ? comparisonLeftModel : comparisonRightModel; return <article key={index}><header><div className="model-picker">{guidanceModels[guidanceGroup].filter(([model]) => model !== "best_match").map(([model, label]) => <button type="button" key={model} className={selectedModel === model ? "active" : ""} onClick={() => { if (index === 0) { if (model === comparisonRightModel) setComparisonRightModel(comparisonLeftModel); setComparisonLeftModel(model); setOpenMeteoModel(model); } else { if (model === comparisonLeftModel) setComparisonLeftModel(comparisonRightModel); setComparisonRightModel(model); } }}>{label}</button>)}</div><div className="comparison-table-title"><strong>{guidance?.model ?? "Loading model…"}</strong><div className="model-view-toggle"><button type="button" className={comparisonView === "hourly" ? "active" : ""} onClick={() => setComparisonView("hourly")}>Hourly</button><button type="button" className={comparisonView === "daily" ? "active" : ""} onClick={() => setComparisonView("daily")}>Daily</button></div></div></header>{guidance ? <><ModelGuidanceTable guidance={guidance} view={comparisonView} compact /><div className="table-reference-action"><small>Attach this model to matching forecast dates.</small><button type="button" onClick={() => attachGuidanceSeries(guidance, comparisonView)}>Add to forecast</button></div></> : <p className="empty">Loading model guidance…</p>}</article>; })}</div></section>}
         </section>}
-        {dataPanel === "model-radar" && <section className="model-radar-panel"><div className="model-guidance-heading"><div><strong>HRRR simulated reflectivity</strong><span>Model guidance styled like radar for {selectedLocation.name} — not an observation</span></div><small>{futureRadarFrames.length ? `${futureRadarFrames.length} forecast hours` : futureRadarStatus}</small></div><div className="radar model-radar-map"><RadarMap location={selectedLocation} opacity={0.8} showReflectivity showAlerts={false} timelineTileUrl={futureRadarFrame?.tileUrl ?? null} theme={theme} /></div>{futureRadarFrames.length > 0 && <div className="radar-playback"><button type="button" disabled={futureRadarFrames.length < 2} onClick={() => setFutureRadarPlaying((playing) => !playing)}>{futureRadarPlaying ? "Pause" : "Play"}</button><input type="range" className="radar-scrub" min="0" max={Math.max(0, futureRadarFrames.length - 1)} value={futureRadarFrameIndex} disabled={futureRadarFrames.length < 2} onChange={(event) => { setFutureRadarPlaying(false); setFutureRadarFrameIndex(Number(event.target.value)); }} /><span>{futureRadarFrameTime}</span></div>}<div className="radar-footer"><RadarLegendStrip view="future_reflectivity" /></div><p className="model-attribution">HRRR simulated reflectivity via <a href="https://mesonet.agron.iastate.edu/" target="_blank" rel="noreferrer">Iowa Environmental Mesonet</a>. This is model guidance styled as a radar view, not an observation — treat it as less certain the further out it goes.</p></section>}
-        {dataPanel === "ensembles" && <section className="ensemble-panel"><div className="model-guidance-heading"><div><strong>GFS ensemble</strong><span>Range and spread · {selectedLocation.name}</span></div></div>{ensembleGuidance ? <><div className="ensemble-summary"><article><span>Members</span><strong>{ensembleGuidance.rows[0]?.temperature.members ?? "—"}</strong><small>available members</small></article><article><span>Temperature spread</span><strong>±{ensembleGuidance.rows[0]?.temperature.spread ?? "—"}°F</strong><small>first valid hour</small></article><article><span>Forecast horizon</span><strong>10 days</strong><small>point guidance</small></article></div><EnsembleTable guidance={ensembleGuidance} /><p className="model-attribution">Ensemble data: <a href={ensembleGuidance.source} target="_blank" rel="noreferrer">Open-Meteo Ensemble API</a></p></> : <p className="empty">{ensembleStatus}</p>}</section>}
-        {dataPanel === "model-sounding" && <section className="model-sounding-panel">
+        {dataPanel === "model-radar" && !hasModelAccess && <ModelAccessUpsell label="Model reflectivity" onOpenAccount={openAccountSection} />}
+        {dataPanel === "model-radar" && hasModelAccess && <section className="model-radar-panel"><div className="model-guidance-heading"><div><strong>HRRR simulated reflectivity</strong><span>Model guidance styled like radar for {selectedLocation.name} — not an observation</span></div><small>{futureRadarFrames.length ? `${futureRadarFrames.length} forecast hours` : futureRadarStatus}</small></div><div className="radar model-radar-map"><RadarMap location={selectedLocation} opacity={0.8} showReflectivity showAlerts={false} timelineTileUrl={futureRadarFrame?.tileUrl ?? null} theme={theme} /></div>{futureRadarFrames.length > 0 && <div className="radar-playback"><button type="button" disabled={futureRadarFrames.length < 2} onClick={() => setFutureRadarPlaying((playing) => !playing)}>{futureRadarPlaying ? "Pause" : "Play"}</button><input type="range" className="radar-scrub" min="0" max={Math.max(0, futureRadarFrames.length - 1)} value={futureRadarFrameIndex} disabled={futureRadarFrames.length < 2} onChange={(event) => { setFutureRadarPlaying(false); setFutureRadarFrameIndex(Number(event.target.value)); }} /><span>{futureRadarFrameTime}</span></div>}<div className="radar-footer"><RadarLegendStrip view="future_reflectivity" /></div><p className="model-attribution">HRRR simulated reflectivity via <a href="https://mesonet.agron.iastate.edu/" target="_blank" rel="noreferrer">Iowa Environmental Mesonet</a>. This is model guidance styled as a radar view, not an observation — treat it as less certain the further out it goes.</p></section>}
+        {dataPanel === "ensembles" && !hasModelAccess && <ModelAccessUpsell label="Ensembles" onOpenAccount={openAccountSection} />}
+        {dataPanel === "ensembles" && hasModelAccess && <section className="ensemble-panel"><div className="model-guidance-heading"><div><strong>GFS ensemble</strong><span>Range and spread · {selectedLocation.name}</span></div></div>{ensembleGuidance ? <><div className="ensemble-summary"><article><span>Members</span><strong>{ensembleGuidance.rows[0]?.temperature.members ?? "—"}</strong><small>available members</small></article><article><span>Temperature spread</span><strong>±{ensembleGuidance.rows[0]?.temperature.spread ?? "—"}°F</strong><small>first valid hour</small></article><article><span>Forecast horizon</span><strong>10 days</strong><small>point guidance</small></article></div><EnsembleTable guidance={ensembleGuidance} /><p className="model-attribution">Ensemble data: <a href={ensembleGuidance.source} target="_blank" rel="noreferrer">Open-Meteo Ensemble API</a></p></> : <p className="empty">{ensembleStatus}</p>}</section>}
+        {dataPanel === "model-sounding" && !hasModelAccess && <ModelAccessUpsell label="Model sounding" onOpenAccount={openAccountSection} />}
+        {dataPanel === "model-sounding" && hasModelAccess && <section className="model-sounding-panel">
           {modelSounding?.profiles[soundingProfileIndex] && <div className="model-guidance-heading sounding-result-heading"><div><strong>{modelSounding.model} profile · {modelTimestamp(modelSounding.profiles[soundingProfileIndex].time)}</strong><span>{selectedLocation.name} · forecast guidance</span></div><small>Run {runTimestamp(modelSounding.runTime)}</small></div>}
           <div className="sounding-control-strip"><div className="sounding-model-control"><span>Model</span><div className="model-picker"><button type="button" className={soundingModel === "hrrr" ? "active" : ""} onClick={() => { setSoundingModel("hrrr"); setSoundingRunOffset(0); }}>HRRR</button><button type="button" className={soundingModel === "gfs" ? "active" : ""} onClick={() => { setSoundingModel("gfs"); setSoundingRunOffset(0); }}>GFS</button></div></div>{soundingProfiles.length ? <div className="sounding-valid-picker"><div className="model-picker">{soundingProfileWindow.map((profile, visibleIndex) => { const index = soundingWindowStart + visibleIndex; const isNearest = index === nearestSoundingProfileIndex; return <button type="button" key={profile.time} className={soundingProfileIndex === index ? "active" : ""} onClick={() => setSoundingProfileIndex(index)}><span>{modelTimestamp(profile.time)}</span>{isNearest && <small>Now</small>}</button>; })}</div></div> : null}<div className="sounding-run-picker"><button type="button" aria-label="Open older model run" onClick={() => setSoundingRunOffset((offset) => offset + 1)}>‹</button><span>{modelSounding ? runTimestamp(modelSounding.runTime) : "Loading run…"}</span><button type="button" aria-label="Open newer model run" disabled={soundingRunOffset === 0} onClick={() => setSoundingRunOffset((offset) => Math.max(0, offset - 1))}>›</button></div></div>
           {modelSounding?.profiles[soundingProfileIndex] ? <><ModelSoundingChart profile={modelSounding.profiles[soundingProfileIndex]} /><div className="guidance-table-wrap"><table className="guidance-table sounding-table"><thead><tr><th>Pressure</th><th>Height</th><th>Temperature</th><th>RH</th><th>Wind</th></tr></thead><tbody>{modelSounding.profiles[soundingProfileIndex].levels.map((level) => <tr key={level.pressureHpa}><th>{level.pressureHpa} hPa</th><td>{level.geopotentialHeightM ?? "—"} m</td><td>{level.temperatureF ?? "—"}°F</td><td>{level.relativeHumidity ?? "—"}%</td><td>{level.windMph ?? "—"} mph @ {level.windDirection ?? "—"}°</td></tr>)}</tbody></table></div><p className="model-attribution">Profile data: <a href={modelSounding.source} target="_blank" rel="noreferrer">Open-Meteo Single Runs API</a>. It is saved with your forecast when attached.</p></> : <p className="empty">{modelSoundingStatus}</p>}
