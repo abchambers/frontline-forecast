@@ -10,7 +10,7 @@ const RadarMap = dynamic(() => import("./radar-map"), {
   loading: () => <div className="radar-loading">Loading live radar…</div>,
 });
 
-type DataPanel = "nbm" | "sounding" | "models" | "maps" | "ensembles" | "model-sounding";
+type DataPanel = "nbm" | "afd" | "sounding" | "models" | "maps" | "ensembles" | "model-sounding";
 type GuidanceGroup = "high-res" | "global";
 type RadarMapView = "composite" | "future_reflectivity" | "satellite" | "base" | "precipitation_new" | "clouds_new" | "pressure_new" | "wind_new" | "temp_new" | "ndfd_maxt" | "ndfd_pop12" | "ndfd_windspd";
 type RadarProductMode = "observed" | "future" | "forecast";
@@ -1043,6 +1043,8 @@ export default function Home() {
   const [weatherSyncedAt, setWeatherSyncedAt] = useState<number | null>(null);
   const [nbmText, setNbmText] = useState("");
   const [nbmStatus, setNbmStatus] = useState("Loading latest KAHN NBM bulletin…");
+  const [afdText, setAfdText] = useState("");
+  const [afdStatus, setAfdStatus] = useState("Loading latest forecast discussion…");
   const [soundingText, setSoundingText] = useState("");
   const [soundingStatus, setSoundingStatus] = useState("Loading latest observed FFC sounding…");
   const [openMeteoGuidance, setOpenMeteoGuidance] = useState<OpenMeteoGuidance | null>(null);
@@ -1767,6 +1769,18 @@ export default function Home() {
   }, [activeSection, dataPanel, locationId]);
 
   useEffect(() => {
+    if (activeSection !== "dashboard" || dataPanel !== "afd") return;
+    fetch(`/api/afd?location=${encodeURIComponent(locationId)}`)
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Forecast discussion unavailable");
+        setAfdText(`Area Forecast Discussion · ${data.office} · issued ${new Date(data.issuedAt).toLocaleString("en-US", { timeZone: selectedLocation.timezone, dateStyle: "medium", timeStyle: "short" })}\n\n${data.text}`);
+        setAfdStatus("");
+      })
+      .catch((error: Error) => setAfdStatus(error.message));
+  }, [activeSection, dataPanel, locationId, selectedLocation.timezone]);
+
+  useEffect(() => {
     if (activeSection !== "dashboard" || dataPanel !== "models") return;
     setOpenMeteoStatus("Loading Open-Meteo guidance…");
     fetch(`/api/open-meteo?model=${openMeteoModel}&location=${encodeURIComponent(locationId)}`)
@@ -1917,6 +1931,7 @@ export default function Home() {
     { id: "nws-observation", label: "Current NWS observation", detail: liveWeather ? `${liveWeather.observation.temperatureF ?? "—"}°F · ${liveWeather.observation.description} · ${liveWeather.observation.station || liveWeather.observation.stationName || "NWS observation station"} · ${observedAt}` : "Live observation was unavailable when attached.", preview: liveWeather ? { kind: "metrics", items: [{ label: "Temperature", value: `${liveWeather.observation.temperatureF ?? "—"}°F` }, { label: "Dew point", value: `${liveWeather.observation.dewpointF ?? "—"}°F` }, { label: "Wind", value: liveWeather.observation.windMph === null ? "—" : `${liveWeather.observation.windDirection ?? ""} ${liveWeather.observation.windMph} mph`.trim() }, { label: "Station", value: liveWeather.observation.station || liveWeather.observation.stationName || "NWS observation station" }] } : undefined },
     { id: "nws-guidance", label: "Current NWS forecast", detail: liveWeather?.forecast ? `${liveWeather.forecast.period}: ${liveWeather.forecast.detailedForecast}` : "NWS forecast was unavailable when attached.", preview: liveWeather?.forecast ? { kind: "metrics", items: [{ label: "Period", value: liveWeather.forecast.period }, { label: "Temperature", value: `${liveWeather.forecast.temperature}°${liveWeather.forecast.temperatureUnit}` }, { label: "Precipitation", value: `${liveWeather.forecast.precipitationChance ?? "—"}%` }, { label: "Conditions", value: liveWeather.forecast.shortForecast }] } : undefined },
     { id: "nbm", label: `NBM ${selectedLocation.observationStation} bulletin`, detail: nbmText || nbmStatus },
+    { id: "afd", label: "NWS Area Forecast Discussion", detail: afdText || afdStatus },
     { id: "sounding", label: `Observed ${selectedLocation.upperAirStation} sounding`, detail: soundingText || soundingStatus, preview: { kind: "observed-sounding", station: selectedLocation.upperAirStation, imageUrl: officialSoundingImageUrl(selectedLocation.upperAirStation) } },
     { id: "nws-alerts", label: "NWS alerts", detail: liveWeather?.alerts.length ? liveWeather.alerts.map((alert) => `${alert.event}: ${alert.headline ?? ""}`).join("\n") : liveWeather?.alertsAvailable === false ? "NWS alert status could not be confirmed." : "No active NWS alerts at the time this reference was attached.", preview: { kind: "metrics", items: [{ label: "Alerts", value: liveWeather?.alertsAvailable === false ? "Feed unavailable" : `${liveWeather?.alerts.length ?? 0} active` }, { label: "Status", value: liveWeather?.alerts.length ? liveWeather.alerts.map((alert) => alert.event).join(", ") : "No active alerts" }] } },
   ];
@@ -2064,6 +2079,10 @@ export default function Home() {
     const snippet = (value: string, maxLength = 5000) => value.length > maxLength ? `${value.slice(0, maxLength)}\n\n[Source snapshot truncated for archive storage.]` : value;
     if (dataPanel === "nbm") {
       attachDeskReference({ id: `nbm-${Date.now()}`, label: `NBM ${selectedLocation.observationStation} bulletin`, detail: snippet(nbmText || nbmStatus) });
+      return;
+    }
+    if (dataPanel === "afd") {
+      attachDeskReference({ id: `afd-${Date.now()}`, label: "NWS Area Forecast Discussion", detail: snippet(afdText || afdStatus) });
       return;
     }
     if (dataPanel === "sounding") {
@@ -2598,6 +2617,7 @@ export default function Home() {
         <div className="section-heading data-desk-heading"><div><h2>{homepageContent.referenceTitle}</h2><p>{homepageContent.referenceCaption}</p></div></div>
         <div className="tabs" role="tablist" aria-label="Forecast data sources">
           <button className={dataPanel === "nbm" ? "active" : ""} onClick={() => setDataPanel("nbm")}>NBM full text</button>
+          <button className={dataPanel === "afd" ? "active" : ""} onClick={() => setDataPanel("afd")}>Forecast discussion</button>
           <button className={dataPanel === "sounding" ? "active" : ""} onClick={() => setDataPanel("sounding")}>Sounding</button>
           <button className={dataPanel === "models" ? "active" : ""} onClick={() => setDataPanel("models")}>Other models</button>
           <button className={dataPanel === "maps" ? "active" : ""} onClick={() => setDataPanel("maps")}>Forecast maps</button>
@@ -2605,6 +2625,7 @@ export default function Home() {
           <button className={dataPanel === "model-sounding" ? "active" : ""} onClick={() => setDataPanel("model-sounding")}>Model sounding</button>
         </div>
         {dataPanel === "nbm" && <section className="source-bulletin"><div className="model-guidance-heading"><div><strong>National Blend of Models bulletin</strong><span>Full NBM source text for {selectedLocation.name} forecast analysis</span></div><small>{nbmText ? "Latest bulletin loaded" : nbmStatus}</small></div><details><summary>Open full NBM bulletin</summary><pre className="model-text">{nbmText || nbmStatus}</pre></details></section>}
+        {dataPanel === "afd" && <section className="source-bulletin"><div className="model-guidance-heading"><div><strong>Area Forecast Discussion</strong><span>The local NWS office's own reasoning behind the {selectedLocation.name} forecast</span></div><small>{afdText ? "Latest discussion loaded" : afdStatus}</small></div><details open><summary>Open full forecast discussion</summary><pre className="model-text">{afdText || afdStatus}</pre></details></section>}
         {dataPanel === "sounding" && <section className="observed-sounding-panel"><div className="model-guidance-heading"><div><strong>Latest observed K{selectedLocation.upperAirStation} sounding</strong><span>Nearest upper-air site for {selectedLocation.name} · official SPC analysis panel</span></div><a href={`https://www.spc.noaa.gov/exper/soundings/LATEST/${selectedLocation.upperAirStation}.gif`} target="_blank" rel="noreferrer">Open SPC source</a></div><img src={officialSoundingImageUrl(selectedLocation.upperAirStation)} alt={`Latest observed K${selectedLocation.upperAirStation} upper-air sounding from the Storm Prediction Center`} /><details><summary>Raw K{selectedLocation.upperAirStation} sounding text</summary><pre className="model-text">{soundingText || soundingStatus}</pre></details></section>}
         {dataPanel === "models" && <section className="model-workspace">
           <div className="model-desk-controls"><div><span>Open-Meteo model guidance</span><div className="guidance-scope-toggle"><button type="button" className={guidanceGroup === "high-res" ? "active" : ""} onClick={() => { setGuidanceGroup("high-res"); if (!guidanceModels["high-res"].some(([id]) => id === openMeteoModel)) setOpenMeteoModel("hrrr_conus"); }}>High-res</button><button type="button" className={guidanceGroup === "global" ? "active" : ""} onClick={() => { setGuidanceGroup("global"); if (!guidanceModels.global.some(([id]) => id === openMeteoModel)) setOpenMeteoModel("gfs_global"); }}>Global</button></div></div><div className="model-view-toggle"><button type="button" className={openMeteoView === "hourly" ? "active" : ""} onClick={() => setOpenMeteoView("hourly")}>Hourly</button><button type="button" className={openMeteoView === "daily" ? "active" : ""} onClick={() => setOpenMeteoView("daily")}>Daily</button><button type="button" className={openMeteoView === "compare" ? "active" : ""} onClick={() => { const left = openMeteoModel === "best_match" ? "hrrr_conus" : openMeteoModel; setComparisonLeftModel(left); setComparisonRightModel(guidanceGroup === "global" ? "ecmwf_ifs" : "nbm_conus"); setOpenMeteoView("compare"); }}>Compare</button></div></div>
