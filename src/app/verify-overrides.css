@@ -423,8 +423,18 @@
 .classroom-hub-tabs { background:var(--soft); border:1px solid var(--line); border-radius:12px; margin:0 0 20px; padding:4px; width:max-content; max-width:100%; }
 .classroom-hub-tabs button { border:0; border-radius:8px; color:var(--muted); font-weight:800; padding:8px 12px; }
 .classroom-hub-tabs button.active { background:var(--surface); box-shadow:0 2px 8px color-mix(in srgb,var(--ink) 10%,transparent); color:var(--ink); }
-.classroom-today,.classroom-progress,.classroom-leaderboard { border:1px solid var(--line); border-radius:14px; padding:18px; }
-.classroom-today > header,.classroom-progress > header,.classroom-leaderboard > header { border-bottom:1px solid var(--line); margin-bottom:15px; padding-bottom:13px; }
+.classroom-today,.classroom-progress,.classroom-leaderboard,.classroom-roster { border:1px solid var(--line); border-radius:14px; padding:18px; }
+.classroom-today > header,.classroom-progress > header,.classroom-leaderboard > header,.classroom-roster > header { border-bottom:1px solid var(--line); margin-bottom:15px; padding-bottom:13px; }
+.classroom-roster > header h3 { font-size:1rem; margin:0; }
+.classroom-roster > header p:not(.eyebrow) { color:var(--muted); font-size:.75rem; line-height:1.4; margin:4px 0 0; }
+.classroom-roster-list { display:grid; gap:8px; }
+.classroom-roster-list article { align-items:center; background:var(--soft); border:1px solid var(--line); border-radius:10px; display:flex; gap:10px; justify-content:space-between; padding:10px 12px; }
+.classroom-roster-list article span { display:grid; gap:2px; min-width:0; }
+.classroom-roster-list article small { color:var(--muted); font-size:.72rem; }
+.classroom-roster-list article button { background:var(--surface); border:1px solid var(--line); border-radius:7px; flex:0 0 auto; font-size:.78rem; font-weight:700; padding:7px 10px; }
+.classroom-roster-list article button.danger { background:var(--surface); border-color:#d48a85; color:#a63d36; }
+.classroom-roster .history-fold { border-top:1px solid var(--line); margin-top:14px; padding-top:14px; }
+.classroom-roster .history-fold summary { color:var(--muted); cursor:pointer; font-size:.78rem; font-weight:700; margin-bottom:8px; }
 .classroom-leaderboard > header h3 { font-size:1rem; margin:0; }
 .classroom-leaderboard > header p:not(.eyebrow) { color:var(--muted); font-size:.75rem; line-height:1.4; margin:4px 0 0; }
 .leaderboard-list { display:grid; gap:8px; list-style:none; margin:0; padding:0; }

@@ -21,7 +21,8 @@ type PublicNavigationItem = { id: string; label: string; target: "weather" | "ra
 type WorkspaceNavigationItem = { id: "weather" | "radar" | "about" | "forecast" | "verify" | "control"; label: string; access: "public" | "member" | "staff" | "owner"; enabled: boolean };
 type HomepageContent = { title: string; description: string; primaryAction: string; secondaryAction: string; outlookTitle: string; outlookCaption: string; radarTitle: string; radarCaption: string; referenceTitle: string; referenceCaption: string; showOutlook: boolean; showRadar: boolean; showReferences: boolean };
 type AboutContent = { eyebrow: string; title: string; description: string; principles: { title: string; body: string }[] };
-type ClassroomHubTab = "today" | "assignments" | "outlook" | "progress" | "leaderboard";
+type ClassroomHubTab = "today" | "assignments" | "outlook" | "progress" | "leaderboard" | "roster";
+type ClassroomRosterMember = { userId: string; label: string; email: string | null; status: "active" | "invited" | "suspended"; enrolledAt: string };
 type LiveWeather = {
   location: string;
   observation: { station: string; stationName: string; observedAt: string; description: string; temperatureF: number | null; temperatureSource: "observation" | "forecast estimate"; dewpointF: number | null; windMph: number | null; windDirection: string | null };
@@ -99,9 +100,9 @@ type VerificationRow = { forecast_period_id: string; observed_data: ActualPeriod
 type WorkspaceRole = "owner" | "admin" | "instructor" | "reviewer" | "forecaster" | "student" | "member";
 type WeatherIconStyle = "traditional" | "minimal";
 type Profile = { id: string; email: string | null; role: WorkspaceRole; display_name: string | null; person_type: "employee" | "student" | "instructor" | "other" | null; employee_id: string | null; student_id: string | null; title: string | null; weather_icon_style: WeatherIconStyle | null; personal_tier: PersonalTier };
-type WorkspaceContext = { key: string; kind: "personal" | "all" | "organization" | "classroom"; label: string; detail: string; organizationId?: string; classroomId?: string; role?: string };
+type WorkspaceContext = { key: string; kind: "personal" | "all" | "organization" | "classroom"; label: string; detail: string; organizationId?: string; classroomId?: string; role?: string; active?: boolean };
 type OrganizationMembershipRow = { organization_id: string; role: string; organizations: { id: string; name: string; kind: string } | null };
-type ClassroomMembershipRow = { classroom_id: string; role: string; classrooms: { id: string; name: string; term: string | null; organization_id: string; organizations: { name: string } | null } | null };
+type ClassroomMembershipRow = { classroom_id: string; role: string; status?: "active" | "invited" | "suspended"; classrooms: { id: string; name: string; term: string | null; organization_id: string; organizations: { name: string } | null } | null };
 type OrganizationRow = { id: string; name: string; kind: string };
 type OrganizationBranding = { organization_id: string; school_name: string | null; logo_path: string | null; logo_alt: string | null };
 type ClassroomRow = { id: string; name: string; term: string | null; organization_id: string; organizations: { name: string } | null };
@@ -817,6 +818,16 @@ function ClassroomLeaderboard({ assignments, submissions, roster, currentUserId 
   </section>;
 }
 
+function ClassroomRosterPanel({ roster, message, onRevoke, onRestore }: { roster: ClassroomRosterMember[]; message: string; onRevoke: (userId: string) => void; onRestore: (userId: string) => void }) {
+  const active = roster.filter((member) => member.status === "active");
+  const revoked = roster.filter((member) => member.status === "suspended");
+  return <section className="classroom-roster"><header><p className="eyebrow">Roster</p><h3>Enrolled students</h3><p>Review each semester and revoke access for students who&apos;ve graduated, dropped, or moved on. Revoking keeps their past forecasts and grades on record — it only stops new work.</p></header>
+    <div className="classroom-roster-list">{active.map((member) => <article key={member.userId}><span><strong>{member.label}</strong><small>{member.email ?? "No email on file"} · enrolled {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(new Date(member.enrolledAt))}</small></span><button type="button" className="danger" onClick={() => onRevoke(member.userId)}>Revoke access</button></article>)}{!active.length && <p className="empty">No active students.</p>}</div>
+    {revoked.length > 0 && <details className="history-fold"><summary>Revoked · {revoked.length}</summary><div className="classroom-roster-list">{revoked.map((member) => <article key={member.userId}><span><strong>{member.label}</strong><small>{member.email ?? "No email on file"}</small></span><button type="button" onClick={() => onRestore(member.userId)}>Restore access</button></article>)}</div></details>}
+    {message && <p className="control-message" role="status">{message}</p>}
+  </section>;
+}
+
 function ClassroomInstructorOverview({ assignment, assignments, submissions, roster, onReviewStudent }: { assignment: ClassroomAssignment | null; assignments: ClassroomAssignment[]; submissions: ClassroomAssignmentSubmission[]; roster: AcademicRosterMember[]; onReviewStudent: (student: AcademicRosterMember) => void }) {
   const students = roster.filter((member) => member.role === "student");
   const latestByStudent = new Map<string, ClassroomAssignmentSubmission>();
@@ -1163,6 +1174,8 @@ export default function Home() {
   const [reviewRubric, setReviewRubric] = useState({ accuracy: "", reasoning: "", communication: "" });
   const [reviewMessage, setReviewMessage] = useState("");
   const [academicRoster, setAcademicRoster] = useState<AcademicRosterMember[]>([]);
+  const [classroomRoster, setClassroomRoster] = useState<ClassroomRosterMember[]>([]);
+  const [classroomRosterMessage, setClassroomRosterMessage] = useState("");
   const [academicMessage, setAcademicMessage] = useState("");
   const [classroomAssignments, setClassroomAssignments] = useState<ClassroomAssignment[]>([]);
   const [classroomOfficialForecast, setClassroomOfficialForecast] = useState<ClassroomOfficialForecast | null>(null);
@@ -1717,6 +1730,45 @@ export default function Home() {
   }, [activeWorkspaceKey, hasAcademicReviewAccess, session]);
 
   useEffect(() => {
+    if (!session || !supabaseUrl || !supabaseKey || !canManageActiveClassroom || activeWorkspace?.kind !== "classroom" || classroomHubTab !== "roster") { setClassroomRoster([]); return; }
+    const headers = { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` };
+    setClassroomRosterMessage("Loading roster…");
+    fetch(`${supabaseUrl}/rest/v1/classroom_memberships?select=user_id,status,created_at&classroom_id=eq.${activeWorkspace.classroomId}&role=eq.student&order=created_at.asc`, { headers })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Roster is not available.");
+        const memberships = await response.json() as { user_id: string; status: "active" | "invited" | "suspended"; created_at: string }[];
+        if (!memberships.length) { setClassroomRoster([]); setClassroomRosterMessage("No students are enrolled yet."); return; }
+        const ids = memberships.map((membership) => membership.user_id).join(",");
+        const profileResponse = await fetch(`${supabaseUrl}/rest/v1/profiles?select=id,email,display_name&id=in.(${ids})`, { headers });
+        if (!profileResponse.ok) throw new Error("Student profiles could not be loaded.");
+        const profilesById = new Map((await profileResponse.json() as { id: string; email: string | null; display_name: string | null }[]).map((profile) => [profile.id, profile]));
+        setClassroomRoster(memberships.map((membership) => {
+          const profile = profilesById.get(membership.user_id);
+          return { userId: membership.user_id, label: profile?.display_name || profile?.email || "Unnamed account", email: profile?.email ?? null, status: membership.status, enrolledAt: membership.created_at };
+        }));
+        setClassroomRosterMessage("");
+      })
+      .catch((error: Error) => { setClassroomRoster([]); setClassroomRosterMessage(error.message); });
+  }, [activeWorkspaceKey, classroomHubTab, canManageActiveClassroom, session]);
+
+  async function setClassroomMemberStatus(userId: string, status: "active" | "suspended") {
+    if (!session || !supabaseUrl || !supabaseKey || !canManageActiveClassroom || activeWorkspace?.kind !== "classroom") return;
+    setClassroomRosterMessage(status === "suspended" ? "Revoking access…" : "Restoring access…");
+    const response = await fetch(`${supabaseUrl}/rest/v1/classroom_memberships?classroom_id=eq.${activeWorkspace.classroomId}&user_id=eq.${userId}`, {
+      method: "PATCH",
+      headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null) as { message?: string } | null;
+      setClassroomRosterMessage(body?.message || "That change could not be saved.");
+      return;
+    }
+    setClassroomRoster((roster) => roster.map((member) => member.userId === userId ? { ...member, status } : member));
+    setClassroomRosterMessage(status === "suspended" ? "Access revoked. Their past forecasts and grades stay on record." : "Access restored.");
+  }
+
+  useEffect(() => {
     if (!session || !supabaseUrl || !supabaseKey || activeWorkspace?.kind !== "classroom" || !activeWorkspace.classroomId) {
       setClassroomAssignments([]);
       setSelectedClassroomAssignmentId("");
@@ -1784,7 +1836,7 @@ export default function Home() {
       : fetch(`${supabaseUrl}/rest/v1/organization_memberships?select=organization_id,role,organizations(id,name,kind)&user_id=eq.${session.user.id}&status=eq.active`, { headers });
     const classroomRequest = isOwner
       ? fetch(`${supabaseUrl}/rest/v1/classrooms?select=id,name,term,organization_id,organizations(name)&order=name.asc`, { headers })
-      : fetch(`${supabaseUrl}/rest/v1/classroom_memberships?select=classroom_id,role,classrooms(id,name,term,organization_id,organizations(name))&user_id=eq.${session.user.id}&status=eq.active`, { headers });
+      : fetch(`${supabaseUrl}/rest/v1/classroom_memberships?select=classroom_id,role,status,classrooms(id,name,term,organization_id,organizations(name))&user_id=eq.${session.user.id}`, { headers });
     Promise.all([organizationRequest, classroomRequest]).then(async ([organizationResponse, classroomResponse]) => {
       if (!organizationResponse.ok || !classroomResponse.ok) throw new Error("Your workspace list could not be loaded.");
       const organizationRows = await organizationResponse.json() as (OrganizationRow | OrganizationMembershipRow)[];
@@ -1797,7 +1849,13 @@ export default function Home() {
       const classrooms = classroomRows.flatMap((row) => {
         const classroom = "classrooms" in row ? row.classrooms : row;
         if (!classroom) return [];
-        return [{ key: `classroom:${classroom.id}`, kind: "classroom" as const, classroomId: classroom.id, organizationId: classroom.organization_id, label: classroom.name, detail: `${classroom.organizations?.name ?? "School"}${classroom.term ? ` · ${classroom.term}` : ""}`, role: "role" in row ? row.role : undefined }];
+        // A membership can be invited (not yet joined — don't show it as a desk),
+        // active, or suspended (access revoked, but the desk stays reachable
+        // read-only so past forecasts and grades don't disappear).
+        const status = "status" in row ? row.status : undefined;
+        if (status === "invited") return [];
+        const active = status !== "suspended";
+        return [{ key: `classroom:${classroom.id}`, kind: "classroom" as const, classroomId: classroom.id, organizationId: classroom.organization_id, label: classroom.name, detail: `${classroom.organizations?.name ?? "School"}${classroom.term ? ` · ${classroom.term}` : ""}${active ? "" : " · access ended"}`, role: "role" in row ? row.role : undefined, active }];
       });
       const classroomOrganizations = classroomRows.flatMap((row) => {
         const classroom = "classrooms" in row ? row.classrooms : row;
@@ -1818,7 +1876,8 @@ export default function Home() {
       const brandingRows = brandingResponse?.ok ? await brandingResponse.json() as OrganizationBranding[] : [];
       setOrganizationBranding(brandingRows.reduce<Record<string, OrganizationBranding>>((all, branding) => ({ ...all, [branding.organization_id]: branding }), {}));
       setWorkspaceContexts(contexts);
-      const soleKey = !isOwner && organizations.length === 0 && classrooms.length === 1 ? classrooms[0].key : null;
+      const activeClassrooms = classrooms.filter((classroom) => classroom.active !== false);
+      const soleKey = !isOwner && organizations.length === 0 && activeClassrooms.length === 1 ? activeClassrooms[0].key : null;
       setSoleStudentDeskKey(soleKey);
       const storedKey = window.localStorage.getItem(`${workspaceContextStoragePrefix}:${session.user.id}`);
       const urlKey = new URLSearchParams(window.location.search).get("class");
@@ -2941,19 +3000,21 @@ export default function Home() {
       {activeSection === "school" && session && activeWorkspace?.kind === "organization" && <section className="workspace-card school-workspace"><SchoolDesk workspace={activeWorkspace} classrooms={workspaceContexts.filter((workspace) => workspace.kind === "classroom" && workspace.organizationId === activeWorkspace.organizationId)} members={schoolMembers} codes={classroomJoinCodes} entitlement={schoolEntitlement} onOpenClassroom={switchWorkspace} onCreateClassroom={(name, term, seatLimit) => createClassroom(activeWorkspace.organizationId!, name, term, seatLimit)} onRenameClassroom={renameSchoolClassroom} onAssignInstructor={assignSchoolInstructor} onCreateCode={createSchoolClassCode} onRetireCode={retireSchoolClassCode} message={accessMessage} /></section>}
       {joinPanelOpen && <section className="workspace-card enrollment-panel"><header className="section-heading"><div><p className="eyebrow">School access</p><h2>Join a school or class</h2><p>Enter the code supplied by your school or instructor. Your access remains within that school’s licensed seats.</p></div><button type="button" onClick={() => { setJoinPanelOpen(false); setJoinMessage(""); }}>Close</button></header><form onSubmit={(event) => { event.preventDefault(); redeemSchoolOrClassCode(); }}><label>Access code<input value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase())} placeholder="FF-XXXXXXXXXXXX" autoComplete="off" /></label><button type="submit" disabled={!joinCode.trim()}>Join</button></form>{joinMessage && <p className="control-message" role="status">{joinMessage}</p>}</section>}
       {activeSection === "classroom" && session && activeWorkspace?.kind === "classroom" && <section className="workspace-card classroom-workspace">
-        <div className="section-heading"><div><p className="eyebrow">Classroom desk</p><h2>{workspaceDeskLabel(activeWorkspace)}</h2><p>{canManageActiveClassroom ? "Plan assignments, assess submissions, and follow class progress in one private space." : "Find assignments, build a forecast, and learn from private feedback."}</p></div><span>{activeWorkspace.role ?? "member"}</span></div>
+        <div className="section-heading"><div><p className="eyebrow">Classroom desk</p><h2>{workspaceDeskLabel(activeWorkspace)}</h2><p>{activeWorkspace.active === false ? "Your access to this class has ended. Assignments and class tools are no longer available, but your past forecasts and grades are still yours to review under Verify." : canManageActiveClassroom ? "Plan assignments, assess submissions, and follow class progress in one private space." : "Find assignments, build a forecast, and learn from private feedback."}</p></div><span>{activeWorkspace.active === false ? "access ended" : activeWorkspace.role ?? "member"}</span></div>
         <nav className="classroom-hub-tabs" aria-label="Classroom sections">
           <button type="button" className={classroomHubTab === "today" ? "active" : ""} onClick={() => setClassroomHubTab("today")}>My work</button>
           <button type="button" className={classroomHubTab === "assignments" ? "active" : ""} onClick={() => setClassroomHubTab("assignments")}>Assignments</button>
           <button type="button" className={classroomHubTab === "outlook" ? "active" : ""} onClick={() => setClassroomHubTab("outlook")}>Class forecast</button>
           <button type="button" className={classroomHubTab === "progress" ? "active" : ""} onClick={() => setClassroomHubTab("progress")}>{canManageActiveClassroom ? "Class progress" : "Progress"}</button>
           <button type="button" className={classroomHubTab === "leaderboard" ? "active" : ""} onClick={() => setClassroomHubTab("leaderboard")}>Leaderboard</button>
+          {canManageActiveClassroom && <button type="button" className={classroomHubTab === "roster" ? "active" : ""} onClick={() => setClassroomHubTab("roster")}>Roster</button>}
         </nav>
         {classroomHubTab === "today" && <ClassroomToday assignment={selectedClassroomAssignment} submissions={assignmentSubmissions} roster={academicRoster} canManage={canManageActiveClassroom} canOpenForecast={showForecastAssignmentContext} onOpenForecast={() => openClassroomAssignment(selectedClassroomAssignment!)} />}
         {classroomHubTab === "assignments" && (reviewTarget && reviewTarget.classroomId === activeWorkspace.classroomId ? <><ClassroomReviewPanel target={reviewTarget} runs={visibleReviewRuns} selectedRun={selectedReviewRun} notes={reviewNotes} comment={reviewComment} manualScore={reviewManualScore} message={reviewMessage} onSelectRun={setSelectedReviewRunId} onCommentChange={setReviewComment} onManualScoreChange={setReviewManualScore} onSave={saveForecastReview} onClose={() => { setReviewTarget(null); setReviewRuns([]); setReviewNotes({}); }} />{selectedReviewRun && <InstructorRubricCard rubric={reviewRubric} onRubricChange={setReviewRubric} notes={reviewNotes[selectedReviewRun.id] ?? []} onSave={() => saveForecastReview(selectedReviewRun.id)} />}</> : <ClassroomAssignmentDesk assignments={classroomAssignments} submissions={assignmentSubmissions} roster={academicRoster} selectedAssignmentId={selectedClassroomAssignmentId} canManage={canManageActiveClassroom} onCreate={createClassroomAssignment} onSelectAssignment={selectClassroomAssignment} onSaveClassForecast={(snapshot) => saveClassForecastSnapshot(snapshot)} onPublishClassForecast={() => { const assignment = classroomAssignments.find((item) => item.id === selectedClassroomAssignmentId); if (!assignment) return; saveClassForecastSnapshot(buildClassForecastSnapshot(assignment, assignmentSubmissions, academicRoster.filter((member) => member.role === "student")), true); }} onReviewStudent={(student) => setReviewTarget({ userId: student.userId, label: student.label, organizationId: activeWorkspace.organizationId!, classroomId: activeWorkspace.classroomId, assignmentId: selectedClassroomAssignmentId })} message={assignmentMessage} />)}
         {classroomHubTab === "outlook" && <ClassForecastHubV2 official={classroomOfficialForecast} publicGuidance={outlook} canManage={canManageActiveClassroom} onSave={(forecast) => saveOfficialClassForecast(forecast)} onPublish={(forecast) => saveOfficialClassForecast(forecast, true)} />}
         {classroomHubTab === "progress" && <ClassroomProgress assignments={classroomAssignments} submissions={assignmentSubmissions} roster={academicRoster} canManage={canManageActiveClassroom} currentUserId={session.user.id} />}
         {classroomHubTab === "leaderboard" && <ClassroomLeaderboard assignments={classroomAssignments} submissions={assignmentSubmissions} roster={academicRoster} currentUserId={session.user.id} />}
+        {classroomHubTab === "roster" && canManageActiveClassroom && <ClassroomRosterPanel roster={classroomRoster} message={classroomRosterMessage} onRevoke={(userId) => setClassroomMemberStatus(userId, "suspended")} onRestore={(userId) => setClassroomMemberStatus(userId, "active")} />}
       </section>}
       {activeSection === "control" && session && <section className="workspace-card control-summary-card"><div className="section-heading"><div><p className="eyebrow">Account</p><h2>Your desk defaults</h2><p>Choose a card to change that setting.</p></div></div><div className="control-status-grid"><button type="button" onClick={() => setDefaultForecastDays((days) => days === 1 ? 3 : days === 3 ? 7 : 1)}><span>Forecasting</span><strong>{defaultForecastDays}-day default</strong><small>Choose the horizon for a new worksheet.</small></button><button type="button" onClick={() => setTheme((value) => value === "light" ? "dark" : "light")}><span>Appearance</span><strong>{theme === "light" ? "Light mode" : "Dark mode"}</strong><small>Switch the interface theme.</small></button><button type="button" onClick={() => { const index = weatherDeskLocations.findIndex((location) => location.id === defaultLocationId); setDefaultLocationId(weatherDeskLocations[(index + 1) % weatherDeskLocations.length].id); }}><span>Default location</span><strong>{weatherDeskLocation(defaultLocationId).name}</strong><small>Choose the location a new desk opens with.</small></button></div></section>}
       {activeSection === "control" && session && <section className="workspace-card control-panel plan-card"><header><p className="eyebrow">Account</p><h3>Your plan</h3><p>Model data, ensembles, and simulated reflectivity are part of Personal+. Live observations, radar, and the forecast workspace are on every plan.</p></header><div className="plan-status"><b className={hasSchoolMembership || personalTier === "paid" ? "status-ready" : "status-pending"}>{hasSchoolMembership ? "Included via school" : personalTier === "paid" ? "Personal+" : "Free"}</b>{hasSchoolMembership ? <span>Your school or class workspace already includes Personal+ features — no request needed.</span> : personalTier === "paid" ? <span>You have Personal+ access on this account.</span> : <span>Pricing is still being finalized while Frontline Forecast is pre-launch. Request access below and we will follow up by email.</span>}</div>{!hasSchoolMembership && personalTier !== "paid" && (pendingTierRequest ? <p className="control-message" role="status">Request pending review since {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(pendingTierRequest.created_at))}. Approved yet? <button type="button" className="login-menu-link" onClick={() => setProfileRefreshToken((value) => value + 1)}>Check again</button></p> : <form onSubmit={(event) => { event.preventDefault(); submitTierRequest(); }} className="settings-grid"><label>Note (optional)<textarea value={tierNote} onChange={(event) => setTierNote(event.target.value)} placeholder="Anything we should know?" rows={2} /></label><div className="settings-actions"><button type="submit" disabled={tierRequestBusy}>{tierRequestBusy ? "Sending…" : "Request Personal+ access"}</button></div></form>)}<div className="settings-actions"><button type="button" onClick={() => setJoinPanelOpen(true)}>Have a school or class code?</button></div>{tierRequestMessage && <p className="control-message" role="status">{tierRequestMessage}</p>}</section>}
