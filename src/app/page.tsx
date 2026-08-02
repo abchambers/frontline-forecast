@@ -2,7 +2,7 @@
 
 import { Component, useEffect, useState, type ErrorInfo, type ReactNode } from "react";
 import dynamic from "next/dynamic";
-import { defaultWeatherDeskLocation, weatherDeskLocation, weatherDeskLocations } from "@/lib/locations";
+import { defaultWeatherDeskLocation, weatherDeskLocation, weatherDeskLocations, type WeatherDeskLocation } from "@/lib/locations";
 import { automaticForecastScore, type ForecastPeriodActual } from "@/lib/forecast-verification";
 
 const RadarMap = dynamic(() => import("./radar-map"), {
@@ -135,6 +135,7 @@ const archiveStorageKey = "weather-desk-forecast-archives";
 const forecastDraftStorageKey = "weather-desk-active-forecast-draft";
 const sessionStorageKey = "weather-desk-supabase-session";
 const locationStorageKey = "weather-desk-location";
+const customLocationStorageKey = "weather-desk-custom-location";
 
 const assignmentDates = (assignment: ClassroomAssignment) => assignment.target_dates?.length ? assignment.target_dates : [assignment.target_date];
 const themeStorageKey = "weather-desk-theme";
@@ -1057,6 +1058,9 @@ export default function Home() {
   const [radarRefreshToken, setRadarRefreshToken] = useState(0);
   const [radarRecenterToken, setRadarRecenterToken] = useState(0);
   const [locationId, setLocationId] = useState(defaultWeatherDeskLocation.id);
+  const [customLocation, setCustomLocation] = useState<WeatherDeskLocation | null>(null);
+  const [customStationInput, setCustomStationInput] = useState("");
+  const [customStationStatus, setCustomStationStatus] = useState("");
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [defaultLocationId, setDefaultLocationId] = useState(defaultWeatherDeskLocation.id);
   const [defaultForecastDays, setDefaultForecastDays] = useState<1 | 3 | 7>(1);
@@ -1178,7 +1182,7 @@ export default function Home() {
   const [publishInstructorForecast, setPublishInstructorForecast] = useState(false);
   const [revisionParentRunId, setRevisionParentRunId] = useState<string | null>(null);
   const [assignmentMessage, setAssignmentMessage] = useState("");
-  const selectedLocation = weatherDeskLocation(locationId);
+  const selectedLocation = customLocation ?? weatherDeskLocation(locationId);
   const liveDataStatus = weatherError
     ? { label: "Not synced", tone: "attention" }
     : weatherLoading || !liveWeather
@@ -1326,6 +1330,10 @@ export default function Home() {
   useEffect(() => {
     const storedLocation = window.localStorage.getItem(locationStorageKey);
     if (storedLocation) setLocationId(weatherDeskLocation(storedLocation).id);
+    try {
+      const storedCustomLocation = JSON.parse(window.localStorage.getItem(customLocationStorageKey) ?? "null") as WeatherDeskLocation | null;
+      if (storedCustomLocation?.id && storedCustomLocation.observationStation) setCustomLocation(storedCustomLocation);
+    } catch { window.localStorage.removeItem(customLocationStorageKey); }
     const storedTheme = readSharedTheme() ?? window.localStorage.getItem(themeStorageKey);
     if (storedTheme === "dark" || storedTheme === "light") setTheme(storedTheme);
     try {
@@ -1349,6 +1357,37 @@ export default function Home() {
   useEffect(() => {
     window.localStorage.setItem(locationStorageKey, locationId);
   }, [locationId]);
+
+  useEffect(() => {
+    if (customLocation) window.localStorage.setItem(customLocationStorageKey, JSON.stringify(customLocation));
+    else window.localStorage.removeItem(customLocationStorageKey);
+  }, [customLocation]);
+
+  async function lookupCustomStation() {
+    const stationId = customStationInput.trim().toUpperCase();
+    if (!stationId) return;
+    setCustomStationStatus("Looking up station…");
+    try {
+      const response = await fetch(`/api/location-lookup?stationId=${encodeURIComponent(stationId)}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Unable to resolve that station.");
+      setCustomLocation({
+        id: `custom-${stationId.toLowerCase()}`,
+        name: `${data.city}, ${data.state}`,
+        latitude: data.latitude,
+        longitude: data.longitude,
+        timezone: data.timezone,
+        observationStation: data.observationStation,
+        upperAirStation: data.upperAirStation,
+        radarSite: data.radarSite,
+      });
+      setCustomStationStatus("");
+      setCustomStationInput("");
+      setLocationMenuOpen(false);
+    } catch (error) {
+      setCustomStationStatus(error instanceof Error ? error.message : "Unable to resolve that station.");
+    }
+  }
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -2638,7 +2677,7 @@ export default function Home() {
         <div className="brand-lockup"><span className="theme-brand-mark" aria-hidden="true"><img className="brand-mark-light" src="/brand/frontline-forecast-mark-new.png" alt="" /><img className="brand-mark-dark" src="/brand/frontline-forecast-mark-new.png" alt="" /></span><div><strong className="brand-name">Frontline Forecast</strong><p className="eyebrow" data-hq-content="brand.tagline">Human-first forecasting workspace</p></div>{session && activeSchoolBranding && <div className="school-brand-lockup" aria-label={`${activeSchoolBranding.school_name || activeWorkspace.label} school workspace`}><span aria-hidden="true">×</span>{supabaseUrl && activeSchoolLogoPath && <img src={schoolLogoUrl(supabaseUrl, activeSchoolLogoPath)} alt={activeSchoolBranding.logo_alt || `${activeSchoolBranding.school_name || activeWorkspace.label} logo`} />}<strong>{activeSchoolBranding.school_name || activeWorkspace.label}</strong></div>}</div>
         <div className="header-meta">
           {session && soleStudentDeskKey && activeWorkspaceKey === soleStudentDeskKey ? <div className="workspace-menu-wrap workspace-menu-wrap-static"><span className="workspace-trigger-static"><strong>{workspaceDeskLabel(activeWorkspace)}</strong></span><button type="button" className="workspace-join-link" onClick={() => setJoinPanelOpen(true)}>Join another class</button></div> : session && <div className="workspace-menu-wrap"><button type="button" className="workspace-trigger" aria-expanded={workspaceMenuOpen} onClick={() => setWorkspaceMenuOpen((open) => !open)}><strong>{workspaceDeskLabel(activeWorkspace)}</strong><i aria-hidden="true">⌄</i></button>{workspaceMenuOpen && <div className="workspace-menu"><strong>Your desks</strong><div>{workspaceContexts.map((workspace) => <button type="button" key={workspace.key} className={workspace.key === activeWorkspaceKey ? "active" : ""} onClick={() => switchWorkspace(workspace)}><strong>{workspaceDeskLabel(workspace)}</strong><span>{workspace.detail}{workspace.role ? ` · ${workspace.role}` : ""}</span></button>)}</div><button type="button" className="workspace-join-action" onClick={() => { setJoinPanelOpen(true); setWorkspaceMenuOpen(false); }}>Join a school or class</button>{workspaceContextStatus && <em>{workspaceContextStatus}</em>}</div>}</div>}
-          <div className="location-menu-wrap"><button type="button" className="location-trigger" aria-expanded={locationMenuOpen} onClick={() => setLocationMenuOpen((open) => !open)}><span>Location</span><strong>{selectedLocation.name}</strong><i aria-hidden="true">⌄</i></button>{locationMenuOpen && <div className="location-menu"><strong>Workspace location</strong><small>Radar, observations, model guidance, and new forecasts update together.</small><div>{weatherDeskLocations.map((location) => <button type="button" key={location.id} className={location.id === locationId ? "active" : ""} onClick={() => { setLocationId(location.id); setLocationMenuOpen(false); }}><strong>{location.name}</strong><span>{location.observationStation} observation · K{location.upperAirStation} upper air</span></button>)}</div></div>}</div>
+          <div className="location-menu-wrap"><button type="button" className="location-trigger" aria-expanded={locationMenuOpen} onClick={() => setLocationMenuOpen((open) => !open)}><span>Location</span><strong>{selectedLocation.name}</strong><i aria-hidden="true">⌄</i></button>{locationMenuOpen && <div className="location-menu"><strong>Workspace location</strong><small>Radar, observations, model guidance, and new forecasts update together.</small><div>{weatherDeskLocations.map((location) => <button type="button" key={location.id} className={!customLocation && location.id === locationId ? "active" : ""} onClick={() => { setCustomLocation(null); setLocationId(location.id); setLocationMenuOpen(false); }}><strong>{location.name}</strong><span>{location.observationStation} observation · K{location.upperAirStation} upper air</span></button>)}{customLocation && <div className="location-menu-custom-active"><strong>{customLocation.name}</strong><span>{customLocation.observationStation} observation · {customLocation.upperAirStation} upper air</span></div>}</div><div className="location-custom-station"><small>Not on the list? Enter a station ID (e.g. KDFW).</small><div><input value={customStationInput} onChange={(event) => setCustomStationInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") lookupCustomStation(); }} placeholder="Station ID" maxLength={5} /><button type="button" onClick={lookupCustomStation}>Use station</button></div>{customStationStatus && <span className="location-custom-status">{customStationStatus}</span>}{customLocation && <button type="button" className="location-custom-clear" onClick={() => { setCustomLocation(null); setCustomStationStatus(""); }}>Back to preset locations</button>}</div></div>}</div>
           <div className="header-account"><button type="button" className="theme-toggle" onClick={() => setTheme((value) => value === "light" ? "dark" : "light")}>{theme === "light" ? "Dark mode" : "Light mode"}</button>{session ? <><span>{session.user.email}</span><button type="button" onClick={() => { window.localStorage.removeItem(sessionStorageKey); window.sessionStorage.removeItem(sessionStorageKey); setSession(null); setWeatherIconStyle("traditional"); setAuthMessage("Signed out."); }}>Sign out</button></> : <div className="login-menu-wrap"><button type="button" onClick={() => setLoginMenuOpen((open) => !open)}>Log in</button>{loginMenuOpen && <form className="login-menu" onSubmit={(event) => { event.preventDefault(); authenticate(); }}><strong>Frontline Forecast account</strong><input aria-label="Email" type="email" placeholder="Email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} /><input aria-label="Password" type="password" placeholder="Password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} /><label className="remember-me"><input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} /> Remember me on this browser</label><div><button type="submit">Sign in</button></div>{authMessage && <small>{authMessage}</small>}</form>}</div>}</div>
         </div>
       </header>
