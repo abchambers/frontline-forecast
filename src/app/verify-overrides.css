@@ -126,8 +126,6 @@
 .brand-lockup-dark { display:none !important; }
 :root[data-theme="dark"] .brand-lockup-light { display:none !important; }
 :root[data-theme="dark"] .brand-lockup-dark { display:block !important; }
-.theme-brand-lockup img { filter:drop-shadow(0 8px 16px rgba(24,34,47,.12)); }
-:root[data-theme="dark"] .theme-brand-lockup img { filter:drop-shadow(0 8px 16px rgba(0,0,0,.3)) drop-shadow(0 0 14px rgba(114,200,247,.22)); }
 .brand-lockup-wordmark .eyebrow { color:var(--accent); letter-spacing:.1em; margin:2px 0 0; }
 @media(max-width:700px) { .theme-brand-lockup img { height:92px; } }
 .school-brand-lockup { align-items:center; display:flex; gap:8px; margin-left:8px; padding-left:16px; border-left:1px solid var(--line); color:var(--muted); font-size:.75rem; line-height:1; }.school-brand-lockup>span { color:var(--accent); font-size:1.15rem; font-weight:500; }.school-brand-lockup img { display:block; width:30px; height:30px; object-fit:contain; }.school-brand-lockup strong { color:var(--ink); font-size:.78rem; font-weight:750; letter-spacing:-.015em; white-space:nowrap; }

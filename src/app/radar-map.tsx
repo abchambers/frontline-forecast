@@ -55,7 +55,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, show
     const nextBaseLayer = window.L.tileLayer(tiles.url, { attribution: tiles.attribution, maxZoom: 19 }).addTo(mapRef.current);
     nextBaseLayer.bringToBack();
     baseLayerRef.current = nextBaseLayer;
-  }, [leafletLoaded, theme]);
+  }, [leafletLoaded, theme, location]);
 
   useEffect(() => {
     if (!leafletLoaded || !mapRef.current) return;
@@ -107,7 +107,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, show
       })
       .catch(() => undefined);
     return () => { active = false; };
-  }, [leafletLoaded, showOutlook]);
+  }, [leafletLoaded, showOutlook, location]);
 
   const opacityRef = useRef(opacity);
   useEffect(() => { opacityRef.current = opacity; radarLayerRef.current?.setOpacity(opacity); }, [opacity]);
@@ -147,7 +147,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, show
     nextLayer.once("load", settle);
     const fallback = window.setTimeout(settle, 700);
     return () => window.clearTimeout(fallback);
-  }, [leafletLoaded, showReflectivity, refreshToken, timelineTileUrl]);
+  }, [leafletLoaded, showReflectivity, refreshToken, timelineTileUrl, location]);
 
   return (
     <>
