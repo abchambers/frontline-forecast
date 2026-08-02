@@ -67,6 +67,7 @@ type SavedForecast = {
   runId?: string;
   parentRunId?: string | null;
   authorId?: string;
+  scenarioId?: string | null;
   periodIds?: { day?: string; night?: string };
   locationId?: string;
   locationName?: string;
@@ -91,7 +92,7 @@ type ReferenceItem = { id: string; label: string; detail: string; preview?: Refe
 type PeriodDraft = { highLow: string; conditions: string; rainChance: string; timing: string; wind: string; confidence: string; hazards: string; reasoning: string; references: ReferenceItem[] };
 type ForecastDayDraft = { date: string; day: PeriodDraft; night: PeriodDraft };
 type ForecastRunDraft = { id: string; days: ForecastDayDraft[]; initialHorizonDays: number };
-type CloudRunRow = { id: string; user_id: string; parent_run_id?: string | null; created_at: string; status: string; location_name?: string | null; forecast_periods: { id: string; valid_date: string; period: "day" | "night"; forecast_data: PeriodDraft; evidence_snapshot: SavedForecast["evidence"]; forecast_verifications?: { observed_data: ActualPeriod; score_data: { automaticScore?: number | null } }[] }[] };
+type CloudRunRow = { id: string; user_id: string; parent_run_id?: string | null; scenario_id?: string | null; created_at: string; status: string; location_name?: string | null; forecast_periods: { id: string; valid_date: string; period: "day" | "night"; forecast_data: PeriodDraft; evidence_snapshot: SavedForecast["evidence"]; forecast_verifications?: { observed_data: ActualPeriod; score_data: { automaticScore?: number | null } }[] }[] };
 type ActualPeriod = ForecastPeriodActual;
 type AutomaticVerification = { station: string; fetchedAt: string; day: ActualPeriod; night: ActualPeriod; dayScore: number | null; nightScore: number | null };
 type VerificationRow = { forecast_period_id: string; observed_data: ActualPeriod; score_data: { automaticScore?: number | null } | null };
@@ -115,12 +116,14 @@ type InstructorForecastSnapshot = { saved_at: string; location_name: string; day
 type ClassForecastDay = { date: string; submitted_count: number; day: { high_f: number | null; pop: number | null; conditions: string[] }; night: { low_f: number | null; pop: number | null; conditions: string[] } };
 type ClassForecastSnapshot = { generated_at: string; target_date: string; submitted_count: number; total_students: number; day: { high_f: number | null; pop: number | null; conditions: string[] }; night: { low_f: number | null; pop: number | null; conditions: string[] }; days?: ClassForecastDay[] };
 type ClassroomOfficialForecast = { classroom_id: string; forecast: ClassForecastSnapshot; updated_by: string; updated_at: string; published_at: string | null };
-type ClassroomAssignment = { id: string; classroom_id: string; title: string; instructions: string | null; target_date: string; target_dates?: string[]; due_at: string | null; status: "draft" | "open" | "closed"; instructor_forecast: InstructorForecastSnapshot | null; instructor_forecast_updated_at: string | null; class_forecast: ClassForecastSnapshot | null; class_forecast_updated_at: string | null; class_forecast_published_at: string | null; created_at: string };
+type ClassroomAssignment = { id: string; classroom_id: string; title: string; instructions: string | null; target_date: string; target_dates?: string[]; scenario_id?: string | null; due_at: string | null; status: "draft" | "open" | "closed"; instructor_forecast: InstructorForecastSnapshot | null; instructor_forecast_updated_at: string | null; class_forecast: ClassForecastSnapshot | null; class_forecast_updated_at: string | null; class_forecast_published_at: string | null; created_at: string };
 type ClassroomAssignmentSubmission = { id: string; user_id: string; created_at: string; status: string; assignment_id: string; forecast_periods: { valid_date: string; period: "day" | "night"; forecast_data: PeriodDraft; forecast_verifications: { score_data: { automaticScore?: number | null } | null }[] }[]; forecast_reviews?: ForecastReview[] };
 type ReviewRun = { id: string; user_id: string; created_at: string; status: string; location_name: string | null; assignment_id: string | null; forecast_periods: { id: string; valid_date: string; period: "day" | "night"; forecast_data: PeriodDraft; forecast_verifications: { score_data: { automaticScore?: number | null } | null }[] }[] };
 type ReviewRubric = { accuracy?: number | null; reasoning?: number | null; communication?: number | null };
 type ForecastReview = { id: string; run_id: string; reviewer_id: string; comment: string | null; manual_score: number | null; rubric_scores?: ReviewRubric | null; created_at: string };
 type WorkspacePreferences = { defaultLocationId: string; radarMapView: RadarMapView; radarOpacity: number; showNwsAlerts: boolean; showSpcOutlook: boolean; defaultForecastDays: 1 | 3 | 7 };
+type ScenarioReferenceLink = { label: string; detail: string; url: string | null };
+type Scenario = { id: string; slug: string; title: string; category: string | null; summary: string | null; event_date: string; target_dates: string[] | null; location_id: string; reference_notes: string | null; reference_links: ScenarioReferenceLink[] };
 
 class ClassroomPanelBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
@@ -240,35 +243,6 @@ const conditionOptions = [
   ["clear", "Clear"], ["mostly-sunny", "Mostly sunny"], ["partly-cloudy", "Partly cloudy"], ["mostly-cloudy", "Mostly cloudy"], ["cloudy", "Cloudy"], ["haze", "Haze or smoke"],
   ["fog", "Fog"], ["drizzle", "Drizzle"], ["showers", "Showers"], ["rain", "Rain"], ["storms", "Thunderstorms"], ["isolated-storms", "Isolated thunderstorms"], ["scattered-storms", "Scattered thunderstorms"],
   ["severe-storms", "Severe thunderstorms"], ["windy", "Windy"], ["hot-humid", "Hot and humid"], ["snow", "Snow"], ["sleet", "Sleet"], ["wintry-mix", "Wintry mix"], ["freezing-rain", "Freezing rain"],
-] as const;
-
-// Concept-preview content only — a real case library would pull archived radar/sounding/model
-// data for each event from the same sources already wired into the app (IEM, SPC, Open-Meteo).
-const historicalCaseStudyPreviews = [
-  {
-    id: "2011-04-27",
-    date: "April 27, 2011",
-    title: "2011 Super Outbreak",
-    category: "Tornado outbreak",
-    summary: "One of the largest and most violent tornado outbreaks on record across the Southeast, including a long-track EF5 through Alabama.",
-    wouldShow: ["Archived NEXRAD reflectivity loop through the event", "The morning SPC outlook and moderate/high-risk mesoscale discussions", "The 12Z sounding showing extreme instability and shear"],
-  },
-  {
-    id: "2021-02-14",
-    date: "February 14–17, 2021",
-    title: "Texas Winter Storm Uri",
-    category: "Winter storm / cold outbreak",
-    summary: "An extended arctic outbreak drove record-low temperatures across Texas and the South, triggering widespread power and water failures.",
-    wouldShow: ["Multi-day surface and upper-air pattern evolution", "NBM and ensemble temperature guidance in the days before onset", "Local Area Forecast Discussions tracking forecaster confidence as the cold built in"],
-  },
-  {
-    id: "2017-08-25",
-    date: "August 25–30, 2017",
-    title: "Hurricane Harvey",
-    category: "Tropical / flooding",
-    summary: "Harvey stalled over southeast Texas after landfall, producing catastrophic, multi-day rainfall totals and flooding.",
-    wouldShow: ["GOES satellite loop of landfall and stall", "Model rainfall-total spread across runs as the stall became apparent", "Observed rainfall vs. forecast guidance, day by day"],
-  },
 ] as const;
 
 function conditionLabel(value: string) {
@@ -680,7 +654,7 @@ function archiveRecordsFromRun(run: CloudRunRow): SavedForecast[] {
     const nightData = night?.forecast_data ?? emptyPeriod("night");
     const status: SavedForecast["status"] = ["draft", "submitted", "revised", "verified", "withdrawn"].includes(run.status) ? run.status as SavedForecast["status"] : "submitted";
     return {
-      id: `${run.id}:${targetDate}`, runId: run.id, parentRunId: run.parent_run_id ?? null, authorId: run.user_id, periodIds: { day: day?.id, night: night?.id }, locationId: runLocation.id, locationName: run.location_name ?? runLocation.name, savedAt: run.created_at, label: archiveTitle({ savedAt: run.created_at }), targetDate, status, versionNumber: 1,
+      id: `${run.id}:${targetDate}`, runId: run.id, parentRunId: run.parent_run_id ?? null, authorId: run.user_id, scenarioId: run.scenario_id ?? null, periodIds: { day: day?.id, night: night?.id }, locationId: runLocation.id, locationName: run.location_name ?? runLocation.name, savedAt: run.created_at, label: archiveTitle({ savedAt: run.created_at }), targetDate, status, versionNumber: 1,
       day: { high: dayData.highLow, conditions: dayData.conditions, rainChance: dayData.rainChance, timing: dayData.timing, hazards: dayData.hazards, reasoning: dayData.reasoning, references: savedReferences(dayData.references) },
       night: { low: nightData.highLow, conditions: nightData.conditions, rainChance: nightData.rainChance, timing: nightData.timing, hazards: nightData.hazards, reasoning: nightData.reasoning, references: savedReferences(nightData.references) },
       evidence: day?.evidence_snapshot ?? night?.evidence_snapshot ?? { observation: "No observation snapshot", forecast: "No NWS snapshot", alerts: "No alert snapshot" },
@@ -1087,6 +1061,10 @@ export default function Home() {
   const [pendingTierRequest, setPendingTierRequest] = useState<{ id: string; created_at: string } | null>(null);
   const [adminTierRequests, setAdminTierRequests] = useState<{ id: string; user_id: string; note: string | null; created_at: string; profiles: { email: string | null; display_name: string | null } | null }[]>([]);
   const [adminTierMessage, setAdminTierMessage] = useState("");
+  const [scenarios, setScenarios] = useState<Scenario[]>([]);
+  const [verifyTab, setVerifyTab] = useState<"records" | "scenarios">("records");
+  const [activeScenarioId, setActiveScenarioId] = useState<string | null>(null);
+  const [scenarioMessage, setScenarioMessage] = useState("");
   const [saveMessage, setSaveMessage] = useState("");
   const [workspaceNotice, setWorkspaceNotice] = useState<{ message: string; targetDate?: string } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1608,7 +1586,7 @@ export default function Home() {
           ? "&organization_id=is.null&classroom_id=is.null"
           : "";
     Promise.all([
-      fetch(`${supabaseUrl}/rest/v1/forecast_runs?select=id,user_id,parent_run_id,created_at,status,location_name,forecast_periods(id,valid_date,period,forecast_data,evidence_snapshot,forecast_verifications(observed_data,score_data))&status=neq.withdrawn${workspaceFilter}&order=created_at.desc`, { headers }),
+      fetch(`${supabaseUrl}/rest/v1/forecast_runs?select=id,user_id,parent_run_id,scenario_id,created_at,status,location_name,forecast_periods(id,valid_date,period,forecast_data,evidence_snapshot,forecast_verifications(observed_data,score_data))&status=neq.withdrawn${workspaceFilter}&order=created_at.desc`, { headers }),
       fetch(`${supabaseUrl}/rest/v1/forecasts?select=id,created_at,forecast_data,evidence_snapshot&status=neq.withdrawn&order=created_at.desc`, { headers }),
       fetch(`${supabaseUrl}/rest/v1/forecast_verifications?select=forecast_period_id,observed_data,score_data`, { headers }),
     ]).then(async ([runResponse, legacyResponse, verificationResponse]) => {
@@ -1635,6 +1613,14 @@ export default function Home() {
     }).catch((error: Error) => { if (active) setAuthMessage(`Signed in, but cloud archives could not load: ${error.message}`); });
     return () => { active = false; };
   }, [activeWorkspaceKey, session]);
+
+  useEffect(() => {
+    if (!session || !supabaseUrl || !supabaseKey || activeSection !== "verify") return;
+    const headers = { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` };
+    fetch(`${supabaseUrl}/rest/v1/scenarios?select=id,slug,title,category,summary,event_date,target_dates,location_id,reference_notes,reference_links&status=eq.published&order=event_date.desc`, { headers })
+      .then((response) => response.ok ? response.json() : [])
+      .then(setScenarios);
+  }, [session, activeSection, supabaseUrl, supabaseKey]);
 
   useEffect(() => {
     if (!session || !supabaseUrl || !supabaseKey || activeWorkspace?.kind !== "classroom" || !activeWorkspace.classroomId) { setClassroomOfficialForecast(null); return; }
@@ -2296,6 +2282,7 @@ export default function Home() {
       setSelectedForecastDay(0);
       setPublishInstructorForecast(false);
       setRevisionParentRunId(null);
+      setActiveScenarioId(null);
     } catch (error) {
       setSaveMessage(`Forecast was not submitted: ${error instanceof Error ? error.message : "Cloud storage could not be reached."}`);
     } finally {
@@ -2308,7 +2295,7 @@ export default function Home() {
     const headers = { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json", Prefer: "return=representation" };
     const runResponse = await fetch(`${supabaseUrl}/rest/v1/forecast_runs`, {
       method: "POST", headers,
-      body: JSON.stringify({ user_id: session.user.id, location_name: selectedLocation.name, latitude: selectedLocation.latitude, longitude: selectedLocation.longitude, organization_id: activeWorkspace?.organizationId ?? null, classroom_id: activeWorkspace?.classroomId ?? null, assignment_id: selectedClassroomAssignmentId || null, parent_run_id: revisionParentRunId, publication_scope: "private", initial_horizon_days: forecastRun.days.length, status: revisionParentRunId ? "revised" : "submitted", submitted_at: submittedAt }),
+      body: JSON.stringify({ user_id: session.user.id, location_name: selectedLocation.name, latitude: selectedLocation.latitude, longitude: selectedLocation.longitude, organization_id: activeWorkspace?.organizationId ?? null, classroom_id: activeWorkspace?.classroomId ?? null, assignment_id: selectedClassroomAssignmentId || null, parent_run_id: revisionParentRunId, scenario_id: activeScenarioId, publication_scope: "private", initial_horizon_days: forecastRun.days.length, status: revisionParentRunId ? "revised" : "submitted", submitted_at: submittedAt }),
     });
     const runRows = await runResponse.json().catch(() => []);
     if (!runResponse.ok || !runRows[0]?.id) throw new Error("Forecast run storage is not ready. Confirm the forecast-runs SQL migration was run.");
@@ -2340,6 +2327,33 @@ export default function Home() {
     setRevisionParentRunId(archive.runId ?? null);
     setForecastRun({ id: crypto.randomUUID(), initialHorizonDays: 1, days: [{ date: targetDate, day: { ...emptyPeriod("day"), highLow: archive.day.high, conditions: archive.day.conditions, rainChance: archive.day.rainChance, timing: archive.day.timing, hazards: archive.day.hazards, reasoning: archive.day.reasoning ?? "", references: savedReferences(archive.day.references) }, night: { ...emptyPeriod("night"), highLow: archive.night.low, conditions: archive.night.conditions, rainChance: archive.night.rainChance, timing: archive.night.timing, hazards: archive.night.hazards, reasoning: archive.night.reasoning ?? "", references: savedReferences(archive.night.references) } }] });
     setSelectedForecastDay(0); setArchiveMenuId(null); setSaveMessage(`Revision draft opened for ${targetDate} at ${archiveLocation.name}. Submit creates a new, auditable version.`); setActiveSection("forecast");
+  }
+
+  function startScenario(scenario: Scenario) {
+    const dates = scenario.target_dates?.length ? scenario.target_dates : [scenario.event_date];
+    if (weatherDeskLocations.some((location) => location.id === scenario.location_id)) setLocationId(scenario.location_id);
+    setRevisionParentRunId(null);
+    setSelectedClassroomAssignmentId("");
+    setActiveScenarioId(scenario.id);
+    setForecastRun({ id: crypto.randomUUID(), initialHorizonDays: dates.length, days: dates.map((date) => createForecastDay(date)) });
+    setSelectedForecastDay(0);
+    setSaveMessage(`Forecasting for ${scenario.title}. This date has already passed, so submitting grades it immediately.`);
+    setActiveSection("forecast");
+  }
+
+  async function assignScenarioToClass(scenario: Scenario) {
+    if (!session || !supabaseUrl || !supabaseKey || !canManageActiveClassroom || !activeWorkspace?.classroomId) return;
+    setScenarioMessage("Assigning to class…");
+    const dates = scenario.target_dates?.length ? scenario.target_dates : [scenario.event_date];
+    const response = await fetch(`${supabaseUrl}/rest/v1/classroom_assignments`, {
+      method: "POST",
+      headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json", Prefer: "return=representation" },
+      body: JSON.stringify({ title: scenario.title, instructions: scenario.summary, target_date: dates[0], target_dates: dates, status: "open", classroom_id: activeWorkspace.classroomId, created_by: session.user.id, scenario_id: scenario.id }),
+    });
+    const rows = await response.json().catch(() => []);
+    if (!response.ok || !rows[0]) { setScenarioMessage("This scenario could not be assigned."); return; }
+    setClassroomAssignments((assignments) => [...assignments, rows[0] as ClassroomAssignment].sort((a, b) => a.target_date.localeCompare(b.target_date)));
+    setScenarioMessage(`${scenario.title} assigned to your class. Find it under that class’s Assignments.`);
   }
 
   function deleteArchive(archive: SavedForecast) {
@@ -2777,7 +2791,6 @@ export default function Home() {
       {workspaceNotice && <aside className="workspace-notice" role="status"><div><strong>Reference data added</strong><span>{workspaceNotice.message}</span></div><div>{workspaceNotice.targetDate && <button type="button" onClick={() => { const index = forecastRun.days.findIndex((day) => day.date === workspaceNotice.targetDate); if (index >= 0) setSelectedForecastDay(index); setActiveSection("forecast"); setWorkspaceNotice(null); }}>View forecast</button>}<button type="button" aria-label="Dismiss confirmation" onClick={() => setWorkspaceNotice(null)}>×</button></div></aside>}
 
       {activeSection === "about" && <section className="in-app-about"><div><p className="eyebrow">{aboutContent.eyebrow || "About Frontline Forecast"}</p><h2>{aboutContent.title}</h2><p>{aboutContent.description}</p></div><div className="in-app-about-points">{aboutContent.principles.map((principle, index) => <article key={`${principle.title}-${index}`}><span>0{index + 1}</span><h3>{principle.title}</h3><p>{principle.body}</p></article>)}</div></section>}
-      {activeSection === "about" && <section className="case-library-preview"><div className="case-library-heading"><div><p className="eyebrow">Concept preview</p><h2>Historical case-study library</h2><p>Not built yet — this is a mockup of a planned feature: a library of past severe-weather events, each paired with the same archived radar, sounding, and model data already in this app, so a forecast can be re-worked in hindsight.</p></div></div><div className="case-library-grid">{historicalCaseStudyPreviews.map((study) => <article key={study.id}><span className="case-library-category">{study.category}</span><h3>{study.title}</h3><small>{study.date}</small><p>{study.summary}</p><strong>Would include</strong><ul>{study.wouldShow.map((item) => <li key={item}>{item}</li>)}</ul></article>)}</div><p className="case-library-note">A real version would need archived data storage per event and a case-selection UI — flagged here so the shape of the idea is visible before it&apos;s prioritized.</p></section>}
       {activeSection === "dashboard" && <>
       <section className="home-intro"><div className="home-intro-copy"><div className="data-state-line" aria-live="polite"><span className={`sync-pill ${liveDataStatus.tone}`}><i aria-hidden="true" />{liveDataStatus.label}</span>{liveDataTimestamp && <small>Updated {liveDataTimestamp}</small>}</div><h2>{homepageContent.title}</h2><p>{homepageContent.description}</p></div><div className="home-intro-actions"><button type="button" onClick={() => setActiveSection("dashboard")}>{homepageContent.primaryAction}</button><button type="button" onClick={() => session ? setActiveSection("forecast") : setLoginMenuOpen(true)}>{session ? "Go to forecast" : homepageContent.secondaryAction}</button></div></section>
       {liveWeather?.alerts.length ? <section className={`hazard-banner ${alertTone(liveWeather.alerts[0].severity)}`} role="status" aria-label="Active National Weather Service alerts"><button type="button" className="hazard-banner-trigger" onClick={() => { setDataPanel("alerts"); window.requestAnimationFrame(() => document.querySelector(".data-desk")?.scrollIntoView({ behavior: "smooth", block: "start" })); }}><span className="hazard-label">Active NWS alert · tap for details</span><strong>{liveWeather.alerts[0].event}</strong><p>{liveWeather.alerts[0].headline || "An active National Weather Service alert applies to this location."}</p>{liveWeather.alerts[0].expires ? <small>Expires {new Intl.DateTimeFormat("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(liveWeather.alerts[0].expires))}</small> : null}</button><a href="https://www.weather.gov/" target="_blank" rel="noreferrer">Official NWS alerts ↗</a></section> : null}
@@ -2886,7 +2899,11 @@ export default function Home() {
       </section>}
 
       {activeSection === "verify" && !session && <section className="workspace-card access-wall"><h2>Sign in to open your archive</h2><p>Your forecasts, evidence, revisions, and verification history stay private to your account.</p><button onClick={() => setActiveSection("forecast")}>Go to Forecast sign-in</button></section>}
-      {activeSection === "verify" && session && <section className="workspace-card">
+      {activeSection === "verify" && session && <nav className="classroom-hub-tabs" aria-label="Verify sections">
+        <button type="button" className={verifyTab === "records" ? "active" : ""} onClick={() => setVerifyTab("records")}>Records</button>
+        <button type="button" className={verifyTab === "scenarios" ? "active" : ""} onClick={() => setVerifyTab("scenarios")}>Scenarios</button>
+      </nav>}
+      {activeSection === "verify" && session && verifyTab === "records" && <section className="workspace-card">
         <div className="records-toolbar"><div><p className="eyebrow">Forecast records</p><h2>Verify your work</h2><p>Compare each submitted forecast with its saved evidence and observations.</p></div><div><span>{filteredArchives.length} record{filteredArchives.length === 1 ? "" : "s"}</span><button type="button" className={archiveFiltersOpen ? "active" : ""} onClick={() => setArchiveFiltersOpen((open) => !open)}>Filter</button></div></div>
         {archiveFiltersOpen && <div className="archive-filters"><label>Forecast date<input type="date" value={archiveDateFilter} onChange={(event) => setArchiveDateFilter(event.target.value)} /></label><label>Status<select value={archiveStatusFilter} onChange={(event) => setArchiveStatusFilter(event.target.value as "all" | SavedForecast["status"])}><option value="all">All statuses</option><option value="submitted">Submitted</option><option value="verified">Verified</option><option value="revised">Revised</option><option value="draft">Draft</option></select></label><label>Search conditions<input value={archiveSearch} onChange={(event) => setArchiveSearch(event.target.value)} placeholder="storms, clear…" /></label><button type="button" onClick={() => { setArchiveDateFilter(""); setArchiveStatusFilter("all"); setArchiveSearch(""); }}>Clear</button></div>}
         <section className="record-calendar" aria-label="Forecast record dates"><div className="record-calendar-heading"><div><strong>{new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric", timeZone: "America/New_York" }).format(new Date(`${recordWindowStart}T12:00:00`))}</strong><small>Forecast target dates</small></div><div><button type="button" aria-label="Previous seven days" onClick={() => setRecordWindowStart(addDays(new Date(`${recordWindowStart}T12:00:00`), -7))}>←</button><button type="button" aria-label="Next seven days" onClick={() => setRecordWindowStart(addDays(new Date(`${recordWindowStart}T12:00:00`), 7))}>→</button></div></div><div className="record-calendar-days">{recordWindowDates.map((targetDate) => { const archive = archiveForDate(targetDate); const verification = archive ? automaticVerifications[archive.id] : null; return <button type="button" key={targetDate} className={`${archive?.id === selectedArchiveId ? "active " : ""}${archive ? "has-record" : ""}`} onClick={() => archive && setSelectedArchiveId(archive.id)} disabled={!archive}><span>{new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: "America/New_York" }).format(new Date(`${targetDate}T12:00:00`))}</span><strong>{new Intl.DateTimeFormat("en-US", { day: "numeric", timeZone: "America/New_York" }).format(new Date(`${targetDate}T12:00:00`))}</strong>{archive ? <small>H {displayForecastTemperature(archive.day.high)} · L {displayForecastTemperature(archive.night.low)}<br />PoP {displayForecastChance(archive.day.rainChance)}/{displayForecastChance(archive.night.rainChance)}<br />{verification?.dayScore !== null && verification?.dayScore !== undefined ? `Score ${verification.dayScore}%` : "Unscored"}</small> : <small>No forecast</small>}</button>; })}</div></section>
@@ -2898,6 +2915,7 @@ export default function Home() {
         <section className="submission-evidence"><header><h3>Submission evidence</h3><p>Conditions and guidance captured when this forecast was submitted.</p></header><div><article><span>NWS observation at submission</span><small>{readableEvidence(selectedArchive.evidence.observation)}</small></article><article><span>NWS forecast at submission</span><small>{readableEvidence(selectedArchive.evidence.forecast)}</small></article><article><span>Alerts at submission</span><small>{readableEvidence(selectedArchive.evidence.alerts)}</small></article></div></section><section className="saved-references"><h3>Attached reference data</h3><p>Saved views from the forecast workspace. Open source details only when you need the raw record.</p>{selectedReferences.length ? selectedReferences.map(({ reference, periods }) => <article key={reference.id}><strong>{periods.join(" + ")} · {reference.label}</strong><ArchivedReferencePreview reference={reference} /></article>) : <p className="empty">No reference sources were attached to this older record.</p>}</section></div><aside className="history"><h3>Forecast history</h3><p>Open a saved forecast and its captured evidence. Right-click a record for actions.</p>{filteredArchives.map((archive) => { const verification = automaticVerifications[archive.id]; const dayScore = verification?.dayScore; const nightScore = verification?.nightScore; return <button key={archive.id} className={archive.id === selectedArchiveId ? "active" : ""} onClick={() => setSelectedArchiveId(archive.id)} onContextMenu={(event) => { event.preventDefault(); setArchiveMenuId(archive.id); setArchiveMenuPosition({ left: event.clientX, top: event.clientY }); }}>Forecast: {forecastTargetTitle(archive.targetDate)}<div className="archive-score-bars"><span><i style={{ width: `${dayScore ?? 0}%` }} /></span><small>Day {dayScore ?? "pending"}</small><span><i style={{ width: `${nightScore ?? 0}%` }} /></span><small>Night {nightScore ?? "pending"}</small></div><small>{forecastAuthorLabel(archive, profiles, session.user.id)} · V{archive.versionNumber ?? 1} · {archive.status}</small></button>})}{filteredArchives.length === 0 && <p className="empty">No forecasts match these filters.</p>}<button onClick={() => setSelectedArchiveId(null)}>Example · Jul 13<small>Sample verification layout</small></button></aside></div></>
         : <div className="verification-grid"><div><div className="section-heading"><div><h2>Verification · Monday, July 13</h2><p>Example forecast · Asheville Regional Airport</p></div><div className="verification-score"><strong>3 / 4</strong><span>metrics verified</span></div></div><h3>Day · 7 AM–7 PM</h3><table><thead><tr><th>Metric</th><th>Your forecast</th><th>NBM</th><th>Observed</th></tr></thead><tbody><tr><td>High temperature</td><td>85°F</td><td>83°F</td><td>84°F</td></tr><tr><td>Rain chance</td><td>70%</td><td>62%</td><td>Rain observed</td></tr><tr><td>Rain timing</td><td>4–7 PM</td><td>3–8 PM</td><td>5:12 PM</td></tr><tr><td>Thunderstorm risk</td><td>Scattered</td><td>Possible</td><td>One storm nearby</td></tr></tbody></table><div className="verification-notes"><div><span>Temperature error</span><strong>1°F</strong><small>Your forecast was closer</small></div><div><span>Timing error</span><strong>0:12</strong><small>Rain began 12 min later</small></div><div><span>Reflection</span><strong>Good call</strong><small>Storm coverage was limited</small></div></div></div><aside className="history"><h3>Forecast history</h3><p>Save a forecast to create an archive here.</p>{filteredArchives.map((archive) => <button key={archive.id} onClick={() => setSelectedArchiveId(archive.id)}>Forecast: {forecastTargetTitle(archive.targetDate)}<small>{archiveSubmissionTitle(archive)} · Day + night</small></button>)}</aside></div>}
       </section>}
+      {activeSection === "verify" && session && verifyTab === "scenarios" && <section className="workspace-card case-library-preview"><div className="case-library-heading"><div><p className="eyebrow">Verify</p><h2>Historical scenarios</h2><p>Forecast a real past event. The target date has already happened, so submitting grades it immediately.</p></div></div>{!scenarios.length && <p className="empty">No scenarios are published yet.</p>}<div className="case-library-grid">{scenarios.map((scenario) => { const attempts = archives.filter((archive) => archive.scenarioId === scenario.id); return <article key={scenario.id}><span className="case-library-category">{scenario.category ?? "Case study"}</span><h3>{scenario.title}</h3><small>{new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" }).format(new Date(`${scenario.event_date}T12:00:00Z`))}</small><p>{scenario.summary}</p>{scenario.reference_links.length > 0 && <><strong>Reference data</strong><ul>{scenario.reference_links.map((link) => <li key={link.label}>{link.label}{link.detail ? ` — ${link.detail}` : ""}{link.url && <> · <a href={link.url} target="_blank" rel="noreferrer">Open</a></>}</li>)}</ul></>}{scenario.reference_notes && <p className="case-library-note">{scenario.reference_notes}</p>}<div className="settings-actions"><button type="button" onClick={() => startScenario(scenario)}>Start scenario</button>{canManageActiveClassroom && <button type="button" onClick={() => assignScenarioToClass(scenario)}>Assign to class</button>}</div>{attempts.length > 0 && <div className="scenario-attempts"><strong>Your attempts</strong>{attempts.map((attempt) => { const verification = automaticVerifications[attempt.id]; return <button type="button" key={attempt.id} onClick={() => { setSelectedArchiveId(attempt.id); setVerifyTab("records"); }}>{forecastTargetTitle(attempt.targetDate)}<small>{verification?.dayScore !== null && verification?.dayScore !== undefined ? `Day score ${verification.dayScore}%` : "Unscored"}</small></button>; })}</div>}</article>; })}</div>{scenarioMessage && <p className="control-message" role="status">{scenarioMessage}</p>}</section>}
       {archiveMenu && <div className="tab-menu" style={{ left: archiveMenuPosition.left, top: archiveMenuPosition.top }}><strong>{archiveVersionTitle(archiveMenu)}</strong><small>{archiveMenu.status === "draft" ? "Draft records may be permanently removed." : archiveMenu.runId ? "Withdrawal removes this entire forecast run from your working archive while retaining an audit record." : "Withdrawal removes this submission from your working archive while retaining an audit record."}</small><div><button type="button" onClick={() => { setSelectedArchiveId(archiveMenu.id); setArchiveMenuId(null); setActiveSection("verify"); }}>Open</button><button type="button" onClick={() => reviseArchive(archiveMenu)}>Revise</button></div><button type="button" onClick={() => requestArchiveRemoval(archiveMenu)}>{archiveMenu.status === "draft" ? "Delete draft" : archiveMenu.runId ? "Withdraw forecast run" : "Withdraw submission"}</button></div>}
       {pendingArchiveRemoval && <div className="archive-confirmation" role="alertdialog" aria-modal="true" aria-labelledby="archive-confirmation-title"><div><p className="eyebrow">Confirm archive action</p><h2 id="archive-confirmation-title">{pendingArchiveRemoval.status === "draft" ? "Delete this draft?" : "Withdraw this forecast?"}</h2><p>{pendingArchiveRemoval.status === "draft" ? "This draft will be permanently deleted from your archive." : "This forecast will be hidden from your working archive and excluded from grading. Its protected audit record remains available to administrators."}</p><small>{forecastTargetTitle(pendingArchiveRemoval.targetDate)} · V{pendingArchiveRemoval.versionNumber}</small><div><button type="button" onClick={() => setPendingArchiveRemovalId(null)}>Cancel</button><button type="button" className="danger" onClick={() => { if (pendingArchiveRemoval.status === "draft") deleteArchive(pendingArchiveRemoval); else withdrawArchive(pendingArchiveRemoval); setPendingArchiveRemovalId(null); }}>{pendingArchiveRemoval.status === "draft" ? "Delete draft" : "Withdraw forecast"}</button></div></div></div>}
       {activeSection === "control" && hasAcademicReviewAccess && !hasControlAccess && activeWorkspace && <section className="workspace-card"><AcademicReviewDesk workspace={activeWorkspace} roster={academicRoster} onReviewMember={setReviewTarget} message={academicMessage} /></section>}
