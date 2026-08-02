@@ -9,16 +9,35 @@ export type ForecastPeriodActual = {
   complete: boolean;
 };
 
+export type AutomaticScoringConfig = {
+  temperatureWeight: number;
+  temperaturePenaltyPerDegree: number;
+  precipitationWeight: number;
+  precipitationThresholdPercent: number;
+};
+
+// Kept in sync with the seed row for site_content key "hq.algorithms" (see
+// supabase/migrations/20260802160000_seed_algorithm_settings.sql) — this is the fallback used if
+// that row is ever missing, not a second source of truth to edit independently of it.
+export const defaultAutomaticScoringConfig: AutomaticScoringConfig = {
+  temperatureWeight: 70,
+  temperaturePenaltyPerDegree: 10,
+  precipitationWeight: 30,
+  precipitationThresholdPercent: 50,
+};
+
 /**
- * Current transparent scoring rule: temperature accuracy supplies 70 points
- * and the precipitation-occurrence call supplies 30. Keep this pure so the
+ * Transparent scoring rule, editable at HQ > Algorithms: temperature accuracy supplies
+ * `temperatureWeight` points, losing `temperaturePenaltyPerDegree` per degree F of error, and the
+ * precipitation-occurrence call supplies `precipitationWeight` points, all-or-nothing, based on
+ * whether the forecast's rain chance crossed `precipitationThresholdPercent`. Keep this pure so the
  * same input creates the same score whether it came from NWS or owned sensors.
  */
-export function automaticForecastScore(forecastTemperature: string, rainChance: string, actual: ForecastPeriodActual, useHigh: boolean) {
+export function automaticForecastScore(forecastTemperature: string, rainChance: string, actual: ForecastPeriodActual, useHigh: boolean, config: AutomaticScoringConfig = defaultAutomaticScoringConfig) {
   const predictedTemperature = Number.parseFloat(forecastTemperature);
   const observedTemperature = useHigh ? actual.highF : actual.lowF;
   if (!actual.observationCount || !Number.isFinite(predictedTemperature) || observedTemperature === null) return null;
-  const temperaturePoints = Math.max(0, 70 - Math.abs(predictedTemperature - observedTemperature) * 10);
-  const precipitationPoints = (Number.parseFloat(rainChance) >= 50) === actual.precipitationObserved ? 30 : 0;
+  const temperaturePoints = Math.max(0, config.temperatureWeight - Math.abs(predictedTemperature - observedTemperature) * config.temperaturePenaltyPerDegree);
+  const precipitationPoints = (Number.parseFloat(rainChance) >= config.precipitationThresholdPercent) === actual.precipitationObserved ? config.precipitationWeight : 0;
   return Math.round(temperaturePoints + precipitationPoints);
 }

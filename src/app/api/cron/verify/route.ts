@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { defaultWeatherDeskLocation, weatherDeskLocations } from "@/lib/locations";
-import { automaticForecastScore, type ForecastPeriodActual } from "@/lib/forecast-verification";
+import { automaticForecastScore, defaultAutomaticScoringConfig, type AutomaticScoringConfig, type ForecastPeriodActual } from "@/lib/forecast-verification";
 
 type Period = { id: string; valid_date: string; period: "day" | "night"; forecast_data: { highLow?: string; rainChance?: string } };
 type Run = { id: string; location_name?: string | null; forecast_periods: Period[] };
@@ -12,6 +12,10 @@ export async function GET(request: NextRequest) {
   if (!supabaseUrl || !serviceKey) return NextResponse.json({ error: "Scheduler storage is not configured." }, { status: 500 });
   const headers = { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" };
   try {
+    const scoringConfigResponse = await fetch(`${supabaseUrl}/rest/v1/site_content?select=value&key=eq.hq.algorithms`, { headers, cache: "no-store" });
+    const scoringConfigRow = scoringConfigResponse.ok ? (await scoringConfigResponse.json() as { value: Partial<AutomaticScoringConfig> }[])[0] : undefined;
+    const scoringConfig: AutomaticScoringConfig = { ...defaultAutomaticScoringConfig, ...scoringConfigRow?.value };
+
     const runsResponse = await fetch(`${supabaseUrl}/rest/v1/forecast_runs?select=id,location_name,forecast_periods(id,valid_date,period,forecast_data)&status=eq.submitted`, { headers, cache: "no-store" });
     if (!runsResponse.ok) throw new Error("Unable to load submitted forecast runs.");
     const runs = await runsResponse.json() as Run[];
@@ -32,8 +36,8 @@ export async function GET(request: NextRequest) {
       for (const period of run.forecast_periods) {
         const actual = actuals.get(`${period.valid_date}:${location.id}`)?.[period.period];
         if (!actual) { allComplete = false; allSavedWithScores = false; continue; }
-        const automaticScore = automaticForecastScore(period.forecast_data.highLow ?? "", period.forecast_data.rainChance ?? "", actual, period.period === "day");
-        const response = await fetch(`${supabaseUrl}/rest/v1/forecast_verifications?on_conflict=forecast_period_id`, { method: "POST", headers, body: JSON.stringify({ forecast_period_id: period.id, observed_data: actual, score_data: { automaticScore, preliminary: !actual.complete, method: "temperature (70) + precipitation occurrence (30)", automatedAt: new Date().toISOString() } }) });
+        const automaticScore = automaticForecastScore(period.forecast_data.highLow ?? "", period.forecast_data.rainChance ?? "", actual, period.period === "day", scoringConfig);
+        const response = await fetch(`${supabaseUrl}/rest/v1/forecast_verifications?on_conflict=forecast_period_id`, { method: "POST", headers, body: JSON.stringify({ forecast_period_id: period.id, observed_data: actual, score_data: { automaticScore, preliminary: !actual.complete, method: `temperature (${scoringConfig.temperatureWeight}) + precipitation occurrence (${scoringConfig.precipitationWeight})`, automatedAt: new Date().toISOString() } }) });
         if (response.ok) saved += 1;
         else allSavedWithScores = false;
         if (!actual.complete || automaticScore === null) { allComplete = false; allSavedWithScores = false; }
