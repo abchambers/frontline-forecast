@@ -1033,7 +1033,7 @@ function ClassroomAssignmentDesk(props: { assignments: ClassroomAssignment[]; su
 } */
 
 export default function Home() {
-  const [dataPanel, setDataPanel] = useState<DataPanel>("nbm");
+  const [dataPanel, setDataPanel] = useState<DataPanel>("alerts");
   const [activeSection, setActiveSection] = useState<WorkspaceSection>(() => {
     if (typeof window === "undefined") return "dashboard";
     const params = new URLSearchParams(window.location.search);
@@ -2722,14 +2722,14 @@ export default function Home() {
       {homepageContent.showReferences && <section className="data-desk">
         <div className="section-heading data-desk-heading"><div><h2>{homepageContent.referenceTitle}</h2><p>{homepageContent.referenceCaption}</p></div></div>
         <div className="tabs" role="tablist" aria-label="Forecast data sources">
-          <button className={dataPanel === "nbm" ? "active" : ""} onClick={() => setDataPanel("nbm")}>NBM full text</button>
+          <button className={dataPanel === "alerts" ? "active" : ""} onClick={() => setDataPanel("alerts")}>Warnings and statements</button>
           <button className={dataPanel === "afd" ? "active" : ""} onClick={() => setDataPanel("afd")}>Forecast discussion</button>
           <button className={dataPanel === "mcd" ? "active" : ""} onClick={() => setDataPanel("mcd")}>Mesoscale discussions</button>
-          <button className={dataPanel === "alerts" ? "active" : ""} onClick={() => setDataPanel("alerts")}>Warnings and statements</button>
+          <button className={dataPanel === "nbm" ? "active" : ""} onClick={() => setDataPanel("nbm")}>NBM full text</button>
           <button className={dataPanel === "sounding" ? "active" : ""} onClick={() => setDataPanel("sounding")}>Sounding</button>
-          <button className={dataPanel === "models" ? "active" : ""} onClick={() => setDataPanel("models")}>Other models</button>
-          <button className={dataPanel === "model-radar" ? "active" : ""} onClick={() => setDataPanel("model-radar")}>Model reflectivity</button>
+          <button className={dataPanel === "models" ? "active" : ""} onClick={() => setDataPanel("models")}>Model data</button>
           <button className={dataPanel === "ensembles" ? "active" : ""} onClick={() => setDataPanel("ensembles")}>Ensembles</button>
+          <button className={dataPanel === "model-radar" ? "active" : ""} onClick={() => setDataPanel("model-radar")}>Model reflectivity</button>
           <button className={dataPanel === "model-sounding" ? "active" : ""} onClick={() => setDataPanel("model-sounding")}>Model sounding</button>
         </div>
         {dataPanel === "nbm" && <section className="source-bulletin"><div className="model-guidance-heading"><div><strong>National Blend of Models bulletin</strong><span>Full NBM source text for {selectedLocation.name} forecast analysis</span></div><small>{nbmText ? "Latest bulletin loaded" : nbmStatus}</small></div><details><summary>Open full NBM bulletin</summary><pre className="model-text">{nbmText || nbmStatus}</pre></details></section>}
