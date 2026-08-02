@@ -1014,6 +1014,10 @@ export default function Home() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [passwordMessage, setPasswordMessage] = useState("");
   const [passwordBusy, setPasswordBusy] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [deleteMessage, setDeleteMessage] = useState("");
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [exportMessage, setExportMessage] = useState("");
   const [saveMessage, setSaveMessage] = useState("");
   const [workspaceNotice, setWorkspaceNotice] = useState<{ message: string; targetDate?: string } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -2246,6 +2250,54 @@ export default function Home() {
     setPasswordMessage("Password updated.");
   }
 
+  async function exportMyData() {
+    if (!session || !supabaseUrl || !supabaseKey) return;
+    setExportMessage("Preparing your data…");
+    const headers = { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` };
+    try {
+      const [profileResponse, runsResponse, reviewsResponse] = await Promise.all([
+        fetch(`${supabaseUrl}/rest/v1/profiles?id=eq.${session.user.id}&select=*`, { headers }),
+        fetch(`${supabaseUrl}/rest/v1/forecast_runs?user_id=eq.${session.user.id}&select=*,forecast_periods(*)`, { headers }),
+        fetch(`${supabaseUrl}/rest/v1/forecast_reviews?select=*`, { headers }),
+      ]);
+      if (!profileResponse.ok || !runsResponse.ok) throw new Error("Your data could not be collected.");
+      const [profile, forecastRuns, forecastReviews] = await Promise.all([
+        profileResponse.json(),
+        runsResponse.json(),
+        reviewsResponse.ok ? reviewsResponse.json() : [],
+      ]);
+      const payload = { exportedAt: new Date().toISOString(), profile: profile[0] ?? null, forecastRuns, forecastReviews };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `frontline-forecast-data-${new Date().toISOString().slice(0, 10)}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      setExportMessage("Your data export downloaded.");
+    } catch {
+      setExportMessage("Your data could not be exported. Please try again.");
+    }
+  }
+
+  async function deleteAccount() {
+    if (!session || !supabaseUrl || !supabaseKey) return;
+    if (deleteConfirmText.trim().toUpperCase() !== "DELETE") { setDeleteMessage('Type "DELETE" to confirm.'); return; }
+    setDeleteBusy(true);
+    setDeleteMessage("Deleting your account…");
+    try {
+      const response = await fetch("/api/account/delete", { method: "POST", headers: { Authorization: `Bearer ${session.access_token}` } });
+      const body = await response.json().catch(() => null) as { error?: string } | null;
+      if (!response.ok) { setDeleteMessage(body?.error || "Your account could not be deleted."); setDeleteBusy(false); return; }
+      window.localStorage.removeItem(sessionStorageKey);
+      window.sessionStorage.removeItem(sessionStorageKey);
+      setSession(null);
+      setAuthMessage("Your account has been deleted.");
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
   async function saveProfileDetails(profile: Profile, fields: Pick<Profile, "display_name" | "person_type" | "employee_id" | "student_id" | "title">) {
     if (!session || !supabaseUrl || !supabaseKey) return;
     setProfileMessage("Saving profile…");
@@ -2444,6 +2496,7 @@ export default function Home() {
   }
 
   return (
+    <>
     <main className={`${radarExpanded ? "app radar-expanded" : "app"} desk-${activeWorkspace?.kind ?? "public"}`}>
       <header className="header">
         <div className="brand-lockup"><span className="theme-brand-mark" aria-hidden="true"><img className="brand-mark-light" src="/brand/frontline-forecast-logo-light.svg" alt="" /><img className="brand-mark-dark" src="/brand/frontline-forecast-logo-dark.svg" alt="" /></span><div><strong className="brand-name">Frontline Forecast</strong><p className="eyebrow" data-hq-content="brand.tagline">Human-first forecasting workspace</p></div>{session && activeSchoolBranding && <div className="school-brand-lockup" aria-label={`${activeSchoolBranding.school_name || activeWorkspace.label} school workspace`}><span aria-hidden="true">×</span>{supabaseUrl && activeSchoolLogoPath && <img src={schoolLogoUrl(supabaseUrl, activeSchoolLogoPath)} alt={activeSchoolBranding.logo_alt || `${activeSchoolBranding.school_name || activeWorkspace.label} logo`} />}<strong>{activeSchoolBranding.school_name || activeWorkspace.label}</strong></div>}</div>
@@ -2596,10 +2649,14 @@ export default function Home() {
       {activeSection === "control" && session && <section className="workspace-card control-summary-card"><div className="section-heading"><div><p className="eyebrow">Account</p><h2>Your desk defaults</h2><p>Choose a card to change that setting.</p></div></div><div className="control-status-grid"><button type="button" onClick={() => setDefaultForecastDays((days) => days === 1 ? 3 : days === 3 ? 7 : 1)}><span>Forecasting</span><strong>{defaultForecastDays}-day default</strong><small>Choose the horizon for a new worksheet.</small></button><button type="button" onClick={() => setTheme((value) => value === "light" ? "dark" : "light")}><span>Appearance</span><strong>{theme === "light" ? "Light mode" : "Dark mode"}</strong><small>Switch the interface theme.</small></button><button type="button" onClick={() => { const index = weatherDeskLocations.findIndex((location) => location.id === defaultLocationId); setDefaultLocationId(weatherDeskLocations[(index + 1) % weatherDeskLocations.length].id); }}><span>Default location</span><strong>{weatherDeskLocation(defaultLocationId).name}</strong><small>Choose the location a new desk opens with.</small></button></div></section>}
       {activeSection === "control" && session && <section className="workspace-card control-center"><div className="section-heading"><div><p className="eyebrow">Account</p><h2>Your settings</h2><p>Set the defaults for how Frontline Forecast opens.</p></div><span>Account</span></div><div className="control-layout"><section className="control-panel"><header><p className="eyebrow">Personal settings</p><h3>Your defaults</h3><p>Weather symbols save to your account; other choices stay with this browser.</p></header><div className="settings-grid"><label>Default location<select value={defaultLocationId} onChange={(event) => setDefaultLocationId(weatherDeskLocation(event.target.value).id)}>{weatherDeskLocations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}</select></label><label>New forecast horizon<select value={defaultForecastDays} onChange={(event) => setDefaultForecastDays(Number(event.target.value) as 1 | 3 | 7)}><option value={1}>1 day</option><option value={3}>3 days</option><option value={7}>7 days</option></select></label><label>Dark mode<select value={theme} onChange={(event) => setTheme(event.target.value as "light" | "dark")}><option value="light">Light mode</option><option value="dark">Dark mode</option></select></label><label>Weather symbols<select value={weatherIconStyle} onChange={(event) => saveWeatherIconStyle(event.target.value as WeatherIconStyle)}><option value="traditional">Traditional</option><option value="minimal">Minimal</option></select><small>Traditional is the public default. Your preference follows your account.</small></label></div><div className="settings-actions"><button type="button" onClick={() => { setLocationId(defaultLocationId); setActiveSection("dashboard"); setControlMessage("Opened your default weather view."); }}>Open weather</button><button type="button" onClick={() => { setDefaultLocationId(defaultWeatherDeskLocation.id); setDefaultForecastDays(1); setTheme("light"); saveWeatherIconStyle("traditional"); setControlMessage("Personal defaults restored."); }}>Restore defaults</button></div>{controlMessage && <p className="control-message" role="status">{controlMessage}</p>}</section><aside className="control-panel control-delivery"><header><p className="eyebrow">Account</p><h3>Service status</h3><p>Useful account and data status at a glance.</p></header><div className="control-service-list"><div><span>Forecast archive</span><strong>{supabaseUrl && supabaseKey ? "Connected" : "Needs setup"}</strong><small>Your saved forecasts sync through your account.</small></div><div><span>Weather sources</span><strong>{liveWeather ? "Available" : "Checking"}</strong><small>Weather, radar, and model guidance load as needed.</small></div><div><span>Map controls</span><strong>Radar desk</strong><small>Map view, overlays, and opacity are managed in Radar.</small></div></div></aside></div></section>}
       {activeSection === "control" && session && <section className="workspace-card control-panel control-password-card"><header><p className="eyebrow">Account</p><h3>Change password</h3><p>Update the password used to sign in to Frontline Forecast.</p></header><form onSubmit={(event) => { event.preventDefault(); changePassword(); }} className="settings-grid"><label>New password<input type="password" autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="At least 8 characters" /></label><label>Confirm new password<input type="password" autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="Repeat new password" /></label><div className="settings-actions"><button type="submit" disabled={passwordBusy || !newPassword || !confirmPassword}>{passwordBusy ? "Updating…" : "Update password"}</button></div></form>{passwordMessage && <p className="control-message" role="status">{passwordMessage}</p>}</section>}
+      {activeSection === "control" && session && <section className="workspace-card control-panel control-data-card"><header><p className="eyebrow">Account</p><h3>Your data</h3><p>Download a copy of your account, forecasts, and reviews.</p></header><div className="settings-actions"><button type="button" onClick={exportMyData}>Export my data</button></div>{exportMessage && <p className="control-message" role="status">{exportMessage}</p>}</section>}
+      {activeSection === "control" && session && <section className="workspace-card control-panel control-delete-card"><header><p className="eyebrow">Account</p><h3>Delete account</h3><p>Permanently removes your login and profile information. See our <a href="/privacy">Privacy Policy</a> for what happens to coursework tied to a school.</p></header><form onSubmit={(event) => { event.preventDefault(); deleteAccount(); }} className="settings-grid"><label>Type DELETE to confirm<input value={deleteConfirmText} onChange={(event) => setDeleteConfirmText(event.target.value)} placeholder="DELETE" /></label><div className="settings-actions"><button type="submit" className="danger" disabled={deleteBusy || deleteConfirmText.trim().toUpperCase() !== "DELETE"}>{deleteBusy ? "Deleting…" : "Delete my account"}</button></div></form>{deleteMessage && <p className="control-message" role="status">{deleteMessage}</p>}</section>}
       {activeSection === "control" && hasAcademicReviewAccess && reviewTarget && <ClassroomReviewPanel target={reviewTarget} runs={visibleReviewRuns} selectedRun={selectedReviewRun} notes={reviewNotes} comment={reviewComment} manualScore={reviewManualScore} message={reviewMessage} onSelectRun={setSelectedReviewRunId} onCommentChange={setReviewComment} onManualScoreChange={setReviewManualScore} onSave={saveForecastReview} onClose={() => { setReviewTarget(null); setReviewRuns([]); setReviewNotes({}); }} />}
       {activeSection === "control" && hasAcademicReviewAccess && selectedReviewRun && <InstructorRubricCard rubric={reviewRubric} onRubricChange={setReviewRubric} notes={reviewNotes[selectedReviewRun.id] ?? []} onSave={() => saveForecastReview(selectedReviewRun.id)} />}
 
       {activeSection === "verify" && session && selectedArchive && <section className="workspace-card record-actions-card"><div className="record-actions"><div><strong>Archive actions</strong><small>Revisions create a new auditable forecast. Removing a submitted forecast withdraws it from your working archive while retaining its protected history.</small></div><div><button type="button" onClick={() => reviseArchive(selectedArchive)}>Revise forecast</button><button type="button" className="danger" onClick={() => requestArchiveRemoval(selectedArchive)}>{selectedArchive.status === "draft" ? "Delete draft" : "Withdraw forecast"}</button></div></div></section>}
     </main>
+    <footer className="site-footer"><span>© {new Date().getFullYear()} Frontline Forecast</span><nav><a href="/privacy">Privacy Policy</a><a href="/terms">Terms of Service</a></nav></footer>
+    </>
   );
 }
