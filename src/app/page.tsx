@@ -1081,6 +1081,12 @@ export default function Home() {
   const [deleteMessage, setDeleteMessage] = useState("");
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [exportMessage, setExportMessage] = useState("");
+  const [tierNote, setTierNote] = useState("");
+  const [tierRequestBusy, setTierRequestBusy] = useState(false);
+  const [tierRequestMessage, setTierRequestMessage] = useState("");
+  const [pendingTierRequest, setPendingTierRequest] = useState<{ id: string; created_at: string } | null>(null);
+  const [adminTierRequests, setAdminTierRequests] = useState<{ id: string; user_id: string; note: string | null; created_at: string; profiles: { email: string | null; display_name: string | null } | null }[]>([]);
+  const [adminTierMessage, setAdminTierMessage] = useState("");
   const [saveMessage, setSaveMessage] = useState("");
   const [workspaceNotice, setWorkspaceNotice] = useState<{ message: string; targetDate?: string } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1128,6 +1134,10 @@ export default function Home() {
   const [authPassword, setAuthPassword] = useState("");
   const [rememberMe, setRememberMe] = useState(true);
   const [authMessage, setAuthMessage] = useState("");
+  const [forgotPasswordOpen, setForgotPasswordOpen] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotBusy, setForgotBusy] = useState(false);
+  const [forgotMessage, setForgotMessage] = useState("");
   const [loginMenuOpen, setLoginMenuOpen] = useState(false);
   const [publicNavigation, setPublicNavigation] = useState<PublicNavigationItem[]>(defaultPublicNavigation);
   const [workspaceNavigation, setWorkspaceNavigation] = useState<WorkspaceNavigationItem[]>(defaultWorkspaceNavigation);
@@ -1545,6 +1555,7 @@ export default function Home() {
     const accessToken = confirmation.get("access_token");
     const refreshToken = confirmation.get("refresh_token");
     const errorDescription = confirmation.get("error_description");
+    const isRecovery = confirmation.get("type") === "recovery";
     if (errorDescription) {
       setAuthMessage(errorDescription.replaceAll("+", " "));
       setLoginMenuOpen(true);
@@ -1565,7 +1576,13 @@ export default function Home() {
         window.localStorage.removeItem(sessionStorageKey);
         setSession(confirmedSession);
         setLoginMenuOpen(false);
-        setAuthMessage("Email confirmed. You are signed in on this browser.");
+        if (isRecovery) {
+          setActiveSection("control");
+          setPasswordMessage("Reset link verified. Choose a new password below.");
+          setAuthMessage("");
+        } else {
+          setAuthMessage("Email confirmed. You are signed in on this browser.");
+        }
       })
       .catch((error: Error) => {
         if (!active) return;
@@ -2437,6 +2454,48 @@ export default function Home() {
     setPasswordMessage("Password updated.");
   }
 
+  useEffect(() => {
+    if (!session || !supabaseUrl || !supabaseKey || activeSection !== "control") { setPendingTierRequest(null); return; }
+    const headers = { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` };
+    fetch(`${supabaseUrl}/rest/v1/tier_change_requests?select=id,created_at&user_id=eq.${session.user.id}&status=eq.pending&order=created_at.desc&limit=1`, { headers })
+      .then((response) => response.ok ? response.json() : [])
+      .then((rows: { id: string; created_at: string }[]) => setPendingTierRequest(rows[0] ?? null));
+  }, [session, activeSection, supabaseUrl, supabaseKey, tierRequestMessage]);
+
+  useEffect(() => {
+    if (!session || !supabaseUrl || !supabaseKey || activeSection !== "control" || !hasControlAccess) { setAdminTierRequests([]); return; }
+    const headers = { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` };
+    fetch(`${supabaseUrl}/rest/v1/tier_change_requests?select=id,user_id,note,created_at,profiles(email,display_name)&status=eq.pending&order=created_at.asc`, { headers })
+      .then((response) => response.ok ? response.json() : [])
+      .then(setAdminTierRequests);
+  }, [session, activeSection, hasControlAccess, supabaseUrl, supabaseKey, adminTierMessage]);
+
+  async function submitTierRequest() {
+    if (!session || !supabaseUrl || !supabaseKey) return;
+    setTierRequestBusy(true);
+    setTierRequestMessage("Sending request…");
+    const response = await fetch(`${supabaseUrl}/rest/v1/tier_change_requests`, {
+      method: "POST",
+      headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: session.user.id, requested_tier: "paid", note: tierNote.trim() || null }),
+    });
+    setTierRequestBusy(false);
+    if (!response.ok) { setTierRequestMessage("Your request could not be sent. Try again shortly."); return; }
+    setTierNote("");
+    setTierRequestMessage("Request sent — we will follow up by email.");
+  }
+
+  async function resolveTierRequest(requestId: string, approve: boolean) {
+    if (!session || !supabaseUrl || !supabaseKey) return;
+    setAdminTierMessage("Saving…");
+    const response = await fetch(`${supabaseUrl}/rest/v1/rpc/resolve_tier_change_request`, {
+      method: "POST",
+      headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ request_id: requestId, approve }),
+    });
+    setAdminTierMessage(response.ok ? (approve ? "Request approved." : "Request denied.") : "That request could not be resolved.");
+  }
+
   async function exportMyData() {
     if (!session || !supabaseUrl || !supabaseKey) return;
     setExportMessage("Preparing your data…");
@@ -2675,6 +2734,21 @@ export default function Home() {
     setAuthMessage(`Signed in as ${data.user.email}.`);
   }
 
+  async function requestPasswordReset() {
+    if (!supabaseUrl || !supabaseKey) { setForgotMessage("Supabase is not configured yet."); return; }
+    if (!forgotEmail.trim()) { setForgotMessage("Enter the email on your account."); return; }
+    setForgotBusy(true);
+    setForgotMessage("Sending reset link…");
+    const response = await fetch(`${supabaseUrl}/auth/v1/recover?redirect_to=${encodeURIComponent(window.location.origin)}`, {
+      method: "POST",
+      headers: { apikey: supabaseKey, "Content-Type": "application/json" },
+      body: JSON.stringify({ email: forgotEmail.trim() }),
+    });
+    setForgotBusy(false);
+    // Supabase returns 200 whether or not the address has an account, to avoid leaking which emails are registered.
+    setForgotMessage(response.ok ? "If that email has an account, a reset link is on its way." : "The reset link could not be sent. Try again shortly.");
+  }
+
   function selectRadarView(view: RadarMapView) {
     setRadarMapView(view);
     window.requestAnimationFrame(() => document.querySelectorAll<HTMLDetailsElement>(".radar-tools[open]").forEach((controls) => controls.removeAttribute("open")));
@@ -2688,7 +2762,7 @@ export default function Home() {
         <div className="header-meta">
           {session && soleStudentDeskKey && activeWorkspaceKey === soleStudentDeskKey ? <div className="workspace-menu-wrap workspace-menu-wrap-static"><span className="workspace-trigger-static"><strong>{workspaceDeskLabel(activeWorkspace)}</strong></span><button type="button" className="workspace-join-link" onClick={() => setJoinPanelOpen(true)}>Join another class</button></div> : session && <div className="workspace-menu-wrap"><button type="button" className="workspace-trigger" aria-expanded={workspaceMenuOpen} onClick={() => setWorkspaceMenuOpen((open) => !open)}><strong>{workspaceDeskLabel(activeWorkspace)}</strong><i aria-hidden="true">⌄</i></button>{workspaceMenuOpen && <div className="workspace-menu"><strong>Your desks</strong><div>{workspaceContexts.map((workspace) => <button type="button" key={workspace.key} className={workspace.key === activeWorkspaceKey ? "active" : ""} onClick={() => switchWorkspace(workspace)}><strong>{workspaceDeskLabel(workspace)}</strong><span>{workspace.detail}{workspace.role ? ` · ${workspace.role}` : ""}</span></button>)}</div><button type="button" className="workspace-join-action" onClick={() => { setJoinPanelOpen(true); setWorkspaceMenuOpen(false); }}>Join a school or class</button>{workspaceContextStatus && <em>{workspaceContextStatus}</em>}</div>}</div>}
           <div className="location-menu-wrap"><button type="button" className="location-trigger" aria-expanded={locationMenuOpen} onClick={() => setLocationMenuOpen((open) => !open)}><span>Location</span><strong>{selectedLocation.name}</strong><i aria-hidden="true">⌄</i></button>{locationMenuOpen && <div className="location-menu"><strong>Workspace location</strong><small>Radar, observations, model guidance, and new forecasts update together.</small><div>{weatherDeskLocations.map((location) => <button type="button" key={location.id} className={!customLocation && location.id === locationId ? "active" : ""} onClick={() => { setCustomLocation(null); setLocationId(location.id); setLocationMenuOpen(false); }}><strong>{location.name}</strong><span>{location.observationStation} observation · K{location.upperAirStation} upper air</span></button>)}{customLocation && <div className="location-menu-custom-active"><strong>{customLocation.name}</strong><span>{customLocation.observationStation} observation · {customLocation.upperAirStation} upper air</span></div>}</div><div className="location-custom-station"><small>Not on the list? Enter a station ID (e.g. KDFW).</small><div><input value={customStationInput} onChange={(event) => setCustomStationInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") lookupCustomStation(); }} placeholder="Station ID" maxLength={5} /><button type="button" onClick={lookupCustomStation}>Use station</button></div>{customStationStatus && <span className="location-custom-status">{customStationStatus}</span>}{customLocation && <button type="button" className="location-custom-clear" onClick={() => { setCustomLocation(null); setCustomStationStatus(""); }}>Back to preset locations</button>}</div></div>}</div>
-          <div className="header-account"><button type="button" className="theme-toggle" onClick={() => setTheme((value) => value === "light" ? "dark" : "light")}>{theme === "light" ? "Dark mode" : "Light mode"}</button>{session ? <><span>{session.user.email}</span><button type="button" onClick={() => { window.localStorage.removeItem(sessionStorageKey); window.sessionStorage.removeItem(sessionStorageKey); setSession(null); setWeatherIconStyle("traditional"); setPersonalTier("free"); setAuthMessage("Signed out."); }}>Sign out</button></> : <div className="login-menu-wrap"><button type="button" onClick={() => setLoginMenuOpen((open) => !open)}>Log in</button>{loginMenuOpen && <form className="login-menu" onSubmit={(event) => { event.preventDefault(); authenticate(); }}><strong>Frontline Forecast account</strong><input aria-label="Email" type="email" placeholder="Email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} /><input aria-label="Password" type="password" placeholder="Password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} /><label className="remember-me"><input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} /> Remember me on this browser</label><div><button type="submit">Sign in</button></div>{authMessage && <small>{authMessage}</small>}</form>}</div>}</div>
+          <div className="header-account"><button type="button" className="theme-toggle" onClick={() => setTheme((value) => value === "light" ? "dark" : "light")}>{theme === "light" ? "Dark mode" : "Light mode"}</button>{session ? <><span>{session.user.email}</span><button type="button" onClick={() => { window.localStorage.removeItem(sessionStorageKey); window.sessionStorage.removeItem(sessionStorageKey); setSession(null); setWeatherIconStyle("traditional"); setPersonalTier("free"); setAuthMessage("Signed out."); }}>Sign out</button></> : <div className="login-menu-wrap"><button type="button" onClick={() => setLoginMenuOpen((open) => !open)}>Log in</button>{loginMenuOpen && !forgotPasswordOpen && <form className="login-menu" onSubmit={(event) => { event.preventDefault(); authenticate(); }}><strong>Frontline Forecast account</strong><input aria-label="Email" type="email" placeholder="Email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} /><input aria-label="Password" type="password" placeholder="Password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} /><label className="remember-me"><input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} /> Remember me on this browser</label><div><button type="submit">Sign in</button></div><button type="button" className="login-menu-link" onClick={() => { setForgotPasswordOpen(true); setForgotEmail(authEmail); setForgotMessage(""); }}>Forgot password?</button>{authMessage && <small>{authMessage}</small>}</form>}{loginMenuOpen && forgotPasswordOpen && <form className="login-menu" onSubmit={(event) => { event.preventDefault(); requestPasswordReset(); }}><strong>Reset your password</strong><input aria-label="Email" type="email" placeholder="Email" value={forgotEmail} onChange={(event) => setForgotEmail(event.target.value)} /><div><button type="submit" disabled={forgotBusy}>{forgotBusy ? "Sending…" : "Send reset link"}</button></div><button type="button" className="login-menu-link" onClick={() => { setForgotPasswordOpen(false); setForgotMessage(""); }}>Back to sign in</button>{forgotMessage && <small>{forgotMessage}</small>}</form>}</div>}</div>
         </div>
       </header>
 
@@ -2845,6 +2919,8 @@ export default function Home() {
         {classroomHubTab === "leaderboard" && <ClassroomLeaderboard assignments={classroomAssignments} submissions={assignmentSubmissions} roster={academicRoster} currentUserId={session.user.id} />}
       </section>}
       {activeSection === "control" && session && <section className="workspace-card control-summary-card"><div className="section-heading"><div><p className="eyebrow">Account</p><h2>Your desk defaults</h2><p>Choose a card to change that setting.</p></div></div><div className="control-status-grid"><button type="button" onClick={() => setDefaultForecastDays((days) => days === 1 ? 3 : days === 3 ? 7 : 1)}><span>Forecasting</span><strong>{defaultForecastDays}-day default</strong><small>Choose the horizon for a new worksheet.</small></button><button type="button" onClick={() => setTheme((value) => value === "light" ? "dark" : "light")}><span>Appearance</span><strong>{theme === "light" ? "Light mode" : "Dark mode"}</strong><small>Switch the interface theme.</small></button><button type="button" onClick={() => { const index = weatherDeskLocations.findIndex((location) => location.id === defaultLocationId); setDefaultLocationId(weatherDeskLocations[(index + 1) % weatherDeskLocations.length].id); }}><span>Default location</span><strong>{weatherDeskLocation(defaultLocationId).name}</strong><small>Choose the location a new desk opens with.</small></button></div></section>}
+      {activeSection === "control" && session && <section className="workspace-card control-panel plan-card"><header><p className="eyebrow">Account</p><h3>Your plan</h3><p>Model data, ensembles, and simulated reflectivity are part of Personal+. Live observations, radar, and the forecast workspace are on every plan.</p></header><div className="plan-status"><b className={hasSchoolMembership || personalTier === "paid" ? "status-ready" : "status-pending"}>{hasSchoolMembership ? "Included via school" : personalTier === "paid" ? "Personal+" : "Free"}</b>{hasSchoolMembership ? <span>Your school or class workspace already includes Personal+ features — no request needed.</span> : personalTier === "paid" ? <span>You have Personal+ access on this account.</span> : <span>Pricing is still being finalized while Frontline Forecast is pre-launch. Request access below and we will follow up by email.</span>}</div>{!hasSchoolMembership && personalTier !== "paid" && (pendingTierRequest ? <p className="control-message" role="status">Request pending review since {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(pendingTierRequest.created_at))}.</p> : <form onSubmit={(event) => { event.preventDefault(); submitTierRequest(); }} className="settings-grid"><label>Note (optional)<textarea value={tierNote} onChange={(event) => setTierNote(event.target.value)} placeholder="Anything we should know?" rows={2} /></label><div className="settings-actions"><button type="submit" disabled={tierRequestBusy}>{tierRequestBusy ? "Sending…" : "Request Personal+ access"}</button></div></form>)}<div className="settings-actions"><button type="button" onClick={() => setJoinPanelOpen(true)}>Have a school or class code?</button></div>{tierRequestMessage && <p className="control-message" role="status">{tierRequestMessage}</p>}</section>}
+      {activeSection === "control" && session && hasControlAccess && <section className="workspace-card control-panel"><header><p className="eyebrow">Account</p><h3>Tier requests</h3><p>Approve or deny Personal+ access until billing is wired up.</p></header><div className="access-roster-list">{adminTierRequests.map((request) => <div key={request.id}><span><strong>{request.profiles?.display_name || request.profiles?.email || request.user_id}</strong><small>{request.note || "No note"} · {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(request.created_at))}</small></span><button type="button" onClick={() => resolveTierRequest(request.id, true)}>Approve</button><button type="button" onClick={() => resolveTierRequest(request.id, false)}>Deny</button></div>)}</div>{!adminTierRequests.length && <p className="empty">No pending tier requests.</p>}{adminTierMessage && <p className="control-message" role="status">{adminTierMessage}</p>}</section>}
       {activeSection === "control" && session && <section className="workspace-card control-center"><div className="section-heading"><div><p className="eyebrow">Account</p><h2>Your settings</h2><p>Set the defaults for how Frontline Forecast opens.</p></div><span>Account</span></div><div className="control-layout"><section className="control-panel"><header><p className="eyebrow">Personal settings</p><h3>Your defaults</h3><p>Weather symbols save to your account; other choices stay with this browser.</p></header><div className="settings-grid"><label>Default location<select value={defaultLocationId} onChange={(event) => setDefaultLocationId(weatherDeskLocation(event.target.value).id)}>{weatherDeskLocations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}</select></label><label>New forecast horizon<select value={defaultForecastDays} onChange={(event) => setDefaultForecastDays(Number(event.target.value) as 1 | 3 | 7)}><option value={1}>1 day</option><option value={3}>3 days</option><option value={7}>7 days</option></select></label><label>Dark mode<select value={theme} onChange={(event) => setTheme(event.target.value as "light" | "dark")}><option value="light">Light mode</option><option value="dark">Dark mode</option></select></label><label>Weather symbols<select value={weatherIconStyle} onChange={(event) => saveWeatherIconStyle(event.target.value as WeatherIconStyle)}><option value="traditional">Traditional</option><option value="minimal">Minimal</option></select><small>Traditional is the public default. Your preference follows your account.</small></label></div><div className="settings-actions"><button type="button" onClick={() => { setLocationId(defaultLocationId); setActiveSection("dashboard"); setControlMessage("Opened your default weather view."); }}>Open weather</button><button type="button" onClick={() => { setDefaultLocationId(defaultWeatherDeskLocation.id); setDefaultForecastDays(1); setTheme("light"); saveWeatherIconStyle("traditional"); setControlMessage("Personal defaults restored."); }}>Restore defaults</button></div>{controlMessage && <p className="control-message" role="status">{controlMessage}</p>}</section><aside className="control-panel control-delivery"><header><p className="eyebrow">Account</p><h3>Service status</h3><p>Useful account and data status at a glance.</p></header><div className="control-service-list"><div><span>Forecast archive</span><strong>{supabaseUrl && supabaseKey ? "Connected" : "Needs setup"}</strong><small>Your saved forecasts sync through your account.</small></div><div><span>Weather sources</span><strong>{liveWeather ? "Available" : "Checking"}</strong><small>Weather, radar, and model guidance load as needed.</small></div><div><span>Map controls</span><strong>Radar desk</strong><small>Map view, overlays, and opacity are managed in Radar.</small></div></div></aside></div></section>}
       {activeSection === "control" && session && <section className="workspace-card control-panel control-password-card"><header><p className="eyebrow">Account</p><h3>Change password</h3><p>Update the password used to sign in to Frontline Forecast.</p></header><form onSubmit={(event) => { event.preventDefault(); changePassword(); }} className="settings-grid"><label>New password<input type="password" autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="At least 8 characters" /></label><label>Confirm new password<input type="password" autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="Repeat new password" /></label><div className="settings-actions"><button type="submit" disabled={passwordBusy || !newPassword || !confirmPassword}>{passwordBusy ? "Updating…" : "Update password"}</button></div></form>{passwordMessage && <p className="control-message" role="status">{passwordMessage}</p>}</section>}
       {activeSection === "control" && session && <section className="workspace-card control-panel control-data-card"><header><p className="eyebrow">Account</p><h3>Your data</h3><p>Download a copy of your account, forecasts, and reviews.</p></header><div className="settings-actions"><button type="button" onClick={exportMyData}>Export my data</button></div>{exportMessage && <p className="control-message" role="status">{exportMessage}</p>}</section>}
