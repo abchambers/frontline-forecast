@@ -143,11 +143,15 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, weat
         format: "image/png",
         transparent: true,
         version: "1.3.0",
-        // NOAA's NDFD WMS returns fully opaque tiles for this layer regardless of transparent=true
-        // (confirmed: no alpha channel in the response) — blending it at the reflectivity-radar
-        // opacity produces a hazy, illegible wash rather than a see-through overlay. Render it
-        // near-full opacity instead so it reads as the solid color-coded forecast map it is.
-        opacity: Math.max(opacity, 0.92),
+        // NOAA's NDFD WMS returns fully opaque tiles regardless of transparent=true (no alpha
+        // channel), but Leaflet's layer-level opacity still blends the whole raster with the
+        // basemap beneath it correctly — the earlier fix here forced near-full opacity on the
+        // theory that partial opacity couldn't work, which just traded one bug (a washed-out
+        // blend) for a worse one (an opaque wall of color hiding the map entirely). The
+        // ndfd-layer className boosts saturation/contrast so the NWS's fairly pastel palette
+        // still reads clearly at a real, user-controlled opacity.
+        opacity,
+        className: "ndfd-layer",
         maxZoom: 18,
         attribution: 'Forecast maps: <a href="https://digital.weather.gov/staticpages/mapservices.php" target="_blank">NOAA/NWS NDFD</a>',
       }).addTo(mapRef.current);

@@ -1358,6 +1358,15 @@ export default function Home() {
   }, [activeSection, radarLoop]);
 
   useEffect(() => {
+    if (radarMapView !== "satellite") return;
+    // GOES-East imagery updates roughly every 10 minutes, and the CDN occasionally serves a
+    // transiently blank frame during a scan transition — refreshing on an interval both keeps the
+    // picture current and self-heals a bad frame without the user needing to notice and click Refresh.
+    const refreshId = window.setInterval(() => setRadarRefreshToken((value) => value + 1), 300_000);
+    return () => window.clearInterval(refreshId);
+  }, [radarMapView]);
+
+  useEffect(() => {
     if (!radarLoop || !radarPlaying || radarFrames.length < 2) return;
     const playId = window.setInterval(() => setRadarFrameIndex((index) => (index + 1) % radarFrames.length), 650);
     return () => window.clearInterval(playId);
