@@ -135,8 +135,9 @@
 @media (max-width:700px) {
   .header { align-items:flex-start; flex-direction:row; gap:10px; }
   .header > .brand-lockup { min-width:0; }
+  .brand-name { font-size:1.05rem; }
   .school-brand-lockup { margin:6px 0 0; padding-left:0; border-left:0; }
-  .header-meta { align-items:flex-end; flex:0 1 auto; gap:5px; justify-items:end; min-width:0; }
+  .header-meta { align-items:flex-end; flex:0 0 auto; gap:5px; justify-items:end; }
   .location-trigger { max-width:142px; }
   .location-trigger strong { max-width:118px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .header-account { border-top:0; gap:5px; max-width:154px; min-width:0; padding-top:0; }
