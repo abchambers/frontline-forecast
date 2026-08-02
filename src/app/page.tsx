@@ -10,10 +10,9 @@ const RadarMap = dynamic(() => import("./radar-map"), {
   loading: () => <div className="radar-loading">Loading live radar…</div>,
 });
 
-type DataPanel = "nbm" | "afd" | "sounding" | "models" | "maps" | "ensembles" | "model-sounding";
+type DataPanel = "nbm" | "afd" | "mcd" | "sounding" | "models" | "model-radar" | "ensembles" | "model-sounding";
 type GuidanceGroup = "high-res" | "global";
-type RadarMapView = "composite" | "future_reflectivity" | "satellite" | "base" | "precipitation_new" | "clouds_new" | "pressure_new" | "wind_new" | "temp_new" | "ndfd_maxt" | "ndfd_pop12" | "ndfd_windspd";
-type RadarProductMode = "observed" | "future" | "forecast";
+type RadarMapView = "composite" | "future_reflectivity" | "satellite";
 type RadarLegend = { title: string; left: string; middle: string; right: string; unit: string; gradient: string };
 type OpenMeteoModel = "best_match" | "hrrr_conus" | "nbm_conus" | "nam_conus" | "gfs_global" | "ecmwf_ifs" | "icon_global" | "gem_global";
 type WorkspaceSection = "dashboard" | "radar" | "about" | "forecast" | "verify" | "school" | "classroom" | "control";
@@ -21,7 +20,7 @@ type PublicNavigationItem = { id: string; label: string; target: "weather" | "ra
 type WorkspaceNavigationItem = { id: "weather" | "radar" | "about" | "forecast" | "verify" | "control"; label: string; access: "public" | "member" | "staff" | "owner"; enabled: boolean };
 type HomepageContent = { title: string; description: string; primaryAction: string; secondaryAction: string; outlookTitle: string; outlookCaption: string; radarTitle: string; radarCaption: string; referenceTitle: string; referenceCaption: string; showOutlook: boolean; showRadar: boolean; showReferences: boolean };
 type AboutContent = { eyebrow: string; title: string; description: string; principles: { title: string; body: string }[] };
-type ClassroomHubTab = "today" | "assignments" | "outlook" | "progress";
+type ClassroomHubTab = "today" | "assignments" | "outlook" | "progress" | "leaderboard";
 type LiveWeather = {
   location: string;
   observation: { station: string; stationName: string; observedAt: string; description: string; temperatureF: number | null; temperatureSource: "observation" | "forecast estimate"; dewpointF: number | null; windMph: number | null; windDirection: string | null };
@@ -120,7 +119,7 @@ type ClassroomAssignmentSubmission = { id: string; user_id: string; created_at: 
 type ReviewRun = { id: string; user_id: string; created_at: string; status: string; location_name: string | null; assignment_id: string | null; forecast_periods: { id: string; valid_date: string; period: "day" | "night"; forecast_data: PeriodDraft; forecast_verifications: { score_data: { automaticScore?: number | null } | null }[] }[] };
 type ReviewRubric = { accuracy?: number | null; reasoning?: number | null; communication?: number | null };
 type ForecastReview = { id: string; run_id: string; reviewer_id: string; comment: string | null; manual_score: number | null; rubric_scores?: ReviewRubric | null; created_at: string };
-type WorkspacePreferences = { defaultLocationId: string; radarMapView: RadarMapView; radarOpacity: number; showNwsAlerts: boolean; defaultForecastDays: 1 | 3 | 7 };
+type WorkspacePreferences = { defaultLocationId: string; radarMapView: RadarMapView; radarOpacity: number; showNwsAlerts: boolean; showSpcOutlook: boolean; defaultForecastDays: 1 | 3 | 7 };
 
 class ClassroomPanelBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
@@ -241,6 +240,35 @@ const conditionOptions = [
   ["severe-storms", "Severe thunderstorms"], ["windy", "Windy"], ["hot-humid", "Hot and humid"], ["snow", "Snow"], ["sleet", "Sleet"], ["wintry-mix", "Wintry mix"], ["freezing-rain", "Freezing rain"],
 ] as const;
 
+// Concept-preview content only — a real case library would pull archived radar/sounding/model
+// data for each event from the same sources already wired into the app (IEM, SPC, Open-Meteo).
+const historicalCaseStudyPreviews = [
+  {
+    id: "2011-04-27",
+    date: "April 27, 2011",
+    title: "2011 Super Outbreak",
+    category: "Tornado outbreak",
+    summary: "One of the largest and most violent tornado outbreaks on record across the Southeast, including a long-track EF5 through Alabama.",
+    wouldShow: ["Archived NEXRAD reflectivity loop through the event", "The morning SPC outlook and moderate/high-risk mesoscale discussions", "The 12Z sounding showing extreme instability and shear"],
+  },
+  {
+    id: "2021-02-14",
+    date: "February 14–17, 2021",
+    title: "Texas Winter Storm Uri",
+    category: "Winter storm / cold outbreak",
+    summary: "An extended arctic outbreak drove record-low temperatures across Texas and the South, triggering widespread power and water failures.",
+    wouldShow: ["Multi-day surface and upper-air pattern evolution", "NBM and ensemble temperature guidance in the days before onset", "Local Area Forecast Discussions tracking forecaster confidence as the cold built in"],
+  },
+  {
+    id: "2017-08-25",
+    date: "August 25–30, 2017",
+    title: "Hurricane Harvey",
+    category: "Tropical / flooding",
+    summary: "Harvey stalled over southeast Texas after landfall, producing catastrophic, multi-day rainfall totals and flooding.",
+    wouldShow: ["GOES satellite loop of landfall and stall", "Model rainfall-total spread across runs as the stall became apparent", "Observed rainfall vs. forecast guidance, day by day"],
+  },
+] as const;
+
 function conditionLabel(value: string) {
   const legacy: Record<string, string> = { sunny: "Mostly sunny", storms: "Partly cloudy; scattered storms" };
   return conditionOptions.find(([key]) => key === value)?.[1] ?? legacy[value] ?? (value.replace(/[-_]/g, " ") || "—");
@@ -350,18 +378,9 @@ const radarLegends: Record<RadarMapView, RadarLegend | null> = {
   composite: { title: "Base reflectivity", left: "0", middle: "35", right: "70+", unit: "dBZ", gradient: "linear-gradient(90deg,#6fb7ff 0 7%,#3bd8e9 7% 14%,#35ca8a 14% 22%,#36b84d 22% 30%,#a9d337 30% 38%,#efe23a 38% 46%,#ffbf25 46% 54%,#ff8027 54% 62%,#ec3e32 62% 70%,#be1f57 70% 78%,#9b2678 78% 86%,#dbdce5 86% 100%)" },
   future_reflectivity: { title: "HRRR simulated reflectivity", left: "0", middle: "35", right: "70+", unit: "dBZ · forecast", gradient: "linear-gradient(90deg,#6fb7ff 0 7%,#3bd8e9 7% 14%,#35ca8a 14% 22%,#36b84d 22% 30%,#a9d337 30% 38%,#efe23a 38% 46%,#ffbf25 46% 54%,#ff8027 54% 62%,#ec3e32 62% 70%,#be1f57 70% 78%,#9b2678 78% 86%,#dbdce5 86% 100%)" },
   satellite: null,
-  ndfd_maxt: { title: "NDFD maximum temperature", left: "Cooler", middle: "Seasonal", right: "Warmer", unit: "NWS forecast map", gradient: "linear-gradient(90deg,#5543ad 0%,#4a9de0 22%,#66c96b 48%,#f0d544 68%,#f48635 84%,#d84242 100%)" },
-  ndfd_pop12: { title: "NDFD 12-hour precipitation chance", left: "0%", middle: "50%", right: "100%", unit: "NWS forecast map", gradient: "linear-gradient(90deg,#f3f5f6 0%,#8ad7df 25%,#4db8c7 45%,#4bb95d 64%,#e4ce36 82%,#c63d52 100%)" },
-  ndfd_windspd: { title: "NDFD sustained wind speed", left: "Light", middle: "Breezy", right: "Strong", unit: "NWS forecast map", gradient: "linear-gradient(90deg,#c3f0ff 0%,#49bce8 24%,#48c46e 48%,#f0c42f 70%,#e65742 88%,#a72777 100%)" },
-  precipitation_new: { title: "Precipitation intensity", left: "Light", middle: "Moderate", right: "Heavy", unit: "OpenWeather", gradient: "linear-gradient(90deg,#77b7ff 0%,#38c5d5 22%,#38bf68 44%,#e2d42f 65%,#ff8d21 82%,#d7263d 100%)" },
-  clouds_new: { title: "Cloud cover", left: "0%", middle: "50%", right: "100%", unit: "OpenWeather", gradient: "linear-gradient(90deg,#eef5fa 0%,#bfcbd8 35%,#748293 68%,#263544 100%)" },
-  pressure_new: { title: "Surface pressure", left: "Lower", middle: "Typical", right: "Higher", unit: "OpenWeather", gradient: "linear-gradient(90deg,#5061bf 0%,#77b0db 30%,#d9df6e 55%,#e79239 78%,#b33447 100%)" },
-  wind_new: { title: "Wind speed", left: "Light", middle: "Breezy", right: "Strong", unit: "OpenWeather", gradient: "linear-gradient(90deg,#b3ecff 0%,#4ab8f0 24%,#46c76e 48%,#f0c42f 70%,#e65642 88%,#a72777 100%)" },
-  temp_new: { title: "Temperature", left: "Colder", middle: "Mild", right: "Warmer", unit: "OpenWeather", gradient: "linear-gradient(90deg,#5148a8 0%,#4a9de0 22%,#65c86b 48%,#f0d544 68%,#f48635 84%,#d84242 100%)" },
-  base: null,
 };
 
-const radarLegendBands: Record<Exclude<RadarMapView, "base" | "satellite">, { label: string; description: string }[]> = {
+const radarLegendBands: Record<Exclude<RadarMapView, "satellite">, { label: string; description: string }[]> = {
   composite: [
     { label: "0–10", description: "Very light reflectivity: drizzle, insects, or weak echoes." },
     { label: "10–20", description: "Light precipitation or a weak shower." },
@@ -382,21 +401,13 @@ const radarLegendBands: Record<Exclude<RadarMapView, "base" | "satellite">, { la
     { label: "60–70", description: "Severe-intensity simulated core; hail is possible." },
     { label: "70+", description: "Extreme simulated reflectivity — model output, not observed." },
   ],
-  precipitation_new: [{ label: "Low", description: "Lighter precipitation intensity." }, { label: "Mid", description: "Moderate precipitation intensity." }, { label: "High", description: "Heavier precipitation intensity." }],
-  clouds_new: [{ label: "0–25%", description: "Mostly clear sky." }, { label: "25–75%", description: "Partial to broken cloud cover." }, { label: "75–100%", description: "Overcast cloud cover." }],
-  pressure_new: [{ label: "Lower", description: "Lower relative surface pressure." }, { label: "Typical", description: "Typical local pressure range." }, { label: "Higher", description: "Higher relative surface pressure." }],
-  wind_new: [{ label: "Light", description: "Light wind speeds." }, { label: "Breezy", description: "Breezy wind speeds." }, { label: "Strong", description: "Stronger wind speeds." }],
-  temp_new: [{ label: "Cool", description: "Cooler temperatures within the displayed layer." }, { label: "Mild", description: "Middle temperature range." }, { label: "Warm", description: "Warmer temperatures within the displayed layer." }],
-  ndfd_maxt: [{ label: "Cooler", description: "Lower forecast maximum temperatures." }, { label: "Seasonal", description: "Middle forecast maximum temperatures." }, { label: "Warmer", description: "Higher forecast maximum temperatures." }],
-  ndfd_pop12: [{ label: "0–25%", description: "Lower chance of measurable precipitation." }, { label: "25–75%", description: "Meaningful precipitation potential." }, { label: "75–100%", description: "High precipitation chance." }],
-  ndfd_windspd: [{ label: "Light", description: "Lighter forecast sustained winds." }, { label: "Breezy", description: "Breezy forecast sustained winds." }, { label: "Strong", description: "Stronger forecast sustained winds." }],
 };
 
 function RadarLegendStrip({ view }: { view: RadarMapView }) {
   const legend = radarLegends[view];
   const [hoveredBand, setHoveredBand] = useState<{ label: string; description: string } | null>(null);
   if (view === "satellite") return <span className="radar-source-note">GOES-East GeoColor · visible daytime / infrared nighttime · refreshes about every 10 min</span>;
-  if (view === "base" || !legend) return <span className="radar-source-note">Base map · pan and zoom to explore</span>;
+  if (!legend) return <span className="radar-source-note">Base map · pan and zoom to explore</span>;
   const bands = radarLegendBands[view];
   return <div className="radar-legend" aria-label={`${legend.title} color scale`}><span>{legend.title}</span><div className="radar-legend-scale"><i style={{ background: legend.gradient }} />{bands.map((band) => <button type="button" key={band.label} aria-label={`${band.label}: ${band.description}`} onBlur={() => setHoveredBand(null)} onFocus={() => setHoveredBand(band)} onMouseLeave={() => setHoveredBand(null)} onMouseEnter={() => setHoveredBand(band)} />)}</div><div><small>{legend.left}</small><small>{legend.middle}</small><small>{legend.right}</small></div><em>{hoveredBand ? `${hoveredBand.label} · ${hoveredBand.description}` : `${legend.unit} · Hover a color band for guidance`}</em></div>;
 }
@@ -799,6 +810,33 @@ function ClassroomProgress({ assignments, submissions, roster, canManage, curren
   return <section className="classroom-progress"><header><p className="eyebrow">Class progress</p><h3>Roster and review status</h3><p>Open a student to see their submitted assignment days. Class outlooks stay with each assignment.</p></header><div className="classroom-progress-grid"><article><span>Students</span><strong>{students.length}</strong><small>enrolled in this class</small></article><article><span>Assignments</span><strong>{assignments.length}</strong><small>available for review</small></article></div><div className="class-progress-roster">{students.map((student) => { const completed = assignments.filter((assignment) => Boolean(latestFor(assignment.id, student.userId))); return <details key={student.userId}><summary><span><strong>{student.label}</strong><small>{student.email ?? "Student account"}</small></span><b>{completed.length}/{assignments.length} submitted</b></summary><div>{assignments.map((assignment) => { const submission = latestFor(assignment.id, student.userId); return <article key={assignment.id}><header><strong>{assignment.title}</strong><small>{assignmentDates(assignment).map(forecastTargetTitle).join(" · ")}</small></header>{submission ? <div className="assignment-submission-days">{assignmentDates(assignment).map((date) => <ForecastDayMiniCard key={date} date={date} periods={submission.forecast_periods} />)}</div> : <p className="empty">No submission yet.</p>}</article>; })}</div></details>; })}{!students.length && <p className="empty">Add students from Control before creating class work.</p>}</div></section>;
 }
 
+function ClassroomLeaderboard({ assignments, submissions, roster, currentUserId }: { assignments: ClassroomAssignment[]; submissions: ClassroomAssignmentSubmission[]; roster: AcademicRosterMember[]; currentUserId?: string }) {
+  const students = roster.filter((member) => member.role === "student");
+  const latestFor = (assignmentId: string, userId: string) => submissions.filter((submission) => submission.assignment_id === assignmentId && submission.user_id === userId && submission.status !== "withdrawn").sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+  const rows = students.map((student) => {
+    const scores: number[] = [];
+    let submittedCount = 0;
+    assignments.forEach((assignment) => {
+      const submission = latestFor(assignment.id, student.userId);
+      if (submission) submittedCount += 1;
+      const periods = Array.isArray(submission?.forecast_periods) ? submission.forecast_periods : [];
+      periods.forEach((period) => (Array.isArray(period.forecast_verifications) ? period.forecast_verifications : []).forEach((verification) => {
+        const score = verification.score_data?.automaticScore;
+        if (typeof score === "number") scores.push(score);
+      }));
+    });
+    const averageScore = scores.length ? Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length) : null;
+    return { student, averageScore, scoredPeriods: scores.length, submittedCount };
+  });
+  const ranked = rows.filter((row): row is typeof row & { averageScore: number } => row.averageScore !== null).sort((a, b) => b.averageScore - a.averageScore);
+  const unranked = rows.filter((row) => row.averageScore === null);
+  const medal = (rank: number) => (rank === 0 ? "🥇" : rank === 1 ? "🥈" : rank === 2 ? "🥉" : `#${rank + 1}`);
+  return <section className="classroom-leaderboard"><header><p className="eyebrow">Leaderboard</p><h3>Forecast accuracy ranking</h3><p>Ranked by average automatic accuracy score across every scored forecast period this class has submitted.</p></header>
+    {ranked.length ? <ol className="leaderboard-list">{ranked.map((row, index) => <li key={row.student.userId} className={row.student.userId === currentUserId ? "leaderboard-me" : ""}><span className="leaderboard-rank">{medal(index)}</span><span className="leaderboard-name"><strong>{row.student.label}</strong><small>{row.submittedCount}/{assignments.length} submitted · {row.scoredPeriods} period{row.scoredPeriods === 1 ? "" : "s"} scored</small></span><span className="leaderboard-score">{row.averageScore}%</span></li>)}</ol> : <p className="empty">No scored forecasts yet — rankings appear once actuals verify submitted periods.</p>}
+    {unranked.length > 0 && <div className="leaderboard-pending"><strong>Awaiting first score</strong><div>{unranked.map((row) => <span key={row.student.userId}>{row.student.label}</span>)}</div></div>}
+  </section>;
+}
+
 function ClassroomInstructorOverview({ assignment, assignments, submissions, roster, onReviewStudent }: { assignment: ClassroomAssignment | null; assignments: ClassroomAssignment[]; submissions: ClassroomAssignmentSubmission[]; roster: AcademicRosterMember[]; onReviewStudent: (student: AcademicRosterMember) => void }) {
   const students = roster.filter((member) => member.role === "student");
   const latestByStudent = new Map<string, ClassroomAssignmentSubmission>();
@@ -1003,7 +1041,6 @@ export default function Home() {
     return "dashboard";
   });
   const [radarExpanded, setRadarExpanded] = useState(false);
-  const [radarLoop, setRadarLoop] = useState(false);
   const [radarFrames, setRadarFrames] = useState<RadarTimelineFrame[]>([]);
   const [radarFrameIndex, setRadarFrameIndex] = useState(0);
   const [radarPlaying, setRadarPlaying] = useState(false);
@@ -1013,8 +1050,9 @@ export default function Home() {
   const [futureRadarPlaying, setFutureRadarPlaying] = useState(false);
   const [futureRadarStatus, setFutureRadarStatus] = useState("Loading future radar…");
   const [radarMapView, setRadarMapView] = useState<RadarMapView>("composite");
-  const [radarProductMode, setRadarProductMode] = useState<RadarProductMode>("observed");
   const [showNwsAlerts, setShowNwsAlerts] = useState(true);
+  const [showSpcOutlook, setShowSpcOutlook] = useState(false);
+  const [satelliteChannel, setSatelliteChannel] = useState<"geocolor" | "ir" | "wv">("geocolor");
   const [radarOpacity, setRadarOpacity] = useState(72);
   const [radarRefreshToken, setRadarRefreshToken] = useState(0);
   const [radarRecenterToken, setRadarRecenterToken] = useState(0);
@@ -1045,6 +1083,8 @@ export default function Home() {
   const [nbmStatus, setNbmStatus] = useState("Loading latest KAHN NBM bulletin…");
   const [afdText, setAfdText] = useState("");
   const [afdStatus, setAfdStatus] = useState("Loading latest forecast discussion…");
+  const [mcdDiscussions, setMcdDiscussions] = useState<{ id: string; title: string; issuedAt: string | null; imageUrl: string | null; text: string; link: string }[]>([]);
+  const [mcdStatus, setMcdStatus] = useState("Loading latest mesoscale discussions…");
   const [soundingText, setSoundingText] = useState("");
   const [soundingStatus, setSoundingStatus] = useState("Loading latest observed FFC sounding…");
   const [openMeteoGuidance, setOpenMeteoGuidance] = useState<OpenMeteoGuidance | null>(null);
@@ -1133,7 +1173,7 @@ export default function Home() {
   const [classroomHubTab, setClassroomHubTab] = useState<ClassroomHubTab>(() => {
     if (typeof window === "undefined") return "assignments";
     const tab = new URLSearchParams(window.location.search).get("tab");
-    return tab === "today" || tab === "outlook" || tab === "progress" ? tab : "assignments";
+    return tab === "today" || tab === "outlook" || tab === "progress" || tab === "leaderboard" ? tab : "assignments";
   });
   const [publishInstructorForecast, setPublishInstructorForecast] = useState(false);
   const [revisionParentRunId, setRevisionParentRunId] = useState<string | null>(null);
@@ -1295,12 +1335,12 @@ export default function Home() {
         setDefaultLocationId(nextDefault);
         if (!storedLocation) setLocationId(nextDefault);
       }
-      if (settings.radarMapView && ["composite", "future_reflectivity", "satellite", "base", "precipitation_new", "clouds_new", "pressure_new", "wind_new", "temp_new", "ndfd_maxt", "ndfd_pop12", "ndfd_windspd"].includes(settings.radarMapView)) {
+      if (settings.radarMapView && ["composite", "satellite"].includes(settings.radarMapView)) {
         setRadarMapView(settings.radarMapView);
-        setRadarProductMode(["ndfd_maxt", "ndfd_pop12", "ndfd_windspd"].includes(settings.radarMapView) ? "forecast" : settings.radarMapView === "future_reflectivity" ? "future" : "observed");
       }
       if (typeof settings.radarOpacity === "number" && settings.radarOpacity >= 20 && settings.radarOpacity <= 100) setRadarOpacity(settings.radarOpacity);
       if (typeof settings.showNwsAlerts === "boolean") setShowNwsAlerts(settings.showNwsAlerts);
+      if (typeof settings.showSpcOutlook === "boolean") setShowSpcOutlook(settings.showSpcOutlook);
       if (settings.defaultForecastDays === 1 || settings.defaultForecastDays === 3 || settings.defaultForecastDays === 7) setDefaultForecastDays(settings.defaultForecastDays);
     } catch { window.localStorage.removeItem(workspaceSettingsStorageKey); }
     setSettingsReady(true);
@@ -1318,8 +1358,8 @@ export default function Home() {
 
   useEffect(() => {
     if (!settingsReady) return;
-    window.localStorage.setItem(workspaceSettingsStorageKey, JSON.stringify({ defaultLocationId, radarMapView, radarOpacity, showNwsAlerts, defaultForecastDays } satisfies WorkspacePreferences));
-  }, [defaultForecastDays, defaultLocationId, radarMapView, radarOpacity, settingsReady, showNwsAlerts]);
+    window.localStorage.setItem(workspaceSettingsStorageKey, JSON.stringify({ defaultLocationId, radarMapView, radarOpacity, showNwsAlerts, showSpcOutlook, defaultForecastDays } satisfies WorkspacePreferences));
+  }, [defaultForecastDays, defaultLocationId, radarMapView, radarOpacity, settingsReady, showNwsAlerts, showSpcOutlook]);
 
   useEffect(() => {
     if (!workspaceNotice) return;
@@ -1355,7 +1395,7 @@ export default function Home() {
   }, [locationId]);
 
   useEffect(() => {
-    if (activeSection !== "radar" && activeSection !== "dashboard" && !radarLoop) return;
+    if (activeSection !== "radar" && activeSection !== "dashboard") return;
     let isActive = true;
     const loadRadarTimeline = () => fetch("/api/radar/frames", { cache: "no-store" })
       .then(async (response) => {
@@ -1372,7 +1412,7 @@ export default function Home() {
     loadRadarTimeline();
     const refreshId = window.setInterval(loadRadarTimeline, 300_000);
     return () => { isActive = false; window.clearInterval(refreshId); };
-  }, [activeSection, radarLoop]);
+  }, [activeSection]);
 
   useEffect(() => {
     if (radarMapView !== "satellite") return;
@@ -1384,7 +1424,7 @@ export default function Home() {
   }, [radarMapView]);
 
   useEffect(() => {
-    if (radarMapView !== "future_reflectivity") return;
+    if (activeSection !== "dashboard" || dataPanel !== "model-radar") return;
     let isActive = true;
     const loadFutureRadar = () => fetch("/api/radar/future-frames", { cache: "no-store" })
       .then(async (response) => {
@@ -1401,7 +1441,7 @@ export default function Home() {
     loadFutureRadar();
     const refreshId = window.setInterval(loadFutureRadar, 600_000);
     return () => { isActive = false; window.clearInterval(refreshId); };
-  }, [radarMapView]);
+  }, [activeSection, dataPanel]);
 
   useEffect(() => {
     if (!futureRadarPlaying || futureRadarFrames.length < 2) return;
@@ -1410,10 +1450,10 @@ export default function Home() {
   }, [futureRadarPlaying, futureRadarFrames.length]);
 
   useEffect(() => {
-    if (!radarLoop || !radarPlaying || radarFrames.length < 2) return;
+    if (!radarPlaying || radarFrames.length < 2) return;
     const playId = window.setInterval(() => setRadarFrameIndex((index) => (index + 1) % radarFrames.length), 650);
     return () => window.clearInterval(playId);
-  }, [radarLoop, radarPlaying, radarFrames.length]);
+  }, [radarPlaying, radarFrames.length]);
 
   useEffect(() => {
     const storedDraft = window.localStorage.getItem(forecastDraftStorageKey);
@@ -1781,6 +1821,18 @@ export default function Home() {
   }, [activeSection, dataPanel, locationId, selectedLocation.timezone]);
 
   useEffect(() => {
+    if (activeSection !== "dashboard" || dataPanel !== "mcd") return;
+    fetch("/api/mcd")
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Mesoscale discussions unavailable");
+        setMcdDiscussions(data.discussions ?? []);
+        setMcdStatus(data.discussions?.length ? "" : "No active SPC mesoscale discussions right now.");
+      })
+      .catch((error: Error) => setMcdStatus(error.message));
+  }, [activeSection, dataPanel]);
+
+  useEffect(() => {
     if (activeSection !== "dashboard" || dataPanel !== "models") return;
     setOpenMeteoStatus("Loading Open-Meteo guidance…");
     fetch(`/api/open-meteo?model=${openMeteoModel}&location=${encodeURIComponent(locationId)}`)
@@ -1932,6 +1984,8 @@ export default function Home() {
     { id: "nws-guidance", label: "Current NWS forecast", detail: liveWeather?.forecast ? `${liveWeather.forecast.period}: ${liveWeather.forecast.detailedForecast}` : "NWS forecast was unavailable when attached.", preview: liveWeather?.forecast ? { kind: "metrics", items: [{ label: "Period", value: liveWeather.forecast.period }, { label: "Temperature", value: `${liveWeather.forecast.temperature}°${liveWeather.forecast.temperatureUnit}` }, { label: "Precipitation", value: `${liveWeather.forecast.precipitationChance ?? "—"}%` }, { label: "Conditions", value: liveWeather.forecast.shortForecast }] } : undefined },
     { id: "nbm", label: `NBM ${selectedLocation.observationStation} bulletin`, detail: nbmText || nbmStatus },
     { id: "afd", label: "NWS Area Forecast Discussion", detail: afdText || afdStatus },
+    { id: "mcd", label: mcdDiscussions[0] ? `SPC ${mcdDiscussions[0].title}` : "SPC Mesoscale Discussion", detail: mcdDiscussions[0] ? `${mcdDiscussions[0].title}\n\n${mcdDiscussions[0].text}` : mcdStatus },
+    { id: "model-radar", label: "HRRR simulated reflectivity", detail: `HRRR simulated reflectivity model guidance for ${selectedLocation.name} · ${futureRadarStatus}` },
     { id: "sounding", label: `Observed ${selectedLocation.upperAirStation} sounding`, detail: soundingText || soundingStatus, preview: { kind: "observed-sounding", station: selectedLocation.upperAirStation, imageUrl: officialSoundingImageUrl(selectedLocation.upperAirStation) } },
     { id: "nws-alerts", label: "NWS alerts", detail: liveWeather?.alerts.length ? liveWeather.alerts.map((alert) => `${alert.event}: ${alert.headline ?? ""}`).join("\n") : liveWeather?.alertsAvailable === false ? "NWS alert status could not be confirmed." : "No active NWS alerts at the time this reference was attached.", preview: { kind: "metrics", items: [{ label: "Alerts", value: liveWeather?.alertsAvailable === false ? "Feed unavailable" : `${liveWeather?.alerts.length ?? 0} active` }, { label: "Status", value: liveWeather?.alerts.length ? liveWeather.alerts.map((alert) => alert.event).join(", ") : "No active alerts" }] } },
   ];
@@ -2083,6 +2137,15 @@ export default function Home() {
     }
     if (dataPanel === "afd") {
       attachDeskReference({ id: `afd-${Date.now()}`, label: "NWS Area Forecast Discussion", detail: snippet(afdText || afdStatus) });
+      return;
+    }
+    if (dataPanel === "mcd") {
+      const latest = mcdDiscussions[0];
+      attachDeskReference({ id: `mcd-${Date.now()}`, label: latest ? `SPC ${latest.title}` : "SPC Mesoscale Discussion", detail: snippet(latest ? `${latest.title}\n\n${latest.text}` : mcdStatus) });
+      return;
+    }
+    if (dataPanel === "model-radar") {
+      attachDeskReference({ id: `model-radar-${Date.now()}`, label: "HRRR simulated reflectivity", detail: `HRRR simulated reflectivity model guidance for ${selectedLocation.name} · ${futureRadarStatus}` });
       return;
     }
     if (dataPanel === "sounding") {
@@ -2561,8 +2624,6 @@ export default function Home() {
 
   function selectRadarView(view: RadarMapView) {
     setRadarMapView(view);
-    setRadarProductMode(["ndfd_maxt", "ndfd_pop12", "ndfd_windspd"].includes(view) ? "forecast" : view === "future_reflectivity" ? "future" : "observed");
-    if (view !== "composite") setRadarLoop(false);
     window.requestAnimationFrame(() => document.querySelectorAll<HTMLDetailsElement>(".radar-tools[open]").forEach((controls) => controls.removeAttribute("open")));
   }
 
@@ -2589,6 +2650,7 @@ export default function Home() {
       {workspaceNotice && <aside className="workspace-notice" role="status"><div><strong>Reference data added</strong><span>{workspaceNotice.message}</span></div><div>{workspaceNotice.targetDate && <button type="button" onClick={() => { const index = forecastRun.days.findIndex((day) => day.date === workspaceNotice.targetDate); if (index >= 0) setSelectedForecastDay(index); setActiveSection("forecast"); setWorkspaceNotice(null); }}>View forecast</button>}<button type="button" aria-label="Dismiss confirmation" onClick={() => setWorkspaceNotice(null)}>×</button></div></aside>}
 
       {activeSection === "about" && <section className="in-app-about"><div><p className="eyebrow">{aboutContent.eyebrow || "About Frontline Forecast"}</p><h2>{aboutContent.title}</h2><p>{aboutContent.description}</p></div><div className="in-app-about-points">{aboutContent.principles.map((principle, index) => <article key={`${principle.title}-${index}`}><span>0{index + 1}</span><h3>{principle.title}</h3><p>{principle.body}</p></article>)}</div></section>}
+      {activeSection === "about" && <section className="case-library-preview"><div className="case-library-heading"><div><p className="eyebrow">Concept preview</p><h2>Historical case-study library</h2><p>Not built yet — this is a mockup of a planned feature: a library of past severe-weather events, each paired with the same archived radar, sounding, and model data already in this app, so a forecast can be re-worked in hindsight.</p></div></div><div className="case-library-grid">{historicalCaseStudyPreviews.map((study) => <article key={study.id}><span className="case-library-category">{study.category}</span><h3>{study.title}</h3><small>{study.date}</small><p>{study.summary}</p><strong>Would include</strong><ul>{study.wouldShow.map((item) => <li key={item}>{item}</li>)}</ul></article>)}</div><p className="case-library-note">A real version would need archived data storage per event and a case-selection UI — flagged here so the shape of the idea is visible before it&apos;s prioritized.</p></section>}
       {activeSection === "dashboard" && <>
       <section className="home-intro"><div className="home-intro-copy"><div className="data-state-line" aria-live="polite"><span className={`sync-pill ${liveDataStatus.tone}`}><i aria-hidden="true" />{liveDataStatus.label}</span>{liveDataTimestamp && <small>Updated {liveDataTimestamp}</small>}</div><h2>{homepageContent.title}</h2><p>{homepageContent.description}</p></div><div className="home-intro-actions"><button type="button" onClick={() => setActiveSection("dashboard")}>{homepageContent.primaryAction}</button><button type="button" onClick={() => session ? setActiveSection("forecast") : setLoginMenuOpen(true)}>{session ? "Go to forecast" : homepageContent.secondaryAction}</button></div></section>
       {liveWeather?.alerts.length ? <section className={`hazard-banner ${alertTone(liveWeather.alerts[0].severity)}`} role="status" aria-label="Active National Weather Service alerts"><div><span className="hazard-label">Active NWS alert</span><strong>{liveWeather.alerts[0].event}</strong><p>{liveWeather.alerts[0].headline || "An active National Weather Service alert applies to this location."}</p>{liveWeather.alerts[0].expires ? <small>Expires {new Intl.DateTimeFormat("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(liveWeather.alerts[0].expires))}</small> : null}</div><a href="https://www.weather.gov/" target="_blank" rel="noreferrer">Official NWS alerts ↗</a></section> : null}
@@ -2598,8 +2660,8 @@ export default function Home() {
       </section>}
       <section className="dashboard-grid">
         {homepageContent.showRadar && <article className="radar-card">
-          <div className="card-heading"><div><h2>{radarMapView === "satellite" ? "Satellite" : ["ndfd_maxt", "ndfd_pop12", "ndfd_windspd"].includes(radarMapView) ? "Forecast map" : homepageContent.radarTitle}</h2><p>{radarMapView === "composite" ? `${homepageContent.radarCaption} · centered on ${selectedLocation.name}` : radarMapView === "satellite" ? `GOES-East GeoColor · current CONUS picture for ${selectedLocation.name}` : ["ndfd_maxt", "ndfd_pop12", "ndfd_windspd"].includes(radarMapView) ? `NWS gridded forecast map · centered on ${selectedLocation.name}` : `OpenWeather map layer · centered on ${selectedLocation.name}`}</p></div><div className="actions">{radarMapView === "composite" && <button onClick={() => { setRadarLoop((value) => !value); setRadarPlaying(false); }}>{radarLoop ? "Interactive map" : "Radar timeline"}</button>}<button onClick={() => setRadarRecenterToken((value) => value + 1)}>Recenter</button><button onClick={() => setRadarRefreshToken((value) => value + 1)}>Refresh</button><button onClick={() => setRadarExpanded((value) => !value)}>{radarExpanded ? "Exit expanded view" : "Expand radar"}</button></div></div>
-          <div className="radar"><details className="radar-tools"><summary aria-label="Open radar controls">☰</summary><div><div className="radar-product-picker"><span>Data layer</span><div><button type="button" className={radarMapView === "composite" ? "active" : ""} onClick={() => selectRadarView("composite")}>Radar</button><button type="button" className={radarMapView === "satellite" ? "active" : ""} onClick={() => selectRadarView("satellite")}>Satellite</button><button type="button" className={["ndfd_maxt", "ndfd_pop12", "ndfd_windspd"].includes(radarMapView) ? "active" : ""} onClick={() => selectRadarView("ndfd_pop12")}>Forecast guidance</button></div></div>{radarMapView !== "satellite" && <><label className="alert-overlay-toggle"><input type="checkbox" checked={showNwsAlerts} onChange={(event) => { setShowNwsAlerts(event.target.checked); event.currentTarget.closest("details")?.removeAttribute("open"); }} /> NWS watches &amp; warnings</label><label>Opacity <input type="range" min="20" max="100" value={radarOpacity} onChange={(event) => setRadarOpacity(Number(event.target.value))} /> <span>{radarOpacity}%</span></label></>}<small>{radarMapView === "satellite" ? "Observed NOAA GOES-East GeoColor imagery" : radarMapView === "composite" ? (radarLoop ? radarTimelineStatus : `Live composite reflectivity · NWS/NEXRAD via IEM · ${selectedLocation.radarSite}`) : "Forecast guidance · NWS gridded field · not observed radar"}</small>{["ndfd_maxt", "ndfd_pop12", "ndfd_windspd"].includes(radarMapView) && <div className="radar-field-picker">{(["ndfd_maxt", "ndfd_pop12", "ndfd_windspd"] as RadarMapView[]).map((view) => <button type="button" key={view} className={radarMapView === view ? "active" : ""} onClick={() => selectRadarView(view)}>{({ ndfd_maxt: "High temp", ndfd_pop12: "Precip chance", ndfd_windspd: "Wind" } as Record<string, string>)[view]}</button>)}</div>}</div></details>{radarLoop && radarMapView === "composite" && <div className="radar-playback"><button type="button" aria-label="Previous radar frame" disabled={!radarFrames.length} onClick={() => { setRadarPlaying(false); setRadarFrameIndex((index) => Math.max(0, index - 1)); }}>‹</button><button type="button" disabled={radarFrames.length < 2} onClick={() => setRadarPlaying((playing) => !playing)}>{radarPlaying ? "Pause" : "Play"}</button><button type="button" aria-label="Next radar frame" disabled={!radarFrames.length} onClick={() => { setRadarPlaying(false); setRadarFrameIndex((index) => Math.min(radarFrames.length - 1, index + 1)); }}>›</button><span>{radarFrameTime}</span></div>}{radarMapView === "satellite" ? <figure className="satellite-view"><img src={`https://cdn.star.nesdis.noaa.gov/GOES19/ABI/CONUS/GEOCOLOR/1250x750.jpg?refresh=${radarRefreshToken}`} alt="Latest NOAA GOES-East GeoColor image for the continental United States" /><figcaption>GOES-East GeoColor · {selectedLocation.name} is within this regional view</figcaption></figure> : <RadarMap location={selectedLocation} opacity={radarOpacity / 100} showReflectivity={radarMapView === "composite"} weatherLayer={["ndfd_maxt", "ndfd_pop12", "ndfd_windspd"].includes(radarMapView) ? radarMapView : "none"} showAlerts={showNwsAlerts} refreshToken={radarRefreshToken} recenterToken={radarRecenterToken} timelineTileUrl={radarMapView === "composite" ? radarFrame?.tileUrl : null} theme={theme} />}</div>
+          <div className="card-heading"><div><h2>{radarMapView === "satellite" ? "Satellite" : homepageContent.radarTitle}</h2><p>{radarMapView === "composite" ? `${homepageContent.radarCaption} · centered on ${selectedLocation.name}` : `GOES-East GeoColor · current CONUS picture for ${selectedLocation.name}`}</p></div><div className="actions"><button onClick={() => setRadarRecenterToken((value) => value + 1)}>Recenter</button><button onClick={() => setRadarRefreshToken((value) => value + 1)}>Refresh</button><button onClick={() => setRadarExpanded((value) => !value)}>{radarExpanded ? "Exit expanded view" : "Expand radar"}</button></div></div>
+          <div className="radar"><details className="radar-tools"><summary aria-label="Open radar controls">☰</summary><div><div className="radar-product-picker"><span>Data layer</span><div><button type="button" className={radarMapView === "composite" ? "active" : ""} onClick={() => selectRadarView("composite")}>Radar</button><button type="button" className={radarMapView === "satellite" ? "active" : ""} onClick={() => selectRadarView("satellite")}>Satellite</button></div></div>{radarMapView !== "satellite" && <><label className="alert-overlay-toggle"><input type="checkbox" checked={showNwsAlerts} onChange={(event) => { setShowNwsAlerts(event.target.checked); event.currentTarget.closest("details")?.removeAttribute("open"); }} /> NWS watches &amp; warnings</label><label>Opacity <input type="range" min="20" max="100" value={radarOpacity} onChange={(event) => setRadarOpacity(Number(event.target.value))} /> <span>{radarOpacity}%</span></label></>}<small>{radarMapView === "satellite" ? "Observed NOAA GOES-East GeoColor imagery" : `Live composite reflectivity · NWS/NEXRAD via IEM · ${selectedLocation.radarSite}`}</small></div></details>{radarMapView === "composite" && <div className="radar-playback"><button type="button" disabled={radarFrames.length < 2} onClick={() => setRadarPlaying((playing) => !playing)}>{radarPlaying ? "Pause" : "Play"}</button><input type="range" className="radar-scrub" min="0" max={Math.max(0, radarFrames.length - 1)} value={radarFrameIndex} disabled={radarFrames.length < 2} onChange={(event) => { setRadarPlaying(false); setRadarFrameIndex(Number(event.target.value)); }} /><span>{radarFrames.length ? radarFrameTime : radarTimelineStatus}</span></div>}{radarMapView === "satellite" ? <figure className="satellite-view"><img src={`https://cdn.star.nesdis.noaa.gov/GOES19/ABI/CONUS/GEOCOLOR/1250x750.jpg?refresh=${radarRefreshToken}`} alt="Latest NOAA GOES-East GeoColor image for the continental United States" /><figcaption>GOES-East GeoColor · {selectedLocation.name} is within this regional view</figcaption></figure> : <RadarMap location={selectedLocation} opacity={radarOpacity / 100} showReflectivity={radarMapView === "composite"} showAlerts={showNwsAlerts} refreshToken={radarRefreshToken} recenterToken={radarRecenterToken} timelineTileUrl={radarMapView === "composite" ? radarFrame?.tileUrl : null} theme={theme} />}</div>
           <div className="card-footer radar-footer"><RadarLegendStrip view={radarMapView} /></div>
         </article>}
 
@@ -2618,39 +2680,39 @@ export default function Home() {
         <div className="tabs" role="tablist" aria-label="Forecast data sources">
           <button className={dataPanel === "nbm" ? "active" : ""} onClick={() => setDataPanel("nbm")}>NBM full text</button>
           <button className={dataPanel === "afd" ? "active" : ""} onClick={() => setDataPanel("afd")}>Forecast discussion</button>
+          <button className={dataPanel === "mcd" ? "active" : ""} onClick={() => setDataPanel("mcd")}>Mesoscale discussions</button>
           <button className={dataPanel === "sounding" ? "active" : ""} onClick={() => setDataPanel("sounding")}>Sounding</button>
           <button className={dataPanel === "models" ? "active" : ""} onClick={() => setDataPanel("models")}>Other models</button>
-          <button className={dataPanel === "maps" ? "active" : ""} onClick={() => setDataPanel("maps")}>Forecast maps</button>
+          <button className={dataPanel === "model-radar" ? "active" : ""} onClick={() => setDataPanel("model-radar")}>Model reflectivity</button>
           <button className={dataPanel === "ensembles" ? "active" : ""} onClick={() => setDataPanel("ensembles")}>Ensembles</button>
           <button className={dataPanel === "model-sounding" ? "active" : ""} onClick={() => setDataPanel("model-sounding")}>Model sounding</button>
         </div>
         {dataPanel === "nbm" && <section className="source-bulletin"><div className="model-guidance-heading"><div><strong>National Blend of Models bulletin</strong><span>Full NBM source text for {selectedLocation.name} forecast analysis</span></div><small>{nbmText ? "Latest bulletin loaded" : nbmStatus}</small></div><details><summary>Open full NBM bulletin</summary><pre className="model-text">{nbmText || nbmStatus}</pre></details></section>}
         {dataPanel === "afd" && <section className="source-bulletin"><div className="model-guidance-heading"><div><strong>Area Forecast Discussion</strong><span>The local NWS office's own reasoning behind the {selectedLocation.name} forecast</span></div><small>{afdText ? "Latest discussion loaded" : afdStatus}</small></div><details open><summary>Open full forecast discussion</summary><pre className="model-text">{afdText || afdStatus}</pre></details></section>}
+        {dataPanel === "mcd" && <section className="source-bulletin mcd-panel"><div className="model-guidance-heading"><div><strong>SPC Mesoscale Discussions</strong><span>Storm Prediction Center reasoning on evolving severe or winter-weather threats, nationwide</span></div><small>{mcdDiscussions.length ? `${mcdDiscussions.length} active` : mcdStatus}</small></div>{mcdDiscussions.length ? <div className="mcd-list">{mcdDiscussions.map((discussion, index) => <details key={discussion.id} open={index === 0}><summary>{discussion.title}{discussion.issuedAt ? ` · ${new Date(discussion.issuedAt).toLocaleString("en-US", { timeZone: selectedLocation.timezone, dateStyle: "medium", timeStyle: "short" })}` : ""}</summary>{discussion.imageUrl && <img src={discussion.imageUrl} alt={`${discussion.title} graphic`} className="mcd-image" />}<pre className="model-text">{discussion.text}</pre><a href={discussion.link} target="_blank" rel="noreferrer">Open on spc.noaa.gov ↗</a></details>)}</div> : <p className="empty">{mcdStatus}</p>}</section>}
         {dataPanel === "sounding" && <section className="observed-sounding-panel"><div className="model-guidance-heading"><div><strong>Latest observed K{selectedLocation.upperAirStation} sounding</strong><span>Nearest upper-air site for {selectedLocation.name} · official SPC analysis panel</span></div><a href={`https://www.spc.noaa.gov/exper/soundings/LATEST/${selectedLocation.upperAirStation}.gif`} target="_blank" rel="noreferrer">Open SPC source</a></div><img src={officialSoundingImageUrl(selectedLocation.upperAirStation)} alt={`Latest observed K${selectedLocation.upperAirStation} upper-air sounding from the Storm Prediction Center`} /><details><summary>Raw K{selectedLocation.upperAirStation} sounding text</summary><pre className="model-text">{soundingText || soundingStatus}</pre></details></section>}
         {dataPanel === "models" && <section className="model-workspace">
           <div className="model-desk-controls"><div><span>Open-Meteo model guidance</span><div className="guidance-scope-toggle"><button type="button" className={guidanceGroup === "high-res" ? "active" : ""} onClick={() => { setGuidanceGroup("high-res"); if (!guidanceModels["high-res"].some(([id]) => id === openMeteoModel)) setOpenMeteoModel("hrrr_conus"); }}>High-res</button><button type="button" className={guidanceGroup === "global" ? "active" : ""} onClick={() => { setGuidanceGroup("global"); if (!guidanceModels.global.some(([id]) => id === openMeteoModel)) setOpenMeteoModel("gfs_global"); }}>Global</button></div></div><div className="model-view-toggle"><button type="button" className={openMeteoView === "hourly" ? "active" : ""} onClick={() => setOpenMeteoView("hourly")}>Hourly</button><button type="button" className={openMeteoView === "daily" ? "active" : ""} onClick={() => setOpenMeteoView("daily")}>Daily</button><button type="button" className={openMeteoView === "compare" ? "active" : ""} onClick={() => { const left = openMeteoModel === "best_match" ? "hrrr_conus" : openMeteoModel; setComparisonLeftModel(left); setComparisonRightModel(guidanceGroup === "global" ? "ecmwf_ifs" : "nbm_conus"); setOpenMeteoView("compare"); }}>Compare</button></div></div>
           {openMeteoView !== "compare" && (openMeteoGuidance ? <><article className="single-model-table"><header><div className="model-picker">{guidanceModels[guidanceGroup].map(([id, label]) => <button type="button" key={id} className={openMeteoModel === id ? "active" : ""} onClick={() => setOpenMeteoModel(id)}>{label}</button>)}</div><strong>{openMeteoGuidance.model} · {selectedLocation.name}</strong><small>{openMeteoGuidance.current ? `${openMeteoGuidance.current.temperatureF ?? "—"}°F · feels ${openMeteoGuidance.current.feelsLikeF ?? "—"}°F · ${openMeteoWeatherLabel(openMeteoGuidance.current.weatherCode)}` : "Current model guidance unavailable"}</small></header><ModelGuidanceTable guidance={openMeteoGuidance} view={openMeteoView} /><div className="table-reference-action"><small>Attach this displayed guidance to matching forecast dates. A confirmation appears when it is saved.</small><button type="button" onClick={() => attachGuidanceSeries(openMeteoGuidance, openMeteoView)}>Add to forecast</button></div></article><p className="model-attribution">Model data: <a href={openMeteoGuidance.source} target="_blank" rel="noreferrer">Open-Meteo</a>. High-res guidance is for near-term detail; global models are for pattern and range.</p></> : <p className="empty">{openMeteoStatus}</p>)}
           {openMeteoView === "compare" && <section className="model-compare" aria-busy={Boolean(comparisonStatus)}>{comparisonStatus && <p className="model-loading" role="status">{comparisonStatus}</p>}<div className="comparison-columns">{[comparisonLeftModel, comparisonRightModel].map((id, index) => { const guidance = modelComparison[id]; const selectedModel = index === 0 ? comparisonLeftModel : comparisonRightModel; return <article key={index}><header><div className="model-picker">{guidanceModels[guidanceGroup].filter(([model]) => model !== "best_match").map(([model, label]) => <button type="button" key={model} className={selectedModel === model ? "active" : ""} onClick={() => { if (index === 0) { if (model === comparisonRightModel) setComparisonRightModel(comparisonLeftModel); setComparisonLeftModel(model); setOpenMeteoModel(model); } else { if (model === comparisonLeftModel) setComparisonLeftModel(comparisonRightModel); setComparisonRightModel(model); } }}>{label}</button>)}</div><div className="comparison-table-title"><strong>{guidance?.model ?? "Loading model…"}</strong><div className="model-view-toggle"><button type="button" className={comparisonView === "hourly" ? "active" : ""} onClick={() => setComparisonView("hourly")}>Hourly</button><button type="button" className={comparisonView === "daily" ? "active" : ""} onClick={() => setComparisonView("daily")}>Daily</button></div></div></header>{guidance ? <><ModelGuidanceTable guidance={guidance} view={comparisonView} compact /><div className="table-reference-action"><small>Attach this model to matching forecast dates.</small><button type="button" onClick={() => attachGuidanceSeries(guidance, comparisonView)}>Add to forecast</button></div></> : <p className="empty">Loading model guidance…</p>}</article>; })}</div></section>}
         </section>}
-        {dataPanel === "maps" && <section className="forecast-map-desk"><div className="model-guidance-heading"><div><strong>Forecast maps</strong><span>Spatial guidance around {selectedLocation.name}</span></div></div><div className="forecast-map-options"><article><strong>Maximum temperature</strong><span>Regional high-temperature pattern.</span><button type="button" onClick={() => { selectRadarView("ndfd_maxt"); setActiveSection("radar"); }}>Open map</button></article><article><strong>Precipitation chance</strong><span>Regional precipitation potential.</span><button type="button" onClick={() => { selectRadarView("ndfd_pop12"); setActiveSection("radar"); }}>Open map</button></article><article><strong>Sustained wind</strong><span>Regional wind pattern.</span><button type="button" onClick={() => { selectRadarView("ndfd_windspd"); setActiveSection("radar"); }}>Open map</button></article></div><p className="model-attribution">NWS National Digital Forecast Database</p></section>}
+        {dataPanel === "model-radar" && <section className="model-radar-panel"><div className="model-guidance-heading"><div><strong>HRRR simulated reflectivity</strong><span>Model guidance styled like radar for {selectedLocation.name} — not an observation</span></div><small>{futureRadarFrames.length ? `${futureRadarFrames.length} forecast hours` : futureRadarStatus}</small></div><div className="radar model-radar-map">{futureRadarFrames.length > 0 && <div className="radar-playback"><button type="button" disabled={futureRadarFrames.length < 2} onClick={() => setFutureRadarPlaying((playing) => !playing)}>{futureRadarPlaying ? "Pause" : "Play"}</button><input type="range" className="radar-scrub" min="0" max={Math.max(0, futureRadarFrames.length - 1)} value={futureRadarFrameIndex} disabled={futureRadarFrames.length < 2} onChange={(event) => { setFutureRadarPlaying(false); setFutureRadarFrameIndex(Number(event.target.value)); }} /><span>{futureRadarFrameTime}</span></div>}<RadarMap location={selectedLocation} opacity={0.8} showReflectivity showAlerts={false} timelineTileUrl={futureRadarFrame?.tileUrl ?? null} theme={theme} /></div><RadarLegendStrip view="future_reflectivity" /><p className="model-attribution">HRRR simulated reflectivity via <a href="https://mesonet.agron.iastate.edu/" target="_blank" rel="noreferrer">Iowa Environmental Mesonet</a>. This is model guidance styled as a radar view, not an observation — treat it as less certain the further out it goes.</p></section>}
         {dataPanel === "ensembles" && <section className="ensemble-panel"><div className="model-guidance-heading"><div><strong>GFS ensemble</strong><span>Range and spread · {selectedLocation.name}</span></div></div>{ensembleGuidance ? <><div className="ensemble-summary"><article><span>Members</span><strong>{ensembleGuidance.rows[0]?.temperature.members ?? "—"}</strong><small>available members</small></article><article><span>Temperature spread</span><strong>±{ensembleGuidance.rows[0]?.temperature.spread ?? "—"}°F</strong><small>first valid hour</small></article><article><span>Forecast horizon</span><strong>10 days</strong><small>point guidance</small></article></div><EnsembleTable guidance={ensembleGuidance} /><p className="model-attribution">Ensemble data: <a href={ensembleGuidance.source} target="_blank" rel="noreferrer">Open-Meteo Ensemble API</a></p></> : <p className="empty">{ensembleStatus}</p>}</section>}
         {dataPanel === "model-sounding" && <section className="model-sounding-panel">
           {modelSounding?.profiles[soundingProfileIndex] && <div className="model-guidance-heading sounding-result-heading"><div><strong>{modelSounding.model} profile · {modelTimestamp(modelSounding.profiles[soundingProfileIndex].time)}</strong><span>{selectedLocation.name} · forecast guidance</span></div><small>Run {runTimestamp(modelSounding.runTime)}</small></div>}
           <div className="sounding-control-strip"><div className="sounding-model-control"><span>Model</span><div className="model-picker"><button type="button" className={soundingModel === "hrrr" ? "active" : ""} onClick={() => { setSoundingModel("hrrr"); setSoundingRunOffset(0); }}>HRRR</button><button type="button" className={soundingModel === "gfs" ? "active" : ""} onClick={() => { setSoundingModel("gfs"); setSoundingRunOffset(0); }}>GFS</button></div></div>{soundingProfiles.length ? <div className="sounding-valid-picker"><div className="model-picker">{soundingProfileWindow.map((profile, visibleIndex) => { const index = soundingWindowStart + visibleIndex; const isNearest = index === nearestSoundingProfileIndex; return <button type="button" key={profile.time} className={soundingProfileIndex === index ? "active" : ""} onClick={() => setSoundingProfileIndex(index)}><span>{modelTimestamp(profile.time)}</span>{isNearest && <small>Now</small>}</button>; })}</div></div> : null}<div className="sounding-run-picker"><button type="button" aria-label="Open older model run" onClick={() => setSoundingRunOffset((offset) => offset + 1)}>‹</button><span>{modelSounding ? runTimestamp(modelSounding.runTime) : "Loading run…"}</span><button type="button" aria-label="Open newer model run" disabled={soundingRunOffset === 0} onClick={() => setSoundingRunOffset((offset) => Math.max(0, offset - 1))}>›</button></div></div>
           {modelSounding?.profiles[soundingProfileIndex] ? <><ModelSoundingChart profile={modelSounding.profiles[soundingProfileIndex]} /><div className="guidance-table-wrap"><table className="guidance-table sounding-table"><thead><tr><th>Pressure</th><th>Height</th><th>Temperature</th><th>RH</th><th>Wind</th></tr></thead><tbody>{modelSounding.profiles[soundingProfileIndex].levels.map((level) => <tr key={level.pressureHpa}><th>{level.pressureHpa} hPa</th><td>{level.geopotentialHeightM ?? "—"} m</td><td>{level.temperatureF ?? "—"}°F</td><td>{level.relativeHumidity ?? "—"}%</td><td>{level.windMph ?? "—"} mph @ {level.windDirection ?? "—"}°</td></tr>)}</tbody></table></div><p className="model-attribution">Profile data: <a href={modelSounding.source} target="_blank" rel="noreferrer">Open-Meteo Single Runs API</a>. It is saved with your forecast when attached.</p></> : <p className="empty">{modelSoundingStatus}</p>}
         </section>}
-        {dataPanel !== "models" && dataPanel !== "maps" && <div className="desk-reference-action"><div><strong>Add to forecast</strong><small>Save this view with the matching forecast date.</small></div><button type="button" onClick={pinCurrentDeskPanel}>Add reference</button></div>}
+        {dataPanel !== "models" && <div className="desk-reference-action"><div><strong>Add to forecast</strong><small>Save this view with the matching forecast date.</small></div><button type="button" onClick={pinCurrentDeskPanel}>Add reference</button></div>}
       </section>}
       </>}
 
       {activeSection === "radar" && <section className="radar-workspace">
-        <div className="radar-workspace-heading"><div><p className="eyebrow">Radar workspace</p><h2>{radarProductMode === "observed" ? "Observed weather" : radarProductMode === "future" ? "Future radar" : "Forecast fields"}</h2><p>{radarProductMode === "observed" ? `Live conditions centered on ${selectedLocation.name}.` : radarProductMode === "future" ? "HRRR model-simulated reflectivity — forecast radar, not an observation." : "Forecast fields are guidance, not observed radar."}</p></div><div><button type="button" onClick={() => setRadarRecenterToken((value) => value + 1)}>Recenter</button><button type="button" onClick={() => setRadarRefreshToken((value) => value + 1)}>Refresh</button><button type="button" onClick={() => setActiveSection("dashboard")}>Desk</button></div></div>
-        <div className="radar-mode-switch" role="tablist" aria-label="Radar product mode"><button type="button" role="tab" aria-selected={radarProductMode === "observed"} className={radarProductMode === "observed" ? "active" : ""} onClick={() => selectRadarView("composite")}>Observed</button><button type="button" role="tab" aria-selected={radarProductMode === "future"} className={radarProductMode === "future" ? "active" : ""} onClick={() => selectRadarView("future_reflectivity")}>Future radar</button><button type="button" role="tab" aria-selected={radarProductMode === "forecast"} className={radarProductMode === "forecast" ? "active" : ""} onClick={() => selectRadarView("ndfd_pop12")}>Forecast fields</button></div>
-        {radarProductMode === "observed" ? <div className="radar-workspace-subtools"><strong>Observed product</strong><div className="radar-field-picker"><button type="button" className={radarMapView === "composite" ? "active" : ""} onClick={() => selectRadarView("composite")}>Reflectivity</button><button type="button" className={radarMapView === "satellite" ? "active" : ""} onClick={() => selectRadarView("satellite")}>Satellite</button></div>{radarMapView === "composite" && <button type="button" onClick={() => { setRadarLoop((value) => !value); setRadarPlaying(false); }}>{radarLoop ? "Close timeline" : "Past timeline"}</button>}<span>{radarMapView === "satellite" ? "NOAA GOES-East GeoColor imagery." : radarLoop ? `Observed frames · ${radarTimelineStatus}` : `Live composite reflectivity · NWS/NEXRAD via IEM · ${selectedLocation.radarSite}.`}</span></div> : radarProductMode === "future" ? <div className="radar-workspace-subtools"><strong>Future radar</strong><span>{futureRadarStatus}</span></div> : <div className="radar-workspace-subtools"><strong>Forecast field</strong><div className="radar-field-picker">{(["ndfd_pop12", "ndfd_windspd", "ndfd_maxt"] as RadarMapView[]).map((view) => <button type="button" key={view} className={radarMapView === view ? "active" : ""} onClick={() => selectRadarView(view)}>{({ ndfd_maxt: "High temperature", ndfd_pop12: "Precipitation chance", ndfd_windspd: "Wind speed" } as Record<string, string>)[view]}</button>)}</div><span>NWS National Digital Forecast Database · forecast field, not radar.</span></div>}
-        <div className="radar-workspace-toolbar"><label className="setting-check"><input type="checkbox" checked={showNwsAlerts} onChange={(event) => setShowNwsAlerts(event.target.checked)} /><span><strong>NWS alerts</strong><small>Overlay active watches, warnings, and advisories.</small></span></label><label className="radar-opacity-control">Overlay opacity <input type="range" min="20" max="100" value={radarOpacity} onChange={(event) => setRadarOpacity(Number(event.target.value))} /><strong>{radarOpacity}%</strong></label></div>
-        <div className="radar radar-workspace-map">{radarLoop && radarMapView === "composite" && <div className="radar-playback"><button type="button" aria-label="Previous radar frame" disabled={!radarFrames.length} onClick={() => { setRadarPlaying(false); setRadarFrameIndex((index) => Math.max(0, index - 1)); }}>‹</button><button type="button" disabled={radarFrames.length < 2} onClick={() => setRadarPlaying((playing) => !playing)}>{radarPlaying ? "Pause" : "Play"}</button><button type="button" aria-label="Next radar frame" disabled={!radarFrames.length} onClick={() => { setRadarPlaying(false); setRadarFrameIndex((index) => Math.min(radarFrames.length - 1, index + 1)); }}>›</button><span>{radarFrameTime}</span></div>}{radarProductMode === "future" && <div className="radar-playback"><button type="button" aria-label="Previous forecast hour" disabled={!futureRadarFrames.length} onClick={() => { setFutureRadarPlaying(false); setFutureRadarFrameIndex((index) => Math.max(0, index - 1)); }}>‹</button><button type="button" disabled={futureRadarFrames.length < 2} onClick={() => setFutureRadarPlaying((playing) => !playing)}>{futureRadarPlaying ? "Pause" : "Play"}</button><button type="button" aria-label="Next forecast hour" disabled={!futureRadarFrames.length} onClick={() => { setFutureRadarPlaying(false); setFutureRadarFrameIndex((index) => Math.min(futureRadarFrames.length - 1, index + 1)); }}>›</button><span>{futureRadarFrameTime}</span></div>}{radarMapView === "satellite" ? <figure className="satellite-view"><img src={`https://cdn.star.nesdis.noaa.gov/GOES19/ABI/CONUS/GEOCOLOR/1250x750.jpg?refresh=${radarRefreshToken}`} alt="Latest NOAA GOES-East GeoColor image for the continental United States" /><figcaption>Observed NOAA GOES-East GeoColor · {selectedLocation.name}</figcaption></figure> : <RadarMap location={selectedLocation} opacity={radarOpacity / 100} showReflectivity={radarMapView === "composite" || radarMapView === "future_reflectivity"} weatherLayer={radarProductMode === "forecast" ? radarMapView : "none"} showAlerts={showNwsAlerts} refreshToken={radarRefreshToken} recenterToken={radarRecenterToken} timelineTileUrl={radarMapView === "composite" ? radarFrame?.tileUrl : radarMapView === "future_reflectivity" ? futureRadarFrame?.tileUrl : null} theme={theme} />}</div>
-        <div className="radar-workspace-footer"><RadarLegendStrip view={radarMapView} /><p>{radarProductMode === "observed" ? "Observed products show what has happened or is happening. Live and timeline frames both come from the same NWS/NEXRAD mosaic (via the Iowa Environmental Mesonet), so they always match." : radarProductMode === "future" ? "Future radar is simulated reflectivity from the HRRR model — a forecast of what radar may show, not an observation. Treat it as guidance, and less certain the further out it goes." : "Forecast fields show what a published NWS forecast field anticipates for temperature, wind, or precipitation chance — a different kind of data than radar."}</p></div>
-        <div className="radar-product-roadmap"><div><strong>Next radar capability</strong><small>Model precipitation forecasts will use this same map next, with a run time and valid time shown for every frame.</small></div><div><button type="button" disabled>Model precipitation <span>Planned</span></button></div></div>
+        <div className="radar-workspace-heading"><div><p className="eyebrow">Radar workspace</p><h2>Observed weather</h2><p>Past and current conditions centered on {selectedLocation.name}.</p></div><div><button type="button" onClick={() => setRadarRecenterToken((value) => value + 1)}>Recenter</button><button type="button" onClick={() => setRadarRefreshToken((value) => value + 1)}>Refresh</button><button type="button" onClick={() => setActiveSection("dashboard")}>Desk</button></div></div>
+        <div className="radar-workspace-subtools"><strong>Observed product</strong><div className="radar-field-picker"><button type="button" className={radarMapView === "composite" ? "active" : ""} onClick={() => selectRadarView("composite")}>Reflectivity</button><button type="button" className={radarMapView === "satellite" ? "active" : ""} onClick={() => selectRadarView("satellite")}>Satellite</button></div><span>{radarMapView === "satellite" ? "NOAA GOES-East GeoColor imagery." : `Live composite reflectivity · NWS/NEXRAD via IEM · ${selectedLocation.radarSite}.`}</span></div>
+        <div className="radar-workspace-toolbar"><label className="setting-check"><input type="checkbox" checked={showNwsAlerts} onChange={(event) => setShowNwsAlerts(event.target.checked)} /><span><strong>NWS alerts</strong><small>Overlay active watches, warnings, and advisories.</small></span></label><label className="setting-check"><input type="checkbox" checked={showSpcOutlook} onChange={(event) => setShowSpcOutlook(event.target.checked)} /><span><strong>SPC convective outlook</strong><small>Day 1 categorical severe-weather risk areas.</small></span></label><label className="radar-opacity-control">Overlay opacity <input type="range" min="20" max="100" value={radarOpacity} onChange={(event) => setRadarOpacity(Number(event.target.value))} /><strong>{radarOpacity}%</strong></label></div>
+        <div className="radar radar-workspace-map">{radarMapView === "composite" && <div className="radar-playback"><button type="button" disabled={radarFrames.length < 2} onClick={() => setRadarPlaying((playing) => !playing)}>{radarPlaying ? "Pause" : "Play"}</button><input type="range" className="radar-scrub" min="0" max={Math.max(0, radarFrames.length - 1)} value={radarFrameIndex} disabled={radarFrames.length < 2} onChange={(event) => { setRadarPlaying(false); setRadarFrameIndex(Number(event.target.value)); }} /><span>{radarFrames.length ? radarFrameTime : radarTimelineStatus}</span></div>}{radarMapView === "satellite" ? <figure className="satellite-view"><div className="radar-field-picker satellite-channel-picker">{(["geocolor", "ir", "wv"] as const).map((channel) => <button type="button" key={channel} className={satelliteChannel === channel ? "active" : ""} onClick={() => setSatelliteChannel(channel)}>{({ geocolor: "GeoColor", ir: "Infrared", wv: "Water vapor" } as Record<string, string>)[channel]}</button>)}</div><img src={`https://cdn.star.nesdis.noaa.gov/GOES19/ABI/CONUS/${{ geocolor: "GEOCOLOR", ir: "13", wv: "08" }[satelliteChannel]}/1250x750.jpg?refresh=${radarRefreshToken}`} alt={`Latest NOAA GOES-East ${{ geocolor: "GeoColor", ir: "clean infrared", wv: "upper-level water vapor" }[satelliteChannel]} image for the continental United States`} /><figcaption>{({ geocolor: "Observed NOAA GOES-East GeoColor", ir: "Observed NOAA GOES-East clean infrared (cloud-top temperature)", wv: "Observed NOAA GOES-East upper-level water vapor" } as Record<string, string>)[satelliteChannel]} · {selectedLocation.name}</figcaption></figure> : <RadarMap location={selectedLocation} opacity={radarOpacity / 100} showReflectivity={radarMapView === "composite"} showAlerts={showNwsAlerts} showOutlook={showSpcOutlook} refreshToken={radarRefreshToken} recenterToken={radarRecenterToken} timelineTileUrl={radarMapView === "composite" ? radarFrame?.tileUrl : null} theme={theme} />}</div>
+        <div className="radar-workspace-footer"><RadarLegendStrip view={radarMapView} /><p>Observed products show what has happened or is happening. Live and past frames come from the same NWS/NEXRAD mosaic (via the Iowa Environmental Mesonet), so they always match. Model-derived guidance styled like radar lives under Models &amp; Observations, not here.</p></div>
       </section>}
 
       {activeSection === "forecast" && !session && <section className="workspace-card access-wall"><h2>Log in to forecast</h2><p>The dashboard is available to explore, while forecasts, references, and archive work stay private to your account.</p><button type="button" onClick={() => setLoginMenuOpen(true)}>Open login</button></section>}
@@ -2713,11 +2775,13 @@ export default function Home() {
           <button type="button" className={classroomHubTab === "assignments" ? "active" : ""} onClick={() => setClassroomHubTab("assignments")}>Assignments</button>
           <button type="button" className={classroomHubTab === "outlook" ? "active" : ""} onClick={() => setClassroomHubTab("outlook")}>Class forecast</button>
           <button type="button" className={classroomHubTab === "progress" ? "active" : ""} onClick={() => setClassroomHubTab("progress")}>{canManageActiveClassroom ? "Class progress" : "Progress"}</button>
+          <button type="button" className={classroomHubTab === "leaderboard" ? "active" : ""} onClick={() => setClassroomHubTab("leaderboard")}>Leaderboard</button>
         </nav>
         {classroomHubTab === "today" && <ClassroomToday assignment={selectedClassroomAssignment} submissions={assignmentSubmissions} roster={academicRoster} canManage={canManageActiveClassroom} canOpenForecast={showForecastAssignmentContext} onOpenForecast={() => openClassroomAssignment(selectedClassroomAssignment!)} />}
         {classroomHubTab === "assignments" && (reviewTarget && reviewTarget.classroomId === activeWorkspace.classroomId ? <><ClassroomReviewPanel target={reviewTarget} runs={visibleReviewRuns} selectedRun={selectedReviewRun} notes={reviewNotes} comment={reviewComment} manualScore={reviewManualScore} message={reviewMessage} onSelectRun={setSelectedReviewRunId} onCommentChange={setReviewComment} onManualScoreChange={setReviewManualScore} onSave={saveForecastReview} onClose={() => { setReviewTarget(null); setReviewRuns([]); setReviewNotes({}); }} />{selectedReviewRun && <InstructorRubricCard rubric={reviewRubric} onRubricChange={setReviewRubric} notes={reviewNotes[selectedReviewRun.id] ?? []} onSave={() => saveForecastReview(selectedReviewRun.id)} />}</> : <ClassroomAssignmentDesk assignments={classroomAssignments} submissions={assignmentSubmissions} roster={academicRoster} selectedAssignmentId={selectedClassroomAssignmentId} canManage={canManageActiveClassroom} onCreate={createClassroomAssignment} onSelectAssignment={selectClassroomAssignment} onSaveClassForecast={(snapshot) => saveClassForecastSnapshot(snapshot)} onPublishClassForecast={() => { const assignment = classroomAssignments.find((item) => item.id === selectedClassroomAssignmentId); if (!assignment) return; saveClassForecastSnapshot(buildClassForecastSnapshot(assignment, assignmentSubmissions, academicRoster.filter((member) => member.role === "student")), true); }} onReviewStudent={(student) => setReviewTarget({ userId: student.userId, label: student.label, organizationId: activeWorkspace.organizationId!, classroomId: activeWorkspace.classroomId, assignmentId: selectedClassroomAssignmentId })} message={assignmentMessage} />)}
         {classroomHubTab === "outlook" && <ClassForecastHubV2 official={classroomOfficialForecast} publicGuidance={outlook} canManage={canManageActiveClassroom} onSave={(forecast) => saveOfficialClassForecast(forecast)} onPublish={(forecast) => saveOfficialClassForecast(forecast, true)} />}
         {classroomHubTab === "progress" && <ClassroomProgress assignments={classroomAssignments} submissions={assignmentSubmissions} roster={academicRoster} canManage={canManageActiveClassroom} currentUserId={session.user.id} />}
+        {classroomHubTab === "leaderboard" && <ClassroomLeaderboard assignments={classroomAssignments} submissions={assignmentSubmissions} roster={academicRoster} currentUserId={session.user.id} />}
       </section>}
       {activeSection === "control" && session && <section className="workspace-card control-summary-card"><div className="section-heading"><div><p className="eyebrow">Account</p><h2>Your desk defaults</h2><p>Choose a card to change that setting.</p></div></div><div className="control-status-grid"><button type="button" onClick={() => setDefaultForecastDays((days) => days === 1 ? 3 : days === 3 ? 7 : 1)}><span>Forecasting</span><strong>{defaultForecastDays}-day default</strong><small>Choose the horizon for a new worksheet.</small></button><button type="button" onClick={() => setTheme((value) => value === "light" ? "dark" : "light")}><span>Appearance</span><strong>{theme === "light" ? "Light mode" : "Dark mode"}</strong><small>Switch the interface theme.</small></button><button type="button" onClick={() => { const index = weatherDeskLocations.findIndex((location) => location.id === defaultLocationId); setDefaultLocationId(weatherDeskLocations[(index + 1) % weatherDeskLocations.length].id); }}><span>Default location</span><strong>{weatherDeskLocation(defaultLocationId).name}</strong><small>Choose the location a new desk opens with.</small></button></div></section>}
       {activeSection === "control" && session && <section className="workspace-card control-center"><div className="section-heading"><div><p className="eyebrow">Account</p><h2>Your settings</h2><p>Set the defaults for how Frontline Forecast opens.</p></div><span>Account</span></div><div className="control-layout"><section className="control-panel"><header><p className="eyebrow">Personal settings</p><h3>Your defaults</h3><p>Weather symbols save to your account; other choices stay with this browser.</p></header><div className="settings-grid"><label>Default location<select value={defaultLocationId} onChange={(event) => setDefaultLocationId(weatherDeskLocation(event.target.value).id)}>{weatherDeskLocations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}</select></label><label>New forecast horizon<select value={defaultForecastDays} onChange={(event) => setDefaultForecastDays(Number(event.target.value) as 1 | 3 | 7)}><option value={1}>1 day</option><option value={3}>3 days</option><option value={7}>7 days</option></select></label><label>Dark mode<select value={theme} onChange={(event) => setTheme(event.target.value as "light" | "dark")}><option value="light">Light mode</option><option value="dark">Dark mode</option></select></label><label>Weather symbols<select value={weatherIconStyle} onChange={(event) => saveWeatherIconStyle(event.target.value as WeatherIconStyle)}><option value="traditional">Traditional</option><option value="minimal">Minimal</option></select><small>Traditional is the public default. Your preference follows your account.</small></label></div><div className="settings-actions"><button type="button" onClick={() => { setLocationId(defaultLocationId); setActiveSection("dashboard"); setControlMessage("Opened your default weather view."); }}>Open weather</button><button type="button" onClick={() => { setDefaultLocationId(defaultWeatherDeskLocation.id); setDefaultForecastDays(1); setTheme("light"); saveWeatherIconStyle("traditional"); setControlMessage("Personal defaults restored."); }}>Restore defaults</button></div>{controlMessage && <p className="control-message" role="status">{controlMessage}</p>}</section><aside className="control-panel control-delivery"><header><p className="eyebrow">Account</p><h3>Service status</h3><p>Useful account and data status at a glance.</p></header><div className="control-service-list"><div><span>Forecast archive</span><strong>{supabaseUrl && supabaseKey ? "Connected" : "Needs setup"}</strong><small>Your saved forecasts sync through your account.</small></div><div><span>Weather sources</span><strong>{liveWeather ? "Available" : "Checking"}</strong><small>Weather, radar, and model guidance load as needed.</small></div><div><span>Map controls</span><strong>Radar desk</strong><small>Map view, overlays, and opacity are managed in Radar.</small></div></div></aside></div></section>}

@@ -7,26 +7,20 @@ declare global {
   interface Window { L?: any }
 }
 
-type RadarMapProps = { opacity?: number; showReflectivity?: boolean; weatherLayer?: string; showAlerts?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; theme?: "light" | "dark"; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string } };
+type RadarMapProps = { opacity?: number; showReflectivity?: boolean; showAlerts?: boolean; showOutlook?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; theme?: "light" | "dark"; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string } };
 
 const basemapTiles = {
   light: { url: "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
   dark: { url: "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
 };
 
-const ndfdLayers: Record<string, string> = {
-  ndfd_maxt: "ndfd.conus.maxt",
-  ndfd_pop12: "ndfd.conus.pop12",
-  ndfd_windspd: "ndfd.conus.windspd",
-};
-
-export default function RadarMap({ opacity = 0.72, showReflectivity = true, weatherLayer = "none", showAlerts = true, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, theme = "light", location }: RadarMapProps) {
+export default function RadarMap({ opacity = 0.72, showReflectivity = true, showAlerts = true, showOutlook = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, theme = "light", location }: RadarMapProps) {
   const mapElement = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const baseLayerRef = useRef<any>(null);
   const radarLayerRef = useRef<any>(null);
-  const weatherLayerRef = useRef<any>(null);
   const alertLayerRef = useRef<any>(null);
+  const outlookLayerRef = useRef<any>(null);
   const [leafletLoaded, setLeafletLoaded] = useState(false);
 
   useEffect(() => {
@@ -47,8 +41,8 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, weat
     return () => {
       baseLayerRef.current = null;
       radarLayerRef.current = null;
-      weatherLayerRef.current = null;
       alertLayerRef.current = null;
+      outlookLayerRef.current = null;
       mapRef.current = null;
       map.remove();
     };
@@ -92,6 +86,29 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, weat
     return () => { active = false; };
   }, [leafletLoaded, showAlerts, location.id]);
 
+  useEffect(() => {
+    if (!leafletLoaded || !mapRef.current || !window.L) return;
+    if (outlookLayerRef.current) mapRef.current.removeLayer(outlookLayerRef.current);
+    outlookLayerRef.current = null;
+    if (!showOutlook) return;
+    let active = true;
+    fetch("/api/outlook")
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "SPC outlook overlay unavailable");
+        if (!active || !mapRef.current || !window.L) return;
+        outlookLayerRef.current = window.L.geoJSON(data, {
+          style: (feature: any) => ({ color: feature?.properties?.stroke ?? "#c69000", fillColor: feature?.properties?.fill ?? "#c69000", fillOpacity: 0.35, weight: 1.5 }),
+          onEachFeature: (feature: any, layer: any) => {
+            const properties = feature?.properties ?? {};
+            layer.bindTooltip(`${properties.LABEL2 ?? "Convective outlook"}`, { className: "spc-outlook-tooltip", direction: "auto", sticky: true });
+          },
+        }).addTo(mapRef.current);
+      })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [leafletLoaded, showOutlook]);
+
   const opacityRef = useRef(opacity);
   useEffect(() => { opacityRef.current = opacity; radarLayerRef.current?.setOpacity(opacity); }, [opacity]);
 
@@ -131,38 +148,6 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, weat
     const fallback = window.setTimeout(settle, 700);
     return () => window.clearTimeout(fallback);
   }, [leafletLoaded, showReflectivity, refreshToken, timelineTileUrl]);
-
-  useEffect(() => {
-    if (!leafletLoaded || !mapRef.current || !window.L) return;
-    if (weatherLayerRef.current) mapRef.current.removeLayer(weatherLayerRef.current);
-    weatherLayerRef.current = null;
-    if (weatherLayer === "none") return;
-    if (ndfdLayers[weatherLayer]) {
-      weatherLayerRef.current = window.L.tileLayer.wms("https://digital.weather.gov/ndfd.conus/wms", {
-        layers: ndfdLayers[weatherLayer],
-        format: "image/png",
-        transparent: true,
-        version: "1.3.0",
-        // NOAA's NDFD WMS returns fully opaque tiles regardless of transparent=true (no alpha
-        // channel), but Leaflet's layer-level opacity still blends the whole raster with the
-        // basemap beneath it correctly — the earlier fix here forced near-full opacity on the
-        // theory that partial opacity couldn't work, which just traded one bug (a washed-out
-        // blend) for a worse one (an opaque wall of color hiding the map entirely). The
-        // ndfd-layer className boosts saturation/contrast so the NWS's fairly pastel palette
-        // still reads clearly at a real, user-controlled opacity.
-        opacity,
-        className: "ndfd-layer",
-        maxZoom: 18,
-        attribution: 'Forecast maps: <a href="https://digital.weather.gov/staticpages/mapservices.php" target="_blank">NOAA/NWS NDFD</a>',
-      }).addTo(mapRef.current);
-      return;
-    }
-    weatherLayerRef.current = window.L.tileLayer(`/api/radar/openweather/${weatherLayer}/{z}/{x}/{y}`, {
-      opacity,
-      maxZoom: 18,
-      attribution: 'Weather layers: <a href="https://openweathermap.org/" target="_blank">OpenWeather</a>',
-    }).addTo(mapRef.current);
-  }, [leafletLoaded, opacity, weatherLayer]);
 
   return (
     <>

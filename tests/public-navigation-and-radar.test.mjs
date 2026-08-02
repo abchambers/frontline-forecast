@@ -7,15 +7,29 @@ test("signed-in users do not receive a redundant public sign-in tab", async () =
   assert.match(page, /item\.target !== "login" \|\| !session/);
 });
 
-test("radar frames load proactively on the dashboard and radar sections, not only after the timeline is opened", async () => {
+test("radar frames load proactively on the dashboard and radar sections", async () => {
   const page = await readFile(new URL("../src/app/page.tsx", import.meta.url), "utf8");
-  assert.match(page, /if \(activeSection !== "radar" && activeSection !== "dashboard" && !radarLoop\) return;/);
+  assert.match(page, /if \(activeSection !== "radar" && activeSection !== "dashboard"\) return;/);
 });
 
-test("live and timeline radar views share the same IEM NEXRAD frame source", async () => {
+test("observed radar is always the scrub-bar frame loop, with no separate live/timeline toggle", async () => {
   const page = await readFile(new URL("../src/app/page.tsx", import.meta.url), "utf8");
-  assert.doesNotMatch(page, /radarLoop && radarMapView === "composite" \? radarFrame\?\.tileUrl : null/);
-  assert.match(page, /radarMapView === "composite" \? radarFrame\?\.tileUrl : radarMapView === "future_reflectivity" \? futureRadarFrame\?\.tileUrl : null/);
+  assert.doesNotMatch(page, /radarLoop/);
+  assert.doesNotMatch(page, /Past timeline|Close timeline|Radar timeline|Interactive map/);
+  assert.match(page, /className="radar-scrub"/);
+});
+
+test("HRRR simulated reflectivity lives under Models & Observations, not the Radar workspace", async () => {
+  const page = await readFile(new URL("../src/app/page.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(page, /radarProductMode/);
+  assert.doesNotMatch(page, /"Future radar"/);
+  assert.match(page, /dataPanel === "model-radar"/);
+  assert.match(page, /futureRadarFrame\?\.tileUrl/);
+});
+
+test("the NDFD forecast-guidance radar mode has been removed", async () => {
+  const page = await readFile(new URL("../src/app/page.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(page, /ndfd_maxt|ndfd_pop12|ndfd_windspd/);
 });
 
 test("the public configuration endpoint returns only published public content", async () => {
