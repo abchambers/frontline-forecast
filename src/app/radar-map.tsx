@@ -2,19 +2,20 @@
 
 import Script from "next/script";
 import { useEffect, useRef, useState } from "react";
+import { renderMrmsGridToDataUrl, type MrmsBounds, type MrmsPoint } from "@/lib/mrms-render";
 
 declare global {
   interface Window { L?: any }
 }
 
-type RadarMapProps = { opacity?: number; showReflectivity?: boolean; showAlerts?: boolean; showOutlook?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; theme?: "light" | "dark"; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string } };
+type RadarMapProps = { opacity?: number; showReflectivity?: boolean; showAlerts?: boolean; showOutlook?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; theme?: "light" | "dark"; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string } };
 
 const basemapTiles = {
   light: { url: "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
   dark: { url: "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
 };
 
-export default function RadarMap({ opacity = 0.72, showReflectivity = true, showAlerts = true, showOutlook = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, theme = "light", location }: RadarMapProps) {
+export default function RadarMap({ opacity = 0.72, showReflectivity = true, showAlerts = true, showOutlook = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, isCurrentFrame = true, theme = "light", location }: RadarMapProps) {
   const mapElement = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const baseLayerRef = useRef<any>(null);
@@ -119,35 +120,64 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, show
       radarLayerRef.current = null;
       return;
     }
-    // Add the next frame at opacity 0 and fade it in once its tiles finish loading, rather than
-    // removing the previous frame immediately — avoids a flash to the bare basemap between frames.
+    let cancelled = false;
+    // Add the next frame at opacity 0 and fade it in once it's ready, rather than removing the
+    // previous frame immediately — avoids a flash to the bare basemap between frames.
     const previousLayer = radarLayerRef.current;
-    const nextLayer = timelineTileUrl
-      ? window.L.tileLayer(timelineTileUrl, {
-        opacity: 0,
-        // IEM's mosaic tiles are rendered from ~1km-resolution data, which stops adding real
-        // detail past zoom 8. Leaflet keeps the user's closer map view by scaling that tile.
-        maxNativeZoom: 8,
-        maxZoom: 18,
-        attribution: 'Radar: <a href="https://mesonet.agron.iastate.edu/" target="_blank">Iowa Environmental Mesonet</a>',
-      })
-      : window.L.tileLayer.wms("https://opengeo.ncep.noaa.gov/geoserver/conus/conus_bref_qcd/ows", {
-        layers: "conus_bref_qcd", format: "image/png", transparent: true, opacity: 0, version: "1.3.0", cache: Date.now() + refreshToken,
-        attribution: 'Radar: <a href="https://www.weather.gov/gis/cloudgiswebservices">NOAA/NWS</a>',
-      });
-    nextLayer.addTo(mapRef.current);
-    radarLayerRef.current = nextLayer;
     let settled = false;
-    const settle = () => {
-      if (settled) return;
+    const settle = (nextLayer: any) => {
+      if (settled || cancelled) return;
       settled = true;
       nextLayer.setOpacity(opacityRef.current);
+      radarLayerRef.current = nextLayer;
       if (previousLayer && mapRef.current) mapRef.current.removeLayer(previousLayer);
     };
-    nextLayer.once("load", settle);
-    const fallback = window.setTimeout(settle, 700);
-    return () => window.clearTimeout(fallback);
-  }, [leafletLoaded, showReflectivity, refreshToken, timelineTileUrl, location]);
+
+    function addProviderLayer() {
+      if (!mapRef.current) return;
+      const nextLayer = timelineTileUrl
+        ? window.L.tileLayer(timelineTileUrl, {
+          opacity: 0,
+          // IEM's mosaic tiles are rendered from ~1km-resolution data, which stops adding real
+          // detail past zoom 8. Leaflet keeps the user's closer map view by scaling that tile.
+          maxNativeZoom: 8,
+          maxZoom: 18,
+          attribution: 'Radar: <a href="https://mesonet.agron.iastate.edu/" target="_blank">Iowa Environmental Mesonet</a>',
+        })
+        : window.L.tileLayer.wms("https://opengeo.ncep.noaa.gov/geoserver/conus/conus_bref_qcd/ows", {
+          layers: "conus_bref_qcd", format: "image/png", transparent: true, opacity: 0, version: "1.3.0", cache: Date.now() + refreshToken,
+          attribution: 'Radar: <a href="https://www.weather.gov/gis/cloudgiswebservices">NOAA/NWS</a>',
+        });
+      nextLayer.addTo(mapRef.current);
+      nextLayer.once("load", () => settle(nextLayer));
+      window.setTimeout(() => settle(nextLayer), 700);
+    }
+
+    if (!isCurrentFrame) {
+      // Scrubbed to a past position in the timeline loop — GribStream only ever answers "what's
+      // happening right now," so historical frames stay on the existing provider mosaic.
+      addProviderLayer();
+    } else {
+      // GribStream gives real MRMS composite reflectivity as raw values for the current moment,
+      // rendered into a colored overlay client-side — falls back silently to the existing
+      // provider WMS on any failure (network error, quota exhausted, no data for this area), so a
+      // GribStream outage never breaks the radar, it just quietly reverts to what was working.
+      fetch(`/api/radar/gribstream?lat=${location.latitude}&lon=${location.longitude}`)
+        .then(async (response) => {
+          if (!response.ok) throw new Error("GribStream unavailable");
+          const data = await response.json() as { points: MrmsPoint[]; bounds: MrmsBounds; step: number };
+          const dataUrl = renderMrmsGridToDataUrl(data.points, data.bounds, data.step);
+          if (!dataUrl || cancelled || !mapRef.current) throw new Error("Render failed");
+          const bounds: [[number, number], [number, number]] = [[data.bounds.minLatitude, data.bounds.minLongitude], [data.bounds.maxLatitude, data.bounds.maxLongitude]];
+          const nextLayer = window.L.imageOverlay(dataUrl, bounds, { opacity: 0, interactive: false });
+          nextLayer.addTo(mapRef.current);
+          settle(nextLayer);
+        })
+        .catch(() => { if (!cancelled) addProviderLayer(); });
+    }
+
+    return () => { cancelled = true; };
+  }, [leafletLoaded, showReflectivity, refreshToken, timelineTileUrl, isCurrentFrame, location]);
 
   return (
     <>
