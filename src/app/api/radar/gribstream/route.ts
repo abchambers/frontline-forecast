@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
+import { isGribstreamDisabled, recordGribstreamCall, withinDailyBudget } from "@/lib/gribstream-budget";
 
 // GribStream's MRMS query returns numeric dBZ values on a lat/lon grid, not a
 // rendered image — the client renders it into a colored overlay itself.
@@ -25,13 +26,6 @@ const LOOKBACK_MINUTES = 5;
 // traffic collapses onto very few real GribStream calls.
 const LOCATION_BUCKET_DEG = 0.5;
 const CACHE_TTL_MS = 30 * 60_000;
-// Hard, guaranteed ceiling — deliberately conservative and independent of
-// the cost-reduction above being accurate, since credits-per-call is an
-// external measurement, not something this route can verify from the
-// response. At the worst-case pre-reduction cost (~107 credits), 8 calls/day
-// is ~856 credits, leaving real margin under the 1200 cap even if the
-// reductions above end up mattering less than estimated.
-const MAX_DAILY_CALLS = 8;
 
 type GribStreamRow = {
   [key: string]: unknown;
@@ -42,8 +36,6 @@ type GribStreamRow = {
 
 type CacheEntry = { data: unknown; expiresAt: number };
 const cache = new Map<string, CacheEntry>();
-let dailyCallCount = 0;
-let dailyResetAt = 0;
 
 function bucketKey(lat: number, lon: number) {
   const bucketLat = Math.round(lat / LOCATION_BUCKET_DEG) * LOCATION_BUCKET_DEG;
@@ -51,28 +43,24 @@ function bucketKey(lat: number, lon: number) {
   return `${bucketLat.toFixed(2)},${bucketLon.toFixed(2)}`;
 }
 
-function withinDailyBudget(): boolean {
-  const now = Date.now();
-  if (now >= dailyResetAt) {
-    dailyCallCount = 0;
-    // Reset at the next UTC midnight, matching how a daily API quota resets.
-    const next = new Date();
-    next.setUTCHours(24, 0, 0, 0);
-    dailyResetAt = next.getTime();
-  }
-  return dailyCallCount < MAX_DAILY_CALLS;
-}
-
 export async function GET(request: Request) {
   const limit = checkRateLimit(request, "radar-gribstream", 20, 60_000);
   if (limit.limited) return rateLimitResponse(limit.retryAfterSeconds);
+
+  if (isGribstreamDisabled()) return NextResponse.json({ error: "GribStream is disabled." }, { status: 501 });
 
   const apiKey = process.env.GRIBSTREAM_API_KEY;
   if (!apiKey) return NextResponse.json({ error: "GribStream is not configured." }, { status: 501 });
 
   const { searchParams } = new URL(request.url);
-  const lat = Number(searchParams.get("lat"));
-  const lon = Number(searchParams.get("lon"));
+  const latParam = searchParams.get("lat");
+  const lonParam = searchParams.get("lon");
+  // Number(null) is 0, not NaN — an absent param would otherwise silently
+  // pass validation as "Null Island" (0,0) and spend a real GribStream call
+  // on a nonsensical location instead of failing fast.
+  if (!latParam || !lonParam) return NextResponse.json({ error: "A valid lat and lon are required." }, { status: 400 });
+  const lat = Number(latParam);
+  const lon = Number(lonParam);
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) return NextResponse.json({ error: "A valid lat and lon are required." }, { status: 400 });
 
   const key = bucketKey(lat, lon);
@@ -97,7 +85,7 @@ export async function GET(request: Request) {
   };
 
   try {
-    dailyCallCount += 1;
+    recordGribstreamCall();
     const response = await fetch("https://gribstream.com/api/v2/mrms/timeseries", {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
