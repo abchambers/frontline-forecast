@@ -10,12 +10,28 @@ import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 // API before writing this.
 const MRMS_PARAMETER = "MergedReflectivityQCComposite";
 const MRMS_LEVEL = "500 m above mean sea level";
-// Tunable: box half-width and grid step trade radar detail against
-// GribStream credit usage (credits scale with returned coordinate count).
-// ~1.5deg half-width at 0.03deg step is roughly 10-15 credits per fetch.
-const BOX_HALF_WIDTH_DEG = 1.5;
-const GRID_STEP_DEG = 0.03;
-const LOOKBACK_MINUTES = 12;
+// The first version of this route (1.5deg half-width, 0.03deg step, 12-minute
+// lookback) measured at ~107 credits per call against a 1200/day free-tier
+// cap — about 11 calls before the whole day's quota is gone. Shrunk here to
+// reduce both the coordinate count and the number of distinct timestamps a
+// wider lookback would return (each returned timestamp re-bills the full
+// coordinate count). This reduces per-call cost but is NOT itself a
+// guarantee of staying in budget — see the hard daily call cap below, which is.
+const BOX_HALF_WIDTH_DEG = 0.75;
+const GRID_STEP_DEG = 0.05;
+const LOOKBACK_MINUTES = 5;
+// Locations within this bucket size share one cached fetch — the app only
+// has a handful of preset cities plus occasional custom stations, so most
+// traffic collapses onto very few real GribStream calls.
+const LOCATION_BUCKET_DEG = 0.5;
+const CACHE_TTL_MS = 30 * 60_000;
+// Hard, guaranteed ceiling — deliberately conservative and independent of
+// the cost-reduction above being accurate, since credits-per-call is an
+// external measurement, not something this route can verify from the
+// response. At the worst-case pre-reduction cost (~107 credits), 8 calls/day
+// is ~856 credits, leaving real margin under the 1200 cap even if the
+// reductions above end up mattering less than estimated.
+const MAX_DAILY_CALLS = 8;
 
 type GribStreamRow = {
   [key: string]: unknown;
@@ -23,6 +39,29 @@ type GribStreamRow = {
   lat: number;
   lon: number;
 };
+
+type CacheEntry = { data: unknown; expiresAt: number };
+const cache = new Map<string, CacheEntry>();
+let dailyCallCount = 0;
+let dailyResetAt = 0;
+
+function bucketKey(lat: number, lon: number) {
+  const bucketLat = Math.round(lat / LOCATION_BUCKET_DEG) * LOCATION_BUCKET_DEG;
+  const bucketLon = Math.round(lon / LOCATION_BUCKET_DEG) * LOCATION_BUCKET_DEG;
+  return `${bucketLat.toFixed(2)},${bucketLon.toFixed(2)}`;
+}
+
+function withinDailyBudget(): boolean {
+  const now = Date.now();
+  if (now >= dailyResetAt) {
+    dailyCallCount = 0;
+    // Reset at the next UTC midnight, matching how a daily API quota resets.
+    const next = new Date();
+    next.setUTCHours(24, 0, 0, 0);
+    dailyResetAt = next.getTime();
+  }
+  return dailyCallCount < MAX_DAILY_CALLS;
+}
 
 export async function GET(request: Request) {
   const limit = checkRateLimit(request, "radar-gribstream", 20, 60_000);
@@ -36,6 +75,16 @@ export async function GET(request: Request) {
   const lon = Number(searchParams.get("lon"));
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) return NextResponse.json({ error: "A valid lat and lon are required." }, { status: 400 });
 
+  const key = bucketKey(lat, lon);
+  const cached = cache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    return NextResponse.json(cached.data, { headers: { "Cache-Control": "private, max-age=90", "X-Radar-Source": "cache" } });
+  }
+
+  if (!withinDailyBudget()) {
+    return NextResponse.json({ error: "GribStream's daily call budget is used up for today." }, { status: 429 });
+  }
+
   const now = new Date();
   const fromTime = new Date(now.getTime() - LOOKBACK_MINUTES * 60_000).toISOString();
   const untilTime = now.toISOString();
@@ -48,6 +97,7 @@ export async function GET(request: Request) {
   };
 
   try {
+    dailyCallCount += 1;
     const response = await fetch("https://gribstream.com/api/v2/mrms/timeseries", {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
@@ -70,13 +120,15 @@ export async function GET(request: Request) {
     const hasSignal = points.some((point) => point.dbz !== null);
     if (!hasSignal) throw new Error("No reflectivity data returned for this area.");
 
-    return NextResponse.json({
+    const payload = {
       time: latestTime,
       bounds: grid,
       step: GRID_STEP_DEG,
       points,
       source: "GribStream MRMS (MergedReflectivityQCComposite)",
-    }, { headers: { "Cache-Control": "private, max-age=90" } });
+    };
+    cache.set(key, { data: payload, expiresAt: Date.now() + CACHE_TTL_MS });
+    return NextResponse.json(payload, { headers: { "Cache-Control": "private, max-age=90", "X-Radar-Source": "live" } });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "GribStream radar is unavailable right now." }, { status: 502 });
   }

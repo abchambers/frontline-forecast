@@ -8,14 +8,14 @@ declare global {
   interface Window { L?: any }
 }
 
-type RadarMapProps = { opacity?: number; showReflectivity?: boolean; showAlerts?: boolean; showOutlook?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; theme?: "light" | "dark"; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string } };
+type RadarMapProps = { opacity?: number; showReflectivity?: boolean; showAlerts?: boolean; showOutlook?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; theme?: "light" | "dark"; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string }; onSourceChange?: (source: "gribstream" | "provider" | null) => void };
 
 const basemapTiles = {
   light: { url: "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
   dark: { url: "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
 };
 
-export default function RadarMap({ opacity = 0.72, showReflectivity = true, showAlerts = true, showOutlook = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, isCurrentFrame = true, theme = "light", location }: RadarMapProps) {
+export default function RadarMap({ opacity = 0.72, showReflectivity = true, showAlerts = true, showOutlook = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, isCurrentFrame = true, theme = "light", location, onSourceChange }: RadarMapProps) {
   const mapElement = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const baseLayerRef = useRef<any>(null);
@@ -113,11 +113,18 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, show
   const opacityRef = useRef(opacity);
   useEffect(() => { opacityRef.current = opacity; radarLayerRef.current?.setOpacity(opacity); }, [opacity]);
 
+  // Kept in a ref rather than the effect's dependency array on purpose: GribStream is metered, and
+  // an inline arrow function prop (a new reference every render) would otherwise re-trigger a real
+  // fetch on every parent re-render, not just on an actual location/frame change.
+  const onSourceChangeRef = useRef(onSourceChange);
+  useEffect(() => { onSourceChangeRef.current = onSourceChange; }, [onSourceChange]);
+
   useEffect(() => {
     if (!leafletLoaded || !mapRef.current || !window.L) return;
     if (!showReflectivity) {
       if (radarLayerRef.current) mapRef.current.removeLayer(radarLayerRef.current);
       radarLayerRef.current = null;
+      onSourceChangeRef.current?.(null);
       return;
     }
     let cancelled = false;
@@ -125,12 +132,13 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, show
     // previous frame immediately — avoids a flash to the bare basemap between frames.
     const previousLayer = radarLayerRef.current;
     let settled = false;
-    const settle = (nextLayer: any) => {
+    const settle = (nextLayer: any, source: "gribstream" | "provider") => {
       if (settled || cancelled) return;
       settled = true;
       nextLayer.setOpacity(opacityRef.current);
       radarLayerRef.current = nextLayer;
       if (previousLayer && mapRef.current) mapRef.current.removeLayer(previousLayer);
+      onSourceChangeRef.current?.(source);
     };
 
     function addProviderLayer() {
@@ -149,8 +157,8 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, show
           attribution: 'Radar: <a href="https://www.weather.gov/gis/cloudgiswebservices">NOAA/NWS</a>',
         });
       nextLayer.addTo(mapRef.current);
-      nextLayer.once("load", () => settle(nextLayer));
-      window.setTimeout(() => settle(nextLayer), 700);
+      nextLayer.once("load", () => settle(nextLayer, "provider"));
+      window.setTimeout(() => settle(nextLayer, "provider"), 700);
     }
 
     if (!isCurrentFrame) {
@@ -171,7 +179,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, show
           const bounds: [[number, number], [number, number]] = [[data.bounds.minLatitude, data.bounds.minLongitude], [data.bounds.maxLatitude, data.bounds.maxLongitude]];
           const nextLayer = window.L.imageOverlay(dataUrl, bounds, { opacity: 0, interactive: false });
           nextLayer.addTo(mapRef.current);
-          settle(nextLayer);
+          settle(nextLayer, "gribstream");
         })
         .catch(() => { if (!cancelled) addProviderLayer(); });
     }
