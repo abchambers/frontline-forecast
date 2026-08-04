@@ -13,7 +13,7 @@ import { destinationPoint, cellKey, cellsToGrid, boundsOf } from "./project";
 // verify it, THEN consider exposing it.
 const ARCHIVE_BUCKET = "https://unidata-nexrad-level3.s3.amazonaws.com";
 
-function siteCode(stationId: string): string {
+export function siteCode(stationId: string): string {
   // Registry convention: CONUS WSR-88D site codes in this bucket drop the
   // leading "K" (KFFC -> FFC). Only CONUS stations are in this app's
   // location list right now, so this simple strip is safe; non-CONUS sites
@@ -48,19 +48,24 @@ async function listProducts(prefix: string): Promise<S3Object[]> {
   return objects;
 }
 
-async function fetchLatestStormRelativeVelocity(
+// Shared across every Level III product this app reads. Returns null (not a
+// throw) when nothing is found in the lookback window — for detection-only
+// products (hail, TVS), no file at all is the NORMAL state most of the time
+// (no severe signature to report), not an error condition.
+export async function fetchLatestLevel3Product(
   stationId: string,
-): Promise<{ buffer: Buffer; key: string; lastModified: string }> {
+  productAbbreviation: string,
+): Promise<{ buffer: Buffer; key: string; lastModified: string } | null> {
   const site = siteCode(stationId);
   const now = new Date();
   const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
   const [today, prior] = await Promise.all([
-    listProducts(`${site}_N0S_${datePrefix(now)}`),
-    listProducts(`${site}_N0S_${datePrefix(yesterday)}`),
+    listProducts(`${site}_${productAbbreviation}_${datePrefix(now)}`),
+    listProducts(`${site}_${productAbbreviation}_${datePrefix(yesterday)}`),
   ]);
   const all = [...prior, ...today].sort((a, b) => a.lastModified.localeCompare(b.lastModified));
   const latest = all[all.length - 1];
-  if (!latest) throw new Error(`No storm-relative velocity product found for ${stationId} in the last two days.`);
+  if (!latest) return null;
 
   const response = await fetch(`${ARCHIVE_BUCKET}/${latest.key}`, { cache: "no-store" });
   if (!response.ok) throw new Error(`Failed to download ${latest.key} (${response.status})`);
@@ -112,7 +117,9 @@ export async function computeStormRelativeVelocityGrid(
   stepDeg: number,
   maxRangeKm: number,
 ): Promise<{ grid: MrmsPoint[]; bounds: MrmsBounds; time: string; elevationDeg: number }> {
-  const { buffer, lastModified } = await fetchLatestStormRelativeVelocity(stationId);
+  const product = await fetchLatestLevel3Product(stationId, "N0S");
+  if (!product) throw new Error(`No storm-relative velocity product found for ${stationId} in the last two days.`);
+  const { buffer, lastModified } = product;
   const data = parseLevel3(buffer, { logger: false });
 
   const packet = data.radialPackets?.["0"];

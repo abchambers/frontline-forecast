@@ -8,20 +8,21 @@ declare global {
   interface Window { L?: any }
 }
 
-type RadarMapProps = { opacity?: number; showReflectivity?: boolean; moment?: "reflectivity" | "velocity"; showAlerts?: boolean; showOutlook?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; theme?: "light" | "dark"; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string }; onSourceChange?: (source: "nexrad" | "gribstream" | "provider" | null) => void };
+type RadarMapProps = { opacity?: number; showReflectivity?: boolean; moment?: "reflectivity" | "velocity"; showAlerts?: boolean; showOutlook?: boolean; showSevereMarkers?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; theme?: "light" | "dark"; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string }; onSourceChange?: (source: "nexrad" | "gribstream" | "provider" | null) => void };
 
 const basemapTiles = {
   light: { url: "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
   dark: { url: "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
 };
 
-export default function RadarMap({ opacity = 0.72, showReflectivity = true, moment = "reflectivity", showAlerts = true, showOutlook = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, isCurrentFrame = true, theme = "light", location, onSourceChange }: RadarMapProps) {
+export default function RadarMap({ opacity = 0.72, showReflectivity = true, moment = "reflectivity", showAlerts = true, showOutlook = false, showSevereMarkers = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, isCurrentFrame = true, theme = "light", location, onSourceChange }: RadarMapProps) {
   const mapElement = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const baseLayerRef = useRef<any>(null);
   const radarLayerRef = useRef<any>(null);
   const alertLayerRef = useRef<any>(null);
   const outlookLayerRef = useRef<any>(null);
+  const severeMarkersLayerRef = useRef<any>(null);
   const [leafletLoaded, setLeafletLoaded] = useState(false);
 
   useEffect(() => {
@@ -44,6 +45,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       radarLayerRef.current = null;
       alertLayerRef.current = null;
       outlookLayerRef.current = null;
+      severeMarkersLayerRef.current = null;
       mapRef.current = null;
       map.remove();
     };
@@ -109,6 +111,53 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       .catch(() => undefined);
     return () => { active = false; };
   }, [leafletLoaded, showOutlook, location]);
+
+  // Level III severe-weather detection markers (storm tracks, hail, tornadic vortex signatures,
+  // mesocyclones) — an additional overlay layer, same pattern as the NWS alerts layer above, not
+  // part of the reflectivity/velocity source-selection logic below. An empty result is the normal
+  // state (no active hail/rotation signature most of the time), not a failure.
+  useEffect(() => {
+    if (!leafletLoaded || !mapRef.current || !window.L) return;
+    if (severeMarkersLayerRef.current) mapRef.current.removeLayer(severeMarkersLayerRef.current);
+    severeMarkersLayerRef.current = null;
+    if (!showSevereMarkers) return;
+    let active = true;
+    fetch(`/api/radar/nexrad-severe?station=${location.radarSite}`)
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Severe-weather markers unavailable");
+        if (!active || !mapRef.current || !window.L) return;
+
+        const group = window.L.layerGroup();
+        for (const track of data.stormTracks ?? []) {
+          window.L.circleMarker([track.lat, track.lon], { color: "#526274", fillColor: "#8fa1b3", fillOpacity: 0.9, weight: 1.5, radius: 5 })
+            .bindTooltip(`Storm ${track.id}${track.movementDeg !== null ? ` · moving ${track.movementDeg}° at ${track.movementKts}kt` : ""}`, { direction: "auto" })
+            .addTo(group);
+          if (track.forecast?.length) {
+            window.L.polyline([[track.lat, track.lon], ...track.forecast.map((p: { lat: number; lon: number }) => [p.lat, p.lon])], { color: "#8fa1b3", weight: 1, dashArray: "3,4", interactive: false }).addTo(group);
+          }
+        }
+        for (const hail of data.hail ?? []) {
+          window.L.circleMarker([hail.lat, hail.lon], { color: "#9b2678", fillColor: "#ff8027", fillOpacity: 0.9, weight: 2, radius: 7 })
+            .bindTooltip(`Hail ${hail.id} · ${hail.maxSizeInches}in max · ${hail.probSevereHailPct}% severe probability`, { direction: "auto" })
+            .addTo(group);
+        }
+        for (const tvs of data.tvs ?? []) {
+          window.L.circleMarker([tvs.lat, tvs.lon], { color: "#7a0d0d", fillColor: "#ec3e32", fillOpacity: 0.95, weight: 2, radius: 8 })
+            .bindTooltip(`TVS ${tvs.id} (${tvs.featureType}) · max shear height ${tvs.maxShearHeightKft}kft`, { direction: "auto" })
+            .addTo(group);
+        }
+        for (const meso of data.mesocyclones ?? []) {
+          window.L.circleMarker([meso.lat, meso.lon], { color: "#4a1a6b", fillColor: "#9b59d0", fillOpacity: 0.9, weight: 2, radius: 7 })
+            .bindTooltip(`Mesocyclone ${meso.id}${meso.hasTvs ? " · TVS present" : ""}${meso.strengthIndex !== null ? ` · MSI ${meso.strengthIndex}` : ""}`, { direction: "auto" })
+            .addTo(group);
+        }
+        group.addTo(mapRef.current);
+        severeMarkersLayerRef.current = group;
+      })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [leafletLoaded, showSevereMarkers, location.radarSite]);
 
   const opacityRef = useRef(opacity);
   useEffect(() => { opacityRef.current = opacity; radarLayerRef.current?.setOpacity(opacity); }, [opacity]);
