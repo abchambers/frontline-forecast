@@ -1,0 +1,18 @@
+{
+  "name": "frontline-forecast-radar-worker",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "In-house NEXRAD Level II/III ingestion worker. Separate deployment target from the Next.js app (a persistent process, not a serverless route) — see docs in this directory.",
+  "scripts": {
+    "test:kffc": "tsx scripts/test-kffc.ts"
+  },
+  "dependencies": {
+    "nexrad-level-2-data": "^2.4.3"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "@types/node": "^22.10.2"
+  }
+}
