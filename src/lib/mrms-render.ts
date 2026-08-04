@@ -41,7 +41,12 @@ const NO_ECHO_THRESHOLD_DBZ = 2;
 // rain). Draws the sharp-pixel canvas onto a second canvas with a light
 // canvas-native blur, which also naturally softens hard edges into a fade —
 // a storm boundary shouldn't look like a stencil cutout.
-const SOFT_BLUR_PX = 1.4;
+// User-reported live: at 1.4px this read as too blurry once Leaflet scaled
+// the ~496x414 native canvas up to fill the map at typical zoom levels — the
+// blur amount is fixed in native-canvas pixels, so it gets visually
+// amplified by whatever zoom/stretch factor the map is at, which a
+// zoomed-in test render doesn't show. Dialed back to a gentler touch.
+const SOFT_BLUR_PX = 0.6;
 
 function applySoftBlur(source: HTMLCanvasElement): string {
   const blurred = document.createElement("canvas");
