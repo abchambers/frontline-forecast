@@ -2,20 +2,20 @@
 
 import Script from "next/script";
 import { useEffect, useRef, useState } from "react";
-import { renderMrmsGridToDataUrl, type MrmsBounds, type MrmsPoint } from "@/lib/mrms-render";
+import { renderMrmsGridToDataUrl, renderVelocityGridToDataUrl, type MrmsBounds, type MrmsPoint } from "@/lib/mrms-render";
 
 declare global {
   interface Window { L?: any }
 }
 
-type RadarMapProps = { opacity?: number; showReflectivity?: boolean; showAlerts?: boolean; showOutlook?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; theme?: "light" | "dark"; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string }; onSourceChange?: (source: "nexrad" | "gribstream" | "provider" | null) => void };
+type RadarMapProps = { opacity?: number; showReflectivity?: boolean; moment?: "reflectivity" | "velocity"; showAlerts?: boolean; showOutlook?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; theme?: "light" | "dark"; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string }; onSourceChange?: (source: "nexrad" | "gribstream" | "provider" | null) => void };
 
 const basemapTiles = {
   light: { url: "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
   dark: { url: "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
 };
 
-export default function RadarMap({ opacity = 0.72, showReflectivity = true, showAlerts = true, showOutlook = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, isCurrentFrame = true, theme = "light", location, onSourceChange }: RadarMapProps) {
+export default function RadarMap({ opacity = 0.72, showReflectivity = true, moment = "reflectivity", showAlerts = true, showOutlook = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, isCurrentFrame = true, theme = "light", location, onSourceChange }: RadarMapProps) {
   const mapElement = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const baseLayerRef = useRef<any>(null);
@@ -171,13 +171,13 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, show
         .then(async (response) => {
           if (!response.ok) throw new Error("GribStream unavailable");
           const data = await response.json() as { points: MrmsPoint[]; bounds: MrmsBounds; step: number };
-          addGridLayer(data, "gribstream");
+          addGridLayer(data, "gribstream", renderMrmsGridToDataUrl);
         })
         .catch(() => { if (!cancelled) addProviderLayer(); });
     }
 
-    function addGridLayer(data: { points: MrmsPoint[]; bounds: MrmsBounds; step: number }, source: "nexrad" | "gribstream") {
-      const dataUrl = renderMrmsGridToDataUrl(data.points, data.bounds, data.step);
+    function addGridLayer(data: { points: MrmsPoint[]; bounds: MrmsBounds; step: number }, source: "nexrad" | "gribstream", renderer: typeof renderMrmsGridToDataUrl) {
+      const dataUrl = renderer(data.points, data.bounds, data.step);
       if (!dataUrl || cancelled || !mapRef.current) throw new Error("Render failed");
       const bounds: [[number, number], [number, number]] = [[data.bounds.minLatitude, data.bounds.minLongitude], [data.bounds.maxLatitude, data.bounds.maxLongitude]];
       const nextLayer = window.L.imageOverlay(dataUrl, bounds, { opacity: 0, interactive: false });
@@ -185,7 +185,23 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, show
       settle(nextLayer, source);
     }
 
-    if (!isCurrentFrame) {
+    if (moment === "velocity") {
+      // Velocity only exists via in-house NEXRAD — GribStream's MRMS feed and the provider WMS
+      // are both reflectivity-only, so there's no equivalent fallback source. On any failure this
+      // just clears the layer rather than showing the wrong product.
+      fetch(`/api/radar/nexrad?station=${location.radarSite}&moment=velocity`)
+        .then(async (response) => {
+          if (!response.ok) throw new Error("In-house velocity unavailable");
+          const data = await response.json() as { points: MrmsPoint[]; bounds: MrmsBounds; step: number };
+          addGridLayer(data, "nexrad", renderVelocityGridToDataUrl);
+        })
+        .catch(() => {
+          if (cancelled || !mapRef.current) return;
+          if (previousLayer) mapRef.current.removeLayer(previousLayer);
+          radarLayerRef.current = null;
+          onSourceChangeRef.current?.(null);
+        });
+    } else if (!isCurrentFrame) {
       // Scrubbed to a past position in the timeline loop — the current-moment sources below only
       // ever answer "what's happening right now," so historical frames stay on the provider mosaic.
       addProviderLayer();
@@ -199,13 +215,13 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, show
         .then(async (response) => {
           if (!response.ok) throw new Error("In-house NEXRAD unavailable");
           const data = await response.json() as { points: MrmsPoint[]; bounds: MrmsBounds; step: number };
-          addGridLayer(data, "nexrad");
+          addGridLayer(data, "nexrad", renderMrmsGridToDataUrl);
         })
         .catch(() => { if (!cancelled) addGribstreamLayer(); });
     }
 
     return () => { cancelled = true; };
-  }, [leafletLoaded, showReflectivity, refreshToken, timelineTileUrl, isCurrentFrame, location]);
+  }, [leafletLoaded, showReflectivity, moment, refreshToken, timelineTileUrl, isCurrentFrame, location]);
 
   return (
     <>

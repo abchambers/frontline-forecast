@@ -62,6 +62,37 @@ export function projectElevation(elevation: DecodedElevation, site: RadarSite, m
   return points;
 }
 
+// Raw Level II has none of MRMS's quality control — GribStream's feed
+// strips ground clutter and biological scatter (insects/birds, especially
+// at dusk) before it reaches an app; this decode doesn't get that for free.
+// Found live in the main app (src/lib/nexrad/project.ts): a real evening
+// volume showed a wide diffuse patch of weak scattered echo with no
+// coherent core, well outside the actual storm — biological scatter's
+// signature, not precipitation. Mirrors the same fix here for consistency.
+const MIN_REFLECTIVITY_DBZ = 15;
+const DESPECKLE_MIN_NEIGHBORS = 3;
+
+function despeckle(cells: Map<string, number | null>): Map<string, number | null> {
+  const despeckled = new Map<string, number | null>();
+  for (const [key, value] of cells) {
+    if (value === null) {
+      despeckled.set(key, value);
+      continue;
+    }
+    const [row, col] = key.split(",").map(Number);
+    let neighbors = 0;
+    for (let dRow = -1; dRow <= 1; dRow += 1) {
+      for (let dCol = -1; dCol <= 1; dCol += 1) {
+        if (dRow === 0 && dCol === 0) continue;
+        const neighbor = cells.get(`${row + dRow},${col + dCol}`);
+        if (neighbor !== undefined && neighbor !== null) neighbors += 1;
+      }
+    }
+    despeckled.set(key, neighbors >= DESPECKLE_MIN_NEIGHBORS ? value : null);
+  }
+  return despeckled;
+}
+
 // Bins the irregular polar point cloud into a regular lat/lon grid matching
 // the shape the app's existing renderer (src/lib/mrms-render.ts) already
 // consumes, so Phase 2 can point the UI at this worker's output with no
@@ -69,7 +100,7 @@ export function projectElevation(elevation: DecodedElevation, site: RadarSite, m
 // the radar are much denser than the grid resolution, so an incoming later
 // gate simply overwrites an earlier one in the same cell — acceptable at
 // this resolution, revisit only if cell-boundary artifacts show up visually.
-export function resampleToGrid(points: GridPoint[], stepDeg: number): { grid: GridPoint[]; bounds: GridBounds } {
+export function resampleToGrid(points: GridPoint[], stepDeg: number, moment: "reflectivity" | "velocity" = "reflectivity"): { grid: GridPoint[]; bounds: GridBounds } {
   let minLat = Infinity;
   let maxLat = -Infinity;
   let minLon = Infinity;
@@ -82,12 +113,14 @@ export function resampleToGrid(points: GridPoint[], stepDeg: number): { grid: Gr
   }
 
   const bounds: GridBounds = { minLatitude: minLat, maxLatitude: maxLat, minLongitude: minLon, maxLongitude: maxLon };
-  const cells = new Map<string, number | null>();
+  let cells = new Map<string, number | null>();
   for (const p of points) {
     const row = Math.round((p.lat - minLat) / stepDeg);
     const col = Math.round((p.lon - minLon) / stepDeg);
-    cells.set(`${row},${col}`, p.dbz);
+    const value = moment === "reflectivity" && p.dbz !== null && p.dbz < MIN_REFLECTIVITY_DBZ ? null : p.dbz;
+    cells.set(`${row},${col}`, value);
   }
+  if (moment === "reflectivity") cells = despeckle(cells);
 
   const grid: GridPoint[] = [];
   for (const [key, dbz] of cells) {

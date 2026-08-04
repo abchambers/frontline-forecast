@@ -55,7 +55,7 @@ export async function GET(request: Request) {
   try {
     const [site, volume] = await Promise.all([getRadarSite(station), fetchLatestVolume(station)]);
     const elevation = await decodeLowestElevation(volume.buffer, moment as "reflectivity" | "velocity");
-    const { grid, bounds } = projectAndResample(elevation, site, GRID_STEP_DEG, MAX_RANGE_KM);
+    const { grid, bounds } = projectAndResample(elevation, site, GRID_STEP_DEG, MAX_RANGE_KM, moment as "reflectivity" | "velocity");
     const hasSignal = grid.some((point) => point.dbz !== null);
     if (!hasSignal) throw new Error(`No ${moment} data available for ${station} in this volume.`);
 
