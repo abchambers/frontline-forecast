@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { getRadarSite } from "@/lib/nexrad/site";
-import { fetchLatestVolume, decodeLowestElevation } from "@/lib/nexrad/level2";
+import { getVolumeCached, extractLowestElevation } from "@/lib/nexrad/level2";
 import { computeReflectivityGrid, computeVelocityGrid } from "@/lib/nexrad/project";
 
 // In-house NEXRAD Level II radar — free, public-domain NOAA data (unlike
@@ -53,25 +53,26 @@ export async function GET(request: Request) {
   }
 
   try {
-    const [site, volume] = await Promise.all([getRadarSite(station), fetchLatestVolume(station)]);
+    // getVolumeCached is shared across BOTH moments (keyed by station only,
+    // caches the PARSED volume) — switching between Radar and Velocity in
+    // the picker, the most common reason both get requested close together,
+    // no longer re-downloads AND re-parses the same ~5-6MB volume from S3.
+    const [site, volume] = await Promise.all([getRadarSite(station), getVolumeCached(station)]);
+    const { radar } = volume;
 
     // Velocity needs a co-located reflectivity echo mask to filter against —
     // weak/clutter gates produce essentially random Doppler estimates, not
     // just weak ones, so gating by reflectivity signal (not by velocity
-    // magnitude) is the real fix. Both moments decode from the SAME
-    // already-downloaded volume buffer, so this is extra CPU, not an extra
-    // network/S3 fetch.
+    // magnitude) is the real fix.
     let grid, bounds, elevationDeg;
     if (moment === "velocity") {
-      const [reflElevation, velElevation] = await Promise.all([
-        decodeLowestElevation(volume.buffer, "reflectivity"),
-        decodeLowestElevation(volume.buffer, "velocity"),
-      ]);
+      const reflElevation = extractLowestElevation(radar, "reflectivity");
+      const velElevation = extractLowestElevation(radar, "velocity");
       const { echoMask } = computeReflectivityGrid(reflElevation, site, GRID_STEP_DEG, MAX_RANGE_KM);
       ({ grid, bounds } = computeVelocityGrid(velElevation, site, GRID_STEP_DEG, MAX_RANGE_KM, echoMask));
       elevationDeg = velElevation.elevationDeg;
     } else {
-      const elevation = await decodeLowestElevation(volume.buffer, "reflectivity");
+      const elevation = extractLowestElevation(radar, "reflectivity");
       ({ grid, bounds } = computeReflectivityGrid(elevation, site, GRID_STEP_DEG, MAX_RANGE_KM));
       elevationDeg = elevation.elevationDeg;
     }

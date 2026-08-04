@@ -38,7 +38,7 @@ async function listVolumes(prefix: string): Promise<S3Object[]> {
 
 // Finds the most recent complete volume for a station, checking yesterday's
 // prefix too since a volume near UTC midnight can land in either day's folder.
-export async function fetchLatestVolume(stationId: string): Promise<{ buffer: Buffer; key: string; lastModified: string }> {
+async function fetchLatestVolume(stationId: string): Promise<{ buffer: Buffer; key: string; lastModified: string }> {
   const now = new Date();
   const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
   const [today, prior] = await Promise.all([
@@ -74,16 +74,47 @@ export type DecodedElevation = {
   radials: DecodedRadial[];
 };
 
+// Reflectivity and velocity both need the same underlying volume, PARSED —
+// not just downloaded. Caching only the raw buffer (an earlier version of
+// this) still re-parsed the full ~5-6MB binary volume on every request, and
+// found live, that parse was itself a meaningful chunk of the "several
+// seconds" this took to load — not just the S3 download. Caching the parsed
+// Level2Radar object means a velocity request right after a reflectivity
+// request for the same station (exactly what toggling the Data-layer picker
+// does) skips both the download AND the parse, going straight to
+// extractLowestElevation. Keyed by station only (not station+moment), TTL
+// matches the route's own payload cache so a warmed volume never outlives
+// the data it would be re-decoded into anyway.
+const VOLUME_CACHE_TTL_MS = 90_000;
+type VolumeCacheEntry = {
+  radar: InstanceType<typeof Level2Radar>;
+  key: string;
+  lastModified: string;
+  expiresAt: number;
+};
+const volumeCache = new Map<string, VolumeCacheEntry>();
+
+export async function getVolumeCached(
+  stationId: string,
+): Promise<{ radar: InstanceType<typeof Level2Radar>; key: string; lastModified: string }> {
+  const cached = volumeCache.get(stationId);
+  if (cached && cached.expiresAt > Date.now()) return cached;
+  const { buffer, key, lastModified } = await fetchLatestVolume(stationId);
+  const radar = await new Level2Radar(buffer);
+  const entry = { radar, key, lastModified, expiresAt: Date.now() + VOLUME_CACHE_TTL_MS };
+  volumeCache.set(stationId, entry);
+  return entry;
+}
+
 // Picks the lowest elevation angle that actually carries the requested
 // moment — reflectivity is on every tilt, but velocity is only on the
 // split-cut lower tilts in most VCPs (confirmed empirically against a real
 // KFFC volume: REF on all 17 elevations, VEL only on a subset — not
 // documented anywhere obvious, it's how the volume actually decoded).
-export async function decodeLowestElevation(
-  buffer: Buffer,
+export function extractLowestElevation(
+  radar: InstanceType<typeof Level2Radar>,
   moment: "reflectivity" | "velocity",
-): Promise<DecodedElevation> {
-  const radar = await new Level2Radar(buffer);
+): DecodedElevation {
   const getter = moment === "reflectivity" ? radar.getHighresReflectivity.bind(radar) : radar.getHighresVelocity.bind(radar);
 
   for (const elevation of radar.listElevations()) {
