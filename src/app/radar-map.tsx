@@ -8,14 +8,16 @@ declare global {
   interface Window { L?: any }
 }
 
-type RadarMapProps = { opacity?: number; showReflectivity?: boolean; moment?: "reflectivity" | "velocity"; showAlerts?: boolean; showOutlook?: boolean; showSevereMarkers?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; theme?: "light" | "dark"; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string }; onSourceChange?: (source: "nexrad" | "gribstream" | "provider" | null) => void };
+type RadarStationSummary = { id: string; name: string; latitude: number; longitude: number };
+
+type RadarMapProps = { opacity?: number; showReflectivity?: boolean; moment?: "reflectivity" | "velocity"; showAlerts?: boolean; showOutlook?: boolean; showSevereMarkers?: boolean; showStationPicker?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; theme?: "light" | "dark"; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string }; onSourceChange?: (source: "nexrad" | "provider" | null) => void; onStationSelect?: (station: RadarStationSummary) => void };
 
 const basemapTiles = {
   light: { url: "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
   dark: { url: "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
 };
 
-export default function RadarMap({ opacity = 0.72, showReflectivity = true, moment = "reflectivity", showAlerts = true, showOutlook = false, showSevereMarkers = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, isCurrentFrame = true, theme = "light", location, onSourceChange }: RadarMapProps) {
+export default function RadarMap({ opacity = 0.72, showReflectivity = true, moment = "reflectivity", showAlerts = true, showOutlook = false, showSevereMarkers = false, showStationPicker = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, isCurrentFrame = true, theme = "light", location, onSourceChange, onStationSelect }: RadarMapProps) {
   const mapElement = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const baseLayerRef = useRef<any>(null);
@@ -23,6 +25,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
   const alertLayerRef = useRef<any>(null);
   const outlookLayerRef = useRef<any>(null);
   const severeMarkersLayerRef = useRef<any>(null);
+  const stationPickerLayerRef = useRef<any>(null);
   const [leafletLoaded, setLeafletLoaded] = useState(false);
 
   useEffect(() => {
@@ -46,6 +49,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       alertLayerRef.current = null;
       outlookLayerRef.current = null;
       severeMarkersLayerRef.current = null;
+      stationPickerLayerRef.current = null;
       mapRef.current = null;
       map.remove();
     };
@@ -159,12 +163,74 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
     return () => { active = false; };
   }, [leafletLoaded, showSevereMarkers, location.radarSite]);
 
+  // Station picker (task #31, redesigned per explicit direction): stations
+  // are picked by tapping a dot ON the map, not a text search — you can't
+  // pick the wrong one if you can see where it actually is relative to you.
+  // Selecting any of the 159 real WSR-88D sites is always safe even if this
+  // app doesn't have verified in-house support for it yet — the existing
+  // nexrad -> provider fallback chain (see the reflectivity/velocity effect
+  // below) already handles that per-request, silently.
+  const allStationsRef = useRef<RadarStationSummary[] | null>(null);
+  const onStationSelectRef = useRef(onStationSelect);
+  useEffect(() => { onStationSelectRef.current = onStationSelect; }, [onStationSelect]);
+
+  useEffect(() => {
+    if (!leafletLoaded || !mapRef.current || !window.L) return;
+    if (stationPickerLayerRef.current) mapRef.current.removeLayer(stationPickerLayerRef.current);
+    stationPickerLayerRef.current = null;
+    if (!showStationPicker) return;
+    let active = true;
+    const map = mapRef.current;
+
+    function renderVisibleStations(stations: RadarStationSummary[]) {
+      if (!active || !mapRef.current) return;
+      if (stationPickerLayerRef.current) mapRef.current.removeLayer(stationPickerLayerRef.current);
+      const bounds = map.getBounds();
+      const group = window.L.layerGroup();
+      for (const station of stations) {
+        if (!bounds.contains([station.latitude, station.longitude])) continue;
+        const isActive = station.id === location.radarSite;
+        window.L.circleMarker([station.latitude, station.longitude], {
+          color: isActive ? "#18222f" : "#2667b8",
+          fillColor: isActive ? "#ffffff" : "#5b9bf0",
+          fillOpacity: 0.95,
+          weight: isActive ? 2 : 1.5,
+          radius: isActive ? 7 : 5,
+        })
+          .bindTooltip(`${station.name} (${station.id})`, { direction: "auto" })
+          .on("click", () => onStationSelectRef.current?.(station))
+          .addTo(group);
+      }
+      group.addTo(mapRef.current);
+      stationPickerLayerRef.current = group;
+    }
+
+    function loadAndRender() {
+      if (allStationsRef.current) {
+        renderVisibleStations(allStationsRef.current);
+        return;
+      }
+      fetch("/api/radar/stations")
+        .then((response) => response.json())
+        .then((data) => {
+          if (!active || !Array.isArray(data)) return;
+          allStationsRef.current = data;
+          renderVisibleStations(data);
+        })
+        .catch(() => undefined);
+    }
+
+    loadAndRender();
+    map.on("moveend", loadAndRender);
+    return () => { active = false; map.off("moveend", loadAndRender); };
+  }, [leafletLoaded, showStationPicker, location.radarSite]);
+
   const opacityRef = useRef(opacity);
   useEffect(() => { opacityRef.current = opacity; radarLayerRef.current?.setOpacity(opacity); }, [opacity]);
 
-  // Kept in a ref rather than the effect's dependency array on purpose: GribStream is metered, and
-  // an inline arrow function prop (a new reference every render) would otherwise re-trigger a real
-  // fetch on every parent re-render, not just on an actual location/frame change.
+  // Kept in a ref rather than the effect's dependency array on purpose: an inline arrow function
+  // prop (a new reference every render) would otherwise re-trigger a real decode+fetch on every
+  // parent re-render, not just on an actual location/frame change.
   const onSourceChangeRef = useRef(onSourceChange);
   useEffect(() => { onSourceChangeRef.current = onSourceChange; }, [onSourceChange]);
 
@@ -181,7 +247,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
     // previous frame immediately — avoids a flash to the bare basemap between frames.
     const previousLayer = radarLayerRef.current;
     let settled = false;
-    const settle = (nextLayer: any, source: "nexrad" | "gribstream" | "provider") => {
+    const settle = (nextLayer: any, source: "nexrad" | "provider") => {
       if (settled || cancelled) return;
       settled = true;
       nextLayer.setOpacity(opacityRef.current);
@@ -210,22 +276,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       window.setTimeout(() => settle(nextLayer, "provider"), 700);
     }
 
-    // GribStream is the interim fallback while in-house NEXRAD coverage is still being verified
-    // across locations — see the in-house-nexrad-radar project notes for why GribStream stopped
-    // being the primary source (per-call metering doesn't scale evenly across schools or support
-    // more than reflectivity without an ongoing bill; NEXRAD Level II/III data is free and
-    // per-station instead).
-    function addGribstreamLayer() {
-      fetch(`/api/radar/gribstream?lat=${location.latitude}&lon=${location.longitude}`)
-        .then(async (response) => {
-          if (!response.ok) throw new Error("GribStream unavailable");
-          const data = await response.json() as { points: MrmsPoint[]; bounds: MrmsBounds; step: number };
-          addGridLayer(data, "gribstream", renderMrmsGridToDataUrl);
-        })
-        .catch(() => { if (!cancelled) addProviderLayer(); });
-    }
-
-    function addGridLayer(data: { points: MrmsPoint[]; bounds: MrmsBounds; step: number }, source: "nexrad" | "gribstream", renderer: typeof renderMrmsGridToDataUrl) {
+    function addGridLayer(data: { points: MrmsPoint[]; bounds: MrmsBounds; step: number }, source: "nexrad", renderer: typeof renderMrmsGridToDataUrl) {
       const dataUrl = renderer(data.points, data.bounds, data.step);
       if (!dataUrl || cancelled || !mapRef.current) throw new Error("Render failed");
       const bounds: [[number, number], [number, number]] = [[data.bounds.minLatitude, data.bounds.minLongitude], [data.bounds.maxLatitude, data.bounds.maxLongitude]];
@@ -235,9 +286,9 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
     }
 
     if (moment === "velocity") {
-      // Velocity only exists via in-house NEXRAD — GribStream's MRMS feed and the provider WMS
-      // are both reflectivity-only, so there's no equivalent fallback source. On any failure this
-      // just clears the layer rather than showing the wrong product.
+      // Velocity only exists via in-house NEXRAD — the IEM/NWS provider is reflectivity-only, so
+      // there's no equivalent fallback source. On any failure this just clears the layer rather
+      // than showing the wrong product.
       fetch(`/api/radar/nexrad?station=${location.radarSite}&moment=velocity`)
         .then(async (response) => {
           if (!response.ok) throw new Error("In-house velocity unavailable");
@@ -256,17 +307,20 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       addProviderLayer();
     } else {
       // In-house NEXRAD Level II is the primary live source — free, real, per-station data,
-      // rendered into a colored overlay client-side exactly like GribStream's payload was. Falls
-      // back to GribStream, then to the provider WMS, on any failure (station outage, decode
-      // error, network error), so an in-house radar issue never breaks the view, it just quietly
-      // reverts to what was already working.
+      // rendered into a colored overlay client-side. Falls back directly to the IEM/NWS provider
+      // WMS on any failure (station outage, decode error, network error — including a station
+      // this app doesn't have verified in-house support for yet, since the picker lets you select
+      // any of the 159 real WSR-88D sites), so an in-house radar issue never breaks the view, it
+      // just quietly reverts to what was already working. No metered third-party API sits in
+      // between anymore — see the in-house-nexrad-radar project notes for why GribStream was
+      // dropped entirely rather than kept as a middle fallback.
       fetch(`/api/radar/nexrad?station=${location.radarSite}`)
         .then(async (response) => {
           if (!response.ok) throw new Error("In-house NEXRAD unavailable");
           const data = await response.json() as { points: MrmsPoint[]; bounds: MrmsBounds; step: number };
           addGridLayer(data, "nexrad", renderMrmsGridToDataUrl);
         })
-        .catch(() => { if (!cancelled) addGribstreamLayer(); });
+        .catch(() => { if (!cancelled) addProviderLayer(); });
     }
 
     return () => { cancelled = true; };
