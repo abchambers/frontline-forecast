@@ -31,6 +31,29 @@ const COLOR_STOPS: { dbz: number; rgb: [number, number, number] }[] = [
 // values that aren't real precipitation signal.
 const NO_ECHO_THRESHOLD_DBZ = 2;
 
+// Cosmetic smoothing only — the underlying grid data is untouched, this
+// just softens how it's painted. Native single-radar resolution genuinely
+// looks grainier than MRMS composite reflectivity (which smooths across
+// multiple merged radars before an app ever sees it) — confirmed via real
+// texture analysis and direct visual inspection that this app's remaining
+// speckle is real weak precipitation, not clutter, so the right fix is a
+// softer render, not a stricter data cutoff (that would just delete real
+// rain). Draws the sharp-pixel canvas onto a second canvas with a light
+// canvas-native blur, which also naturally softens hard edges into a fade —
+// a storm boundary shouldn't look like a stencil cutout.
+const SOFT_BLUR_PX = 1.4;
+
+function applySoftBlur(source: HTMLCanvasElement): string {
+  const blurred = document.createElement("canvas");
+  blurred.width = source.width;
+  blurred.height = source.height;
+  const context = blurred.getContext("2d");
+  if (!context) return source.toDataURL("image/png");
+  context.filter = `blur(${SOFT_BLUR_PX}px)`;
+  context.drawImage(source, 0, 0);
+  return blurred.toDataURL("image/png");
+}
+
 function colorForDbz(dbz: number): [number, number, number] {
   if (dbz <= COLOR_STOPS[0].dbz) return COLOR_STOPS[0].rgb;
   const last = COLOR_STOPS[COLOR_STOPS.length - 1];
@@ -80,7 +103,7 @@ export function renderMrmsGridToDataUrl(points: MrmsPoint[], bounds: MrmsBounds,
     imageData.data[index + 3] = 235;
   }
   context.putImageData(imageData, 0, 0);
-  return canvas.toDataURL("image/png");
+  return applySoftBlur(canvas);
 }
 
 // Diverging green/red velocity scale (NWS convention: green = moving toward
@@ -150,5 +173,5 @@ export function renderVelocityGridToDataUrl(points: MrmsPoint[], bounds: MrmsBou
     imageData.data[index + 3] = 235;
   }
   context.putImageData(imageData, 0, 0);
-  return canvas.toDataURL("image/png");
+  return applySoftBlur(canvas);
 }
