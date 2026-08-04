@@ -31,7 +31,7 @@ function destinationPoint(site: RadarSite, bearingDeg: number, groundRangeKm: nu
 
 // Projects every gate of every radial to a real lat/lon — an irregular point
 // cloud at polar-native resolution (down to 250m near the radar). Kept
-// separate from resampleToGrid so geometry and output-resolution stay two
+// separate from resampling so geometry and output-resolution stay two
 // independently testable concerns.
 //
 // maxRangeKm crops gates beyond a useful local-viewing radius. Super-res
@@ -58,25 +58,30 @@ function projectElevation(elevation: DecodedElevation, site: RadarSite, maxRange
   return points;
 }
 
+// Absolute grid indexing (not relative to a per-call bounding box) so a
+// reflectivity grid and a velocity grid from the same request line up
+// cell-for-cell even though they come from different elevation tilts with
+// different native gate spacing (observed live: 1832 reflectivity gates vs.
+// 1192 velocity gates on the same volume) and therefore slightly different
+// data extents.
+function cellKey(lat: number, lon: number, stepDeg: number): string {
+  return `${Math.round(lat / stepDeg)},${Math.round(lon / stepDeg)}`;
+}
+
 // Raw Level II reflectivity has none of MRMS's quality control applied —
 // GribStream's feed (and NOAA's MRMS generally) already strips ground
 // clutter and biological scatter (insects, birds — especially common at
-// dusk) before it ever reaches an app. This app's own decode doesn't get
-// that for free. Found live: a real evening volume showed a wide diffuse
-// patch of weak, scattered echo with no coherent core, well outside the
-// actual storm to the east — the signature of biological scatter, not
-// precipitation. Two real, cheap mitigations, reflectivity-only (velocity
-// has its own near-zero neutral band in mrms-render.ts and isn't addressed
-// here — no evidence yet it has the same problem):
+// dusk) before it ever reaches an app. Found live: a real evening volume
+// showed a wide diffuse patch of weak, scattered echo with no coherent core,
+// well outside the actual storm — the signature of biological scatter, not
+// precipitation. Two practical mitigations (not real QC — no dealiasing or
+// texture analysis, the actual hard part MRMS solves):
 //   1. A higher noise floor than GribStream's already-QC'd data needs —
 //      biological/clutter returns are typically weak (well under 20 dBZ).
 //   2. Despeckling: a real storm has a dense, contiguous core; scattered
 //      clutter/bugs mostly don't. Cells without enough same-signal
 //      neighbors are dropped.
-// Neither is real quality control (dealiasing, texture analysis, etc. —
-// the actual hard part MRMS solves) — just a practical noise-floor pass
-// suited to this app's raw decode. Revisit if it turns out to also clip
-// real light stratiform rain.
+// Revisit if it turns out to also clip real light stratiform rain.
 const MIN_REFLECTIVITY_DBZ = 15;
 const DESPECKLE_MIN_NEIGHBORS = 3;
 
@@ -92,7 +97,8 @@ function despeckle(cells: Map<string, number | null>): Map<string, number | null
     for (let dRow = -1; dRow <= 1; dRow += 1) {
       for (let dCol = -1; dCol <= 1; dCol += 1) {
         if (dRow === 0 && dCol === 0) continue;
-        if (cells.get(`${row + dRow},${col + dCol}`) !== undefined && cells.get(`${row + dRow},${col + dCol}`) !== null) neighbors += 1;
+        const neighbor = cells.get(`${row + dRow},${col + dCol}`);
+        if (neighbor !== undefined && neighbor !== null) neighbors += 1;
       }
     }
     despeckled.set(key, neighbors >= DESPECKLE_MIN_NEIGHBORS ? value : null);
@@ -100,12 +106,7 @@ function despeckle(cells: Map<string, number | null>): Map<string, number | null
   return despeckled;
 }
 
-// Bins the irregular polar point cloud into a regular lat/lon grid matching
-// the exact shape src/lib/mrms-render.ts already renders — so the UI needs
-// no new rendering code, only a new data source. Last-write-wins per cell:
-// gates near the radar are much denser than the grid resolution, so a later
-// gate simply overwrites an earlier one landing in the same cell.
-function resampleToGrid(points: MrmsPoint[], stepDeg: number, moment: "reflectivity" | "velocity"): { grid: MrmsPoint[]; bounds: MrmsBounds } {
+function boundsOf(points: MrmsPoint[]): MrmsBounds {
   let minLat = Infinity;
   let maxLat = -Infinity;
   let minLon = Infinity;
@@ -116,25 +117,72 @@ function resampleToGrid(points: MrmsPoint[], stepDeg: number, moment: "reflectiv
     if (p.lon < minLon) minLon = p.lon;
     if (p.lon > maxLon) maxLon = p.lon;
   }
-
-  const bounds: MrmsBounds = { minLatitude: minLat, maxLatitude: maxLat, minLongitude: minLon, maxLongitude: maxLon };
-  let cells = new Map<string, number | null>();
-  for (const p of points) {
-    const row = Math.round((p.lat - minLat) / stepDeg);
-    const col = Math.round((p.lon - minLon) / stepDeg);
-    const value = moment === "reflectivity" && p.dbz !== null && p.dbz < MIN_REFLECTIVITY_DBZ ? null : p.dbz;
-    cells.set(`${row},${col}`, value);
-  }
-  if (moment === "reflectivity") cells = despeckle(cells);
-
-  const grid: MrmsPoint[] = [];
-  for (const [key, dbz] of cells) {
-    const [row, col] = key.split(",").map(Number);
-    grid.push({ lat: minLat + row * stepDeg, lon: minLon + col * stepDeg, dbz });
-  }
-  return { grid, bounds };
+  return { minLatitude: minLat, maxLatitude: maxLat, minLongitude: minLon, maxLongitude: maxLon };
 }
 
-export function projectAndResample(elevation: DecodedElevation, site: RadarSite, stepDeg: number, maxRangeKm: number, moment: "reflectivity" | "velocity") {
-  return resampleToGrid(projectElevation(elevation, site, maxRangeKm), stepDeg, moment);
+function cellsToGrid(cells: Map<string, number | null>, stepDeg: number): MrmsPoint[] {
+  const grid: MrmsPoint[] = [];
+  for (const [key, dbz] of cells) {
+    const [rowIndex, colIndex] = key.split(",").map(Number);
+    grid.push({ lat: rowIndex * stepDeg, lon: colIndex * stepDeg, dbz });
+  }
+  return grid;
+}
+
+// Bins reflectivity's irregular polar point cloud into a regular lat/lon
+// grid matching the exact shape src/lib/mrms-render.ts already renders, with
+// the noise-floor + despeckle pass above applied. Also returns an "echo
+// mask" — the set of grid cells with real signal — so velocity (computed
+// separately, see computeVelocityGrid) can be gated to only where real
+// reflectivity echo exists.
+export function computeReflectivityGrid(
+  elevation: DecodedElevation,
+  site: RadarSite,
+  stepDeg: number,
+  maxRangeKm: number,
+): { grid: MrmsPoint[]; bounds: MrmsBounds; echoMask: Set<string> } {
+  const points = projectElevation(elevation, site, maxRangeKm);
+  const bounds = boundsOf(points);
+
+  let cells = new Map<string, number | null>();
+  for (const p of points) {
+    const key = cellKey(p.lat, p.lon, stepDeg);
+    const value = p.dbz !== null && p.dbz < MIN_REFLECTIVITY_DBZ ? null : p.dbz;
+    cells.set(key, value);
+  }
+  cells = despeckle(cells);
+
+  const echoMask = new Set<string>();
+  for (const [key, value] of cells) if (value !== null) echoMask.add(key);
+
+  return { grid: cellsToGrid(cells, stepDeg), bounds, echoMask };
+}
+
+// Bins velocity's irregular polar point cloud into a regular lat/lon grid,
+// keeping a cell only where the co-located reflectivity echo mask says
+// there's real signal underneath it. This is the actual fix for velocity
+// noise, not despeckling velocity itself: you can't get a meaningful
+// Doppler shift from a target that barely exists, so weak/clutter gates
+// produce essentially random velocity, not just weak velocity — nulling by
+// value doesn't help, gating by co-located reflectivity does. Deliberately
+// NOT despeckled on its own axis, unlike reflectivity — real severe-weather
+// signatures (tornadic rotation, microburst divergence) are often small,
+// tightly localized couplets, exactly what a despeckle pass would erase.
+export function computeVelocityGrid(
+  elevation: DecodedElevation,
+  site: RadarSite,
+  stepDeg: number,
+  maxRangeKm: number,
+  echoMask: Set<string>,
+): { grid: MrmsPoint[]; bounds: MrmsBounds } {
+  const points = projectElevation(elevation, site, maxRangeKm);
+  const bounds = boundsOf(points);
+
+  const cells = new Map<string, number | null>();
+  for (const p of points) {
+    const key = cellKey(p.lat, p.lon, stepDeg);
+    cells.set(key, echoMask.has(key) ? p.dbz : null);
+  }
+
+  return { grid: cellsToGrid(cells, stepDeg), bounds };
 }

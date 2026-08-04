@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { getRadarSite } from "@/lib/nexrad/site";
 import { fetchLatestVolume, decodeLowestElevation } from "@/lib/nexrad/level2";
-import { projectAndResample } from "@/lib/nexrad/project";
+import { computeReflectivityGrid, computeVelocityGrid } from "@/lib/nexrad/project";
 
 // In-house NEXRAD Level II radar — free, public-domain NOAA data (unlike
 // GribStream's paid, ToS-ambiguous MRMS resale), and inherently per-station
@@ -54,8 +54,28 @@ export async function GET(request: Request) {
 
   try {
     const [site, volume] = await Promise.all([getRadarSite(station), fetchLatestVolume(station)]);
-    const elevation = await decodeLowestElevation(volume.buffer, moment as "reflectivity" | "velocity");
-    const { grid, bounds } = projectAndResample(elevation, site, GRID_STEP_DEG, MAX_RANGE_KM, moment as "reflectivity" | "velocity");
+
+    // Velocity needs a co-located reflectivity echo mask to filter against —
+    // weak/clutter gates produce essentially random Doppler estimates, not
+    // just weak ones, so gating by reflectivity signal (not by velocity
+    // magnitude) is the real fix. Both moments decode from the SAME
+    // already-downloaded volume buffer, so this is extra CPU, not an extra
+    // network/S3 fetch.
+    let grid, bounds, elevationDeg;
+    if (moment === "velocity") {
+      const [reflElevation, velElevation] = await Promise.all([
+        decodeLowestElevation(volume.buffer, "reflectivity"),
+        decodeLowestElevation(volume.buffer, "velocity"),
+      ]);
+      const { echoMask } = computeReflectivityGrid(reflElevation, site, GRID_STEP_DEG, MAX_RANGE_KM);
+      ({ grid, bounds } = computeVelocityGrid(velElevation, site, GRID_STEP_DEG, MAX_RANGE_KM, echoMask));
+      elevationDeg = velElevation.elevationDeg;
+    } else {
+      const elevation = await decodeLowestElevation(volume.buffer, "reflectivity");
+      ({ grid, bounds } = computeReflectivityGrid(elevation, site, GRID_STEP_DEG, MAX_RANGE_KM));
+      elevationDeg = elevation.elevationDeg;
+    }
+
     const hasSignal = grid.some((point) => point.dbz !== null);
     if (!hasSignal) throw new Error(`No ${moment} data available for ${station} in this volume.`);
 
@@ -64,7 +84,7 @@ export async function GET(request: Request) {
       bounds,
       step: GRID_STEP_DEG,
       points: grid,
-      elevationDeg: elevation.elevationDeg,
+      elevationDeg,
       source: `NEXRAD Level II (${station}, ${moment})`,
     };
     cache.set(cacheKey, { data: payload, expiresAt: Date.now() + CACHE_TTL_MS });
