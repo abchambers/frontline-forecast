@@ -60,20 +60,34 @@ export async function GET(request: Request) {
     const [site, volume] = await Promise.all([getRadarSite(station), getVolumeCached(station)]);
     const { radar } = volume;
 
+    // Correlation coefficient (RHO) gates reflectivity by the actual physical
+    // signature of a real hydrometeor vs. clutter/insects, replacing the
+    // cruder noise-floor+despeckle heuristic wherever dual-pol data decodes
+    // for this volume (see project.ts for why). Not every volume/station is
+    // guaranteed to carry it, so this degrades gracefully to the old
+    // heuristic rather than failing the whole request.
+    let correlationCoefficient;
+    try {
+      correlationCoefficient = extractLowestElevation(radar, "correlationCoefficient");
+    } catch {
+      correlationCoefficient = undefined;
+    }
+
     // Velocity needs a co-located reflectivity echo mask to filter against —
     // weak/clutter gates produce essentially random Doppler estimates, not
     // just weak ones, so gating by reflectivity signal (not by velocity
     // magnitude) is the real fix.
-    let grid, bounds, elevationDeg;
+    let grid, bounds, elevationDeg, qualityControl;
     if (moment === "velocity") {
       const reflElevation = extractLowestElevation(radar, "reflectivity");
       const velElevation = extractLowestElevation(radar, "velocity");
-      const { echoMask } = computeReflectivityGrid(reflElevation, site, GRID_STEP_DEG, MAX_RANGE_KM);
+      const { echoMask, qualityControl: qc } = computeReflectivityGrid(reflElevation, site, GRID_STEP_DEG, MAX_RANGE_KM, correlationCoefficient);
       ({ grid, bounds } = computeVelocityGrid(velElevation, site, GRID_STEP_DEG, MAX_RANGE_KM, echoMask));
       elevationDeg = velElevation.elevationDeg;
+      qualityControl = qc;
     } else {
       const elevation = extractLowestElevation(radar, "reflectivity");
-      ({ grid, bounds } = computeReflectivityGrid(elevation, site, GRID_STEP_DEG, MAX_RANGE_KM));
+      ({ grid, bounds, qualityControl } = computeReflectivityGrid(elevation, site, GRID_STEP_DEG, MAX_RANGE_KM, correlationCoefficient));
       elevationDeg = elevation.elevationDeg;
     }
 
@@ -86,6 +100,7 @@ export async function GET(request: Request) {
       step: GRID_STEP_DEG,
       points: grid,
       elevationDeg,
+      qualityControl,
       source: `NEXRAD Level II (${station}, ${moment})`,
     };
     cache.set(cacheKey, { data: payload, expiresAt: Date.now() + CACHE_TTL_MS });

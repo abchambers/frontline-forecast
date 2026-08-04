@@ -71,17 +71,26 @@ export function cellKey(lat: number, lon: number, stepDeg: number): string {
 // Raw Level II reflectivity has none of MRMS's quality control applied —
 // GribStream's feed (and NOAA's MRMS generally) already strips ground
 // clutter and biological scatter (insects, birds — especially common at
-// dusk) before it ever reaches an app. Found live: a real evening volume
-// showed a wide diffuse patch of weak, scattered echo with no coherent core,
-// well outside the actual storm — the signature of biological scatter, not
-// precipitation. Two practical mitigations (not real QC — no dealiasing or
-// texture analysis, the actual hard part MRMS solves):
-//   1. A higher noise floor than GribStream's already-QC'd data needs —
-//      biological/clutter returns are typically weak (well under 20 dBZ).
-//   2. Despeckling: a real storm has a dense, contiguous core; scattered
-//      clutter/bugs mostly don't. Cells without enough same-signal
-//      neighbors are dropped.
-// Revisit if it turns out to also clip real light stratiform rain.
+// dusk) before it ever reaches an app. The noise floor + despeckle pass
+// below is a heuristic, not real QC.
+//
+// Correlation coefficient (RHO), when dual-pol data decodes for this volume,
+// is applied as an ADDITIONAL filter on top of the floor+despeckle result,
+// not a replacement for it. Real precipitation is highly self-similar pulse
+// to pulse (RHO close to 1); non-meteorological targets are not (commonly
+// well under 0.7) — that part is real and confirmed (0.98/0.99 alongside
+// 0.21/0.29 in the same volume). But tested standalone against real live
+// data, gating by RHO alone (even up to 0.97, a very strict threshold) let
+// through a persistent radial spoke pattern centered on the radar site that
+// the floor+despeckle baseline did NOT show — plausibly real widespread
+// light rain/drizzle (which genuinely has very high RHO), or plausibly some
+// other radar-geometry artifact; not resolved with confidence either way.
+// Given that ambiguity on a feature this core to the app, CC is deliberately
+// wired as an AND on top of the proven baseline rather than instead of it —
+// it can only remove cells the baseline already let through, never add ones
+// the baseline would have excluded, so it's strictly safe regardless of
+// which explanation for that spoke pattern turns out to be right.
+const CORRELATION_COEFFICIENT_THRESHOLD = 0.85;
 const MIN_REFLECTIVITY_DBZ = 15;
 const DESPECKLE_MIN_NEIGHBORS = 3;
 
@@ -140,10 +149,13 @@ export function computeReflectivityGrid(
   site: RadarSite,
   stepDeg: number,
   maxRangeKm: number,
-): { grid: MrmsPoint[]; bounds: MrmsBounds; echoMask: Set<string> } {
+  correlationCoefficient?: DecodedElevation,
+): { grid: MrmsPoint[]; bounds: MrmsBounds; echoMask: Set<string>; qualityControl: "noise-floor+correlation-coefficient" | "noise-floor" } {
   const points = projectElevation(elevation, site, maxRangeKm);
   const bounds = boundsOf(points);
 
+  // Baseline: the same proven floor+despeckle pass regardless of whether CC
+  // is available — unchanged from before CC existed.
   let cells = new Map<string, number | null>();
   for (const p of points) {
     const key = cellKey(p.lat, p.lon, stepDeg);
@@ -152,10 +164,27 @@ export function computeReflectivityGrid(
   }
   cells = despeckle(cells);
 
+  // CC as an additional AND on top of the baseline — see the block comment
+  // above for why this isn't a replacement.
+  if (correlationCoefficient) {
+    const confidenceMask = new Set<string>();
+    for (const p of projectElevation(correlationCoefficient, site, maxRangeKm)) {
+      if (p.dbz !== null && p.dbz >= CORRELATION_COEFFICIENT_THRESHOLD) confidenceMask.add(cellKey(p.lat, p.lon, stepDeg));
+    }
+    for (const [key, value] of cells) {
+      if (value !== null && !confidenceMask.has(key)) cells.set(key, null);
+    }
+  }
+
   const echoMask = new Set<string>();
   for (const [key, value] of cells) if (value !== null) echoMask.add(key);
 
-  return { grid: cellsToGrid(cells, stepDeg), bounds, echoMask };
+  return {
+    grid: cellsToGrid(cells, stepDeg),
+    bounds,
+    echoMask,
+    qualityControl: correlationCoefficient ? "noise-floor+correlation-coefficient" : "noise-floor",
+  };
 }
 
 // Bins velocity's irregular polar point cloud into a regular lat/lon grid,

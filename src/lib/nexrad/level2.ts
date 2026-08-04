@@ -106,25 +106,39 @@ export async function getVolumeCached(
   return entry;
 }
 
+export type Moment = "reflectivity" | "velocity" | "correlationCoefficient";
+
 // Picks the lowest elevation angle that actually carries the requested
 // moment — reflectivity is on every tilt, but velocity is only on the
 // split-cut lower tilts in most VCPs (confirmed empirically against a real
 // KFFC volume: REF on all 17 elevations, VEL only on a subset — not
 // documented anywhere obvious, it's how the volume actually decoded).
-export function extractLowestElevation(
-  radar: InstanceType<typeof Level2Radar>,
-  moment: "reflectivity" | "velocity",
-): DecodedElevation {
-  const getter = moment === "reflectivity" ? radar.getHighresReflectivity.bind(radar) : radar.getHighresVelocity.bind(radar);
-
+//
+// getHighresCorrelationCoefficient(scan) has a real bug found live: calling
+// it with an explicit scan index (even 0) throws "invalid scan selected:
+// undefined", even when that exact scan's data is present and correct via
+// getHeader(scan).rho. Calling it with NO argument returns the full
+// per-elevation array instead and works fine — confirmed against real data
+// (all 720 entries populated, matching getHeader's values exactly). Worked
+// around by fetching the whole-elevation array once per elevation and
+// indexing into it, rather than calling per-scan like the other two moments.
+export function extractLowestElevation(radar: InstanceType<typeof Level2Radar>, moment: Moment): DecodedElevation {
   for (const elevation of radar.listElevations()) {
     radar.setElevation(elevation);
     const scans = radar.getScans();
     const radials: DecodedRadial[] = [];
     let sawMoment = false;
+
+    const allCorrelationCoefficient = moment === "correlationCoefficient" ? radar.getHighresCorrelationCoefficient() : null;
+
     for (let scan = 0; scan < scans; scan += 1) {
       const azimuth = radar.getAzimuth(scan) as number;
-      const data = getter(scan);
+      const data =
+        moment === "reflectivity"
+          ? radar.getHighresReflectivity(scan)
+          : moment === "velocity"
+            ? radar.getHighresVelocity(scan)
+            : allCorrelationCoefficient?.[scan];
       if (!data || !data.name) continue;
       sawMoment = true;
       // gate_size/first_gate come back from the decoder already in
