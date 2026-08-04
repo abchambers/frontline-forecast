@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "nexrad-level-2-data": "^2.4.3",
+    "nexrad-level-3-data": "^0.6.1",
     "next": "16.2.12",
     "react": "19.2.4",
     "react-dom": "19.2.4"

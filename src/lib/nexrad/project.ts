@@ -10,7 +10,7 @@ const EARTH_RADIUS_KM = 6371;
 // as mrms-render.ts's color table. It ignores beam curvature/refraction and
 // earth curvature at long range; only matters for the highest tilts/longest
 // ranges, not the near-range low-elevation view this app displays.
-function destinationPoint(site: RadarSite, bearingDeg: number, groundRangeKm: number): { lat: number; lon: number } {
+export function destinationPoint(site: RadarSite, bearingDeg: number, groundRangeKm: number): { lat: number; lon: number } {
   const bearing = (bearingDeg * Math.PI) / 180;
   const lat1 = (site.latitude * Math.PI) / 180;
   const lon1 = (site.longitude * Math.PI) / 180;
@@ -64,7 +64,7 @@ function projectElevation(elevation: DecodedElevation, site: RadarSite, maxRange
 // different native gate spacing (observed live: 1832 reflectivity gates vs.
 // 1192 velocity gates on the same volume) and therefore slightly different
 // data extents.
-function cellKey(lat: number, lon: number, stepDeg: number): string {
+export function cellKey(lat: number, lon: number, stepDeg: number): string {
   return `${Math.round(lat / stepDeg)},${Math.round(lon / stepDeg)}`;
 }
 
@@ -106,7 +106,7 @@ function despeckle(cells: Map<string, number | null>): Map<string, number | null
   return despeckled;
 }
 
-function boundsOf(points: MrmsPoint[]): MrmsBounds {
+export function boundsOf(points: MrmsPoint[]): MrmsBounds {
   let minLat = Infinity;
   let maxLat = -Infinity;
   let minLon = Infinity;
@@ -120,7 +120,7 @@ function boundsOf(points: MrmsPoint[]): MrmsBounds {
   return { minLatitude: minLat, maxLatitude: maxLat, minLongitude: minLon, maxLongitude: maxLon };
 }
 
-function cellsToGrid(cells: Map<string, number | null>, stepDeg: number): MrmsPoint[] {
+export function cellsToGrid(cells: Map<string, number | null>, stepDeg: number): MrmsPoint[] {
   const grid: MrmsPoint[] = [];
   for (const [key, dbz] of cells) {
     const [rowIndex, colIndex] = key.split(",").map(Number);
