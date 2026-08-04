@@ -8,7 +8,7 @@ declare global {
   interface Window { L?: any }
 }
 
-type RadarMapProps = { opacity?: number; showReflectivity?: boolean; showAlerts?: boolean; showOutlook?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; theme?: "light" | "dark"; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string }; onSourceChange?: (source: "gribstream" | "provider" | null) => void };
+type RadarMapProps = { opacity?: number; showReflectivity?: boolean; showAlerts?: boolean; showOutlook?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; theme?: "light" | "dark"; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string }; onSourceChange?: (source: "nexrad" | "gribstream" | "provider" | null) => void };
 
 const basemapTiles = {
   light: { url: "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
@@ -132,7 +132,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, show
     // previous frame immediately — avoids a flash to the bare basemap between frames.
     const previousLayer = radarLayerRef.current;
     let settled = false;
-    const settle = (nextLayer: any, source: "gribstream" | "provider") => {
+    const settle = (nextLayer: any, source: "nexrad" | "gribstream" | "provider") => {
       if (settled || cancelled) return;
       settled = true;
       nextLayer.setOpacity(opacityRef.current);
@@ -161,27 +161,47 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, show
       window.setTimeout(() => settle(nextLayer, "provider"), 700);
     }
 
-    if (!isCurrentFrame) {
-      // Scrubbed to a past position in the timeline loop — GribStream only ever answers "what's
-      // happening right now," so historical frames stay on the existing provider mosaic.
-      addProviderLayer();
-    } else {
-      // GribStream gives real MRMS composite reflectivity as raw values for the current moment,
-      // rendered into a colored overlay client-side — falls back silently to the existing
-      // provider WMS on any failure (network error, quota exhausted, no data for this area), so a
-      // GribStream outage never breaks the radar, it just quietly reverts to what was working.
+    // GribStream is the interim fallback while in-house NEXRAD coverage is still being verified
+    // across locations — see the in-house-nexrad-radar project notes for why GribStream stopped
+    // being the primary source (per-call metering doesn't scale evenly across schools or support
+    // more than reflectivity without an ongoing bill; NEXRAD Level II/III data is free and
+    // per-station instead).
+    function addGribstreamLayer() {
       fetch(`/api/radar/gribstream?lat=${location.latitude}&lon=${location.longitude}`)
         .then(async (response) => {
           if (!response.ok) throw new Error("GribStream unavailable");
           const data = await response.json() as { points: MrmsPoint[]; bounds: MrmsBounds; step: number };
-          const dataUrl = renderMrmsGridToDataUrl(data.points, data.bounds, data.step);
-          if (!dataUrl || cancelled || !mapRef.current) throw new Error("Render failed");
-          const bounds: [[number, number], [number, number]] = [[data.bounds.minLatitude, data.bounds.minLongitude], [data.bounds.maxLatitude, data.bounds.maxLongitude]];
-          const nextLayer = window.L.imageOverlay(dataUrl, bounds, { opacity: 0, interactive: false });
-          nextLayer.addTo(mapRef.current);
-          settle(nextLayer, "gribstream");
+          addGridLayer(data, "gribstream");
         })
         .catch(() => { if (!cancelled) addProviderLayer(); });
+    }
+
+    function addGridLayer(data: { points: MrmsPoint[]; bounds: MrmsBounds; step: number }, source: "nexrad" | "gribstream") {
+      const dataUrl = renderMrmsGridToDataUrl(data.points, data.bounds, data.step);
+      if (!dataUrl || cancelled || !mapRef.current) throw new Error("Render failed");
+      const bounds: [[number, number], [number, number]] = [[data.bounds.minLatitude, data.bounds.minLongitude], [data.bounds.maxLatitude, data.bounds.maxLongitude]];
+      const nextLayer = window.L.imageOverlay(dataUrl, bounds, { opacity: 0, interactive: false });
+      nextLayer.addTo(mapRef.current);
+      settle(nextLayer, source);
+    }
+
+    if (!isCurrentFrame) {
+      // Scrubbed to a past position in the timeline loop — the current-moment sources below only
+      // ever answer "what's happening right now," so historical frames stay on the provider mosaic.
+      addProviderLayer();
+    } else {
+      // In-house NEXRAD Level II is the primary live source — free, real, per-station data,
+      // rendered into a colored overlay client-side exactly like GribStream's payload was. Falls
+      // back to GribStream, then to the provider WMS, on any failure (station outage, decode
+      // error, network error), so an in-house radar issue never breaks the view, it just quietly
+      // reverts to what was already working.
+      fetch(`/api/radar/nexrad?station=${location.radarSite}`)
+        .then(async (response) => {
+          if (!response.ok) throw new Error("In-house NEXRAD unavailable");
+          const data = await response.json() as { points: MrmsPoint[]; bounds: MrmsBounds; step: number };
+          addGridLayer(data, "nexrad");
+        })
+        .catch(() => { if (!cancelled) addGribstreamLayer(); });
     }
 
     return () => { cancelled = true; };

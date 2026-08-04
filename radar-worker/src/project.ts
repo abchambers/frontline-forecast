@@ -39,15 +39,22 @@ function destinationPoint(site: RadarSite, bearingDeg: number, groundRangeKm: nu
 // radar). This is intentionally NOT yet a regular grid — that's what
 // resampleToGrid does next, kept as a separate step so the two concerns
 // (geometry vs. resolution/output-shape) can be tested independently.
-export function projectElevation(elevation: DecodedElevation, site: RadarSite): GridPoint[] {
+// maxRangeKm crops gates beyond a useful local-viewing radius. Found live in
+// the main app (src/lib/nexrad/project.ts): the full ~460km super-res range
+// at any reasonable grid step blows past the renderer's cell-count safety
+// cap and silently fails, falling back to the next radar source every time.
+// Cropping closer also matches the RadarScope-style "your nearest station"
+// view this app is aiming for.
+export function projectElevation(elevation: DecodedElevation, site: RadarSite, maxRangeKm = 230): GridPoint[] {
   const points: GridPoint[] = [];
   const elevationRad = (elevation.elevationDeg * Math.PI) / 180;
 
   for (const radial of elevation.radials) {
     for (let gateIndex = 0; gateIndex < radial.values.length; gateIndex += 1) {
-      const value = radial.values[gateIndex];
       const slantRangeKm = radial.firstGateKm + gateIndex * radial.gateSizeKm;
       const groundRangeKm = slantRangeKm * Math.cos(elevationRad);
+      if (groundRangeKm > maxRangeKm) break;
+      const value = radial.values[gateIndex];
       const { lat, lon } = destinationPoint(site, radial.azimuthDeg, groundRangeKm);
       points.push({ lat, lon, dbz: value });
     }
