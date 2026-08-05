@@ -1,60 +1,50 @@
 import { getRadarSite } from "../src/site.js";
-import { fetchLatestVolume, decodeLowestElevation } from "../src/level2.js";
-import { projectElevation, resampleToGrid } from "../src/project.js";
+import { getVolumeCached, extractLowestElevation } from "../src/level2.js";
+import { computeReflectivityGrid } from "../src/project.js";
 
 const STATION_ID = process.argv[2] ?? "KFFC";
-const GRID_STEP_DEG = 0.01; // ~1.1km — much finer than GribStream's 0.05deg MRMS grid, closer to native Level II resolution.
+const GRID_STEP_DEG = 0.01;
+const MAX_RANGE_KM = 230;
 
 async function main() {
   console.log(`Resolving site coordinates for ${STATION_ID}...`);
   const site = await getRadarSite(STATION_ID);
   console.log(`  ${site.name} (${site.id}): ${site.latitude}, ${site.longitude}, ${site.elevationMeters}m`);
 
-  console.log("Fetching latest Level II volume...");
-  const { key, lastModified, buffer } = await fetchLatestVolume(STATION_ID);
-  console.log(`  ${key} (${buffer.length} bytes, last modified ${lastModified})`);
+  console.log("Fetching + parsing latest Level II volume...");
+  const { key, lastModified, radar } = await getVolumeCached(STATION_ID);
+  console.log(`  ${key} (last modified ${lastModified})`);
   const ageMinutes = (Date.now() - new Date(lastModified).getTime()) / 60_000;
   console.log(`  age: ${ageMinutes.toFixed(1)} minutes`);
 
   console.log("Decoding lowest reflectivity elevation...");
-  const reflectivity = await decodeLowestElevation(buffer, "reflectivity");
+  const reflectivity = extractLowestElevation(radar, "reflectivity");
   console.log(`  elevation ${reflectivity.elevationDeg.toFixed(2)}deg, ${reflectivity.radials.length} radials`);
 
-  console.log("Decoding lowest velocity elevation...");
-  const velocity = await decodeLowestElevation(buffer, "velocity");
-  console.log(`  elevation ${velocity.elevationDeg.toFixed(2)}deg, ${velocity.radials.length} radials`);
+  let correlationCoefficient;
+  try {
+    correlationCoefficient = extractLowestElevation(radar, "correlationCoefficient");
+    console.log(`  correlation coefficient present: ${correlationCoefficient.radials.length} radials`);
+  } catch {
+    console.log("  correlation coefficient not present in this volume");
+  }
 
-  console.log("Projecting reflectivity to lat/lon...");
-  const reflectivityPoints = projectElevation(reflectivity, site);
-  console.log(`  ${reflectivityPoints.length} raw polar points`);
-
-  console.log(`Resampling to a regular ${GRID_STEP_DEG}deg grid...`);
-  const { grid, bounds } = resampleToGrid(reflectivityPoints, GRID_STEP_DEG);
-  const withEcho = grid.filter((p) => p.dbz !== null && p.dbz > 2);
+  console.log(`Sampling (gather-mapped, ${GRID_STEP_DEG}deg step, ${MAX_RANGE_KM}km range)...`);
+  const { grid, bounds, qualityControl } = computeReflectivityGrid(reflectivity, site, GRID_STEP_DEG, MAX_RANGE_KM, correlationCoefficient);
+  const withEcho = grid.filter((p) => p.dbz !== null);
   const dbzValues = withEcho.map((p) => p.dbz as number);
-  console.log(`  ${grid.length} grid cells, ${withEcho.length} with meaningful echo (>2 dBZ)`);
+  console.log(`  quality control: ${qualityControl}`);
+  console.log(`  ${grid.length} grid cells, ${withEcho.length} with signal`);
   if (dbzValues.length) {
     console.log(`  dBZ range: ${Math.min(...dbzValues).toFixed(1)} to ${Math.max(...dbzValues).toFixed(1)}`);
   }
   console.log(`  bounds: lat ${bounds.minLatitude.toFixed(3)}-${bounds.maxLatitude.toFixed(3)}, lon ${bounds.minLongitude.toFixed(3)}-${bounds.maxLongitude.toFixed(3)}`);
 
-  // Sanity check: the radar site itself must fall inside the projected bounds.
-  const siteInBounds =
-    site.latitude >= bounds.minLatitude &&
-    site.latitude <= bounds.maxLatitude &&
-    site.longitude >= bounds.minLongitude &&
-    site.longitude <= bounds.maxLongitude;
-  console.log(`  site coordinates fall within projected bounds: ${siteInBounds}`);
-
-  console.log("\nPayload shape (matches src/lib/mrms-render.ts GridPoint/Bounds):");
-  console.log(JSON.stringify({ bounds, step: GRID_STEP_DEG, samplePoints: grid.slice(0, 3) }, null, 2));
-
   printAsciiHeatmap(grid, bounds);
 }
 
 // Quick spatial-coherence sanity check: render a coarse ASCII heatmap. Real
-// storm cells should appear as contiguous blobs, not scattered noise — if
-// resampleToGrid had an indexing bug, this would look like static.
+// storm cells should appear as contiguous blobs, not scattered noise.
 function printAsciiHeatmap(grid: { lat: number; lon: number; dbz: number | null }[], bounds: { minLatitude: number; maxLatitude: number; minLongitude: number; maxLongitude: number }) {
   const cols = 100;
   const rows = 45;

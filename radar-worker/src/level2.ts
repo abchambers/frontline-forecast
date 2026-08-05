@@ -1,16 +1,16 @@
 import pkg from "nexrad-level-2-data";
 const { Level2Radar } = pkg;
 
-// Phase 1 fetches the latest complete assembled volume from Unidata's archive
-// bucket (s3://unidata-nexrad-level2). This is simple and sufficient to prove
-// decode+projection end to end locally. It is NOT the final ingestion path —
-// a real deployment should stream unidata-nexrad-level2-chunks instead, since
-// assembled volumes lag chunk delivery by several minutes (this is exactly
-// the persistent, always-on worker piece that needs real hosting, see
-// radar-worker/README.md). That's Phase 2+ work, not this file's job.
+// Fetches the latest complete assembled volume from Unidata's public S3
+// archive per request — a stateless model that fits this route's serverless
+// hosting, unlike the persistent chunk-streaming worker planned for
+// radar-worker/ (which trades this simplicity for lower latency at scale).
+// Measured live: volumes land here within 1-2 minutes of real time, which is
+// as fresh as GribStream's MRMS feed ever was — no persistent process is
+// needed to get real freshness at this traffic level.
 const ARCHIVE_BUCKET = "https://unidata-nexrad-level2.s3.amazonaws.com";
 
-function todayPrefix(date: Date, stationId: string): string {
+function datePrefix(date: Date, stationId: string): string {
   const yyyy = date.getUTCFullYear();
   const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
   const dd = String(date.getUTCDate()).padStart(2, "0");
@@ -21,7 +21,7 @@ type S3Object = { key: string; lastModified: string };
 
 async function listVolumes(prefix: string): Promise<S3Object[]> {
   const url = `${ARCHIVE_BUCKET}/?list-type=2&prefix=${encodeURIComponent(prefix)}`;
-  const response = await fetch(url);
+  const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) throw new Error(`S3 list failed for ${prefix} (${response.status})`);
   const xml = await response.text();
   const objects: S3Object[] = [];
@@ -38,17 +38,17 @@ async function listVolumes(prefix: string): Promise<S3Object[]> {
 
 // Finds the most recent complete volume for a station, checking yesterday's
 // prefix too since a volume near UTC midnight can land in either day's folder.
-export async function fetchLatestVolume(stationId: string): Promise<{ buffer: Buffer; key: string; lastModified: string }> {
+async function fetchLatestVolume(stationId: string): Promise<{ buffer: Buffer; key: string; lastModified: string }> {
   const now = new Date();
   const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
   const [today, prior] = await Promise.all([
-    listVolumes(todayPrefix(now, stationId)),
-    listVolumes(todayPrefix(yesterday, stationId)),
+    listVolumes(datePrefix(now, stationId)),
+    listVolumes(datePrefix(yesterday, stationId)),
   ]);
   // Some keys are special variants (observed live: a `_MDM` suffix — a
   // status/maintenance message, not a normal reflectivity+velocity volume,
   // much smaller and not decodable as one). Standard volumes end in exactly
-  // `_V06` with nothing after it.
+  // `_V0<digit>` with nothing after it.
   const standardVolume = /_V0[0-9]$/;
   const all = [...prior, ...today]
     .filter((object) => standardVolume.test(object.key))
@@ -56,7 +56,7 @@ export async function fetchLatestVolume(stationId: string): Promise<{ buffer: Bu
   const latest = all[all.length - 1];
   if (!latest) throw new Error(`No Level II volumes found for ${stationId} in the last two days.`);
 
-  const response = await fetch(`${ARCHIVE_BUCKET}/${latest.key}`);
+  const response = await fetch(`${ARCHIVE_BUCKET}/${latest.key}`, { cache: "no-store" });
   if (!response.ok) throw new Error(`Failed to download ${latest.key} (${response.status})`);
   const buffer = Buffer.from(await response.arrayBuffer());
   return { buffer, key: latest.key, lastModified: latest.lastModified };
@@ -74,34 +74,77 @@ export type DecodedElevation = {
   radials: DecodedRadial[];
 };
 
-// Picks the lowest elevation angle that actually carries the requested
-// moment — reflectivity is on every tilt, but velocity/spectrum width are
-// only on the split-cut lower tilts in most VCPs (confirmed empirically:
-// KFFC's real R215 VCP has REF on all 17 elevations but VEL only on
-// 2,4,6,8,9,10,11,13-17 — this isn't documented anywhere obvious, it's how
-// the volume actually came back when decoded).
-export async function decodeLowestElevation(
-  buffer: Buffer,
-  moment: "reflectivity" | "velocity",
-): Promise<DecodedElevation> {
-  const radar = await new Level2Radar(buffer);
-  const getter = moment === "reflectivity" ? radar.getHighresReflectivity.bind(radar) : radar.getHighresVelocity.bind(radar);
+// Reflectivity and velocity both need the same underlying volume, PARSED —
+// not just downloaded. Caching only the raw buffer (an earlier version of
+// this) still re-parsed the full ~5-6MB binary volume on every request, and
+// found live, that parse was itself a meaningful chunk of the "several
+// seconds" this took to load — not just the S3 download. Caching the parsed
+// Level2Radar object means a velocity request right after a reflectivity
+// request for the same station (exactly what toggling the Data-layer picker
+// does) skips both the download AND the parse, going straight to
+// extractLowestElevation. Keyed by station only (not station+moment), TTL
+// matches the route's own payload cache so a warmed volume never outlives
+// the data it would be re-decoded into anyway.
+const VOLUME_CACHE_TTL_MS = 90_000;
+type VolumeCacheEntry = {
+  radar: InstanceType<typeof Level2Radar>;
+  key: string;
+  lastModified: string;
+  expiresAt: number;
+};
+const volumeCache = new Map<string, VolumeCacheEntry>();
 
+export async function getVolumeCached(
+  stationId: string,
+): Promise<{ radar: InstanceType<typeof Level2Radar>; key: string; lastModified: string }> {
+  const cached = volumeCache.get(stationId);
+  if (cached && cached.expiresAt > Date.now()) return cached;
+  const { buffer, key, lastModified } = await fetchLatestVolume(stationId);
+  const radar = await new Level2Radar(buffer);
+  const entry = { radar, key, lastModified, expiresAt: Date.now() + VOLUME_CACHE_TTL_MS };
+  volumeCache.set(stationId, entry);
+  return entry;
+}
+
+export type Moment = "reflectivity" | "velocity" | "correlationCoefficient";
+
+// Picks the lowest elevation angle that actually carries the requested
+// moment — reflectivity is on every tilt, but velocity is only on the
+// split-cut lower tilts in most VCPs (confirmed empirically against a real
+// KFFC volume: REF on all 17 elevations, VEL only on a subset — not
+// documented anywhere obvious, it's how the volume actually decoded).
+//
+// getHighresCorrelationCoefficient(scan) has a real bug found live: calling
+// it with an explicit scan index (even 0) throws "invalid scan selected:
+// undefined", even when that exact scan's data is present and correct via
+// getHeader(scan).rho. Calling it with NO argument returns the full
+// per-elevation array instead and works fine — confirmed against real data
+// (all 720 entries populated, matching getHeader's values exactly). Worked
+// around by fetching the whole-elevation array once per elevation and
+// indexing into it, rather than calling per-scan like the other two moments.
+export function extractLowestElevation(radar: InstanceType<typeof Level2Radar>, moment: Moment): DecodedElevation {
   for (const elevation of radar.listElevations()) {
     radar.setElevation(elevation);
     const scans = radar.getScans();
     const radials: DecodedRadial[] = [];
     let sawMoment = false;
+
+    const allCorrelationCoefficient = moment === "correlationCoefficient" ? radar.getHighresCorrelationCoefficient() : null;
+
     for (let scan = 0; scan < scans; scan += 1) {
       const azimuth = radar.getAzimuth(scan) as number;
-      const data = getter(scan);
+      const data =
+        moment === "reflectivity"
+          ? radar.getHighresReflectivity(scan)
+          : moment === "velocity"
+            ? radar.getHighresVelocity(scan)
+            : allCorrelationCoefficient?.[scan];
       if (!data || !data.name) continue;
       sawMoment = true;
       // gate_size/first_gate come back from the decoder already in
-      // kilometers (confirmed against real data: 0.25 gate_size x 1832
-      // gates + 2.125 first_gate ~= 460km, matching WSR-88D's real published
-      // super-res max range — an earlier /1000 "meters to km" conversion
-      // here was wrong and shrank every gate to 0.1% of its real range).
+      // kilometers, confirmed against real data (0.25 gate_size x 1832
+      // gates + 2.125 first_gate ~= 460km, matching WSR-88D's published
+      // super-res max range).
       radials.push({
         azimuthDeg: azimuth,
         gateSizeKm: data.gate_size,

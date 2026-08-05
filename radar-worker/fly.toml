@@ -1,0 +1,29 @@
+# Fly.io config for the radar worker. App name below is a placeholder —
+# `fly launch` (or `fly apps create`) will need a globally-unique name; change
+# it here (and keep RADAR_WORKER_URL in the main app's env in sync) if
+# "frontline-forecast-radar" is already taken.
+app = "frontline-forecast-radar"
+primary_region = "iad" # near the us-east-1 S3 buckets this worker reads from.
+
+[build]
+
+[env]
+  PORT = "8080"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false  # the entire point of this service is a warm cache — never let it scale to zero.
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

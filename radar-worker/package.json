@@ -3,12 +3,16 @@
   "private": true,
   "type": "module",
   "version": "0.1.0",
-  "description": "In-house NEXRAD Level II/III ingestion worker. Separate deployment target from the Next.js app (a persistent process, not a serverless route) — see docs in this directory.",
+  "description": "In-house NEXRAD Level II/III ingestion worker. A persistent process (Fly.io), not a serverless route — see docs in this directory.",
   "scripts": {
-    "test:kffc": "tsx scripts/test-kffc.ts"
+    "test:kffc": "tsx scripts/test-kffc.ts",
+    "typecheck": "tsc --noEmit",
+    "start": "tsx src/server.ts",
+    "dev": "tsx watch src/server.ts"
   },
   "dependencies": {
-    "nexrad-level-2-data": "^2.4.3"
+    "nexrad-level-2-data": "^2.4.3",
+    "nexrad-level-3-data": "^0.6.1"
   },
   "devDependencies": {
     "tsx": "^4.19.2",

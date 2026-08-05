@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { fetchStormTracks, fetchHailDetections, fetchTvsDetections, fetchMesocycloneDetections } from "@/lib/nexrad/level3-markers";
+import { fetchFromWorker } from "@/lib/radar-worker-client";
 
 // Level III severe-weather detection markers — storm tracks, hail,
 // tornadic vortex signatures, mesocyclones. Unlike storm-relative velocity
@@ -36,6 +37,12 @@ export async function GET(request: Request) {
   const cached = cache.get(station);
   if (cached && cached.expiresAt > Date.now()) {
     return NextResponse.json(cached.data, { headers: { "Cache-Control": "private, max-age=45", "X-Radar-Source": "cache" } });
+  }
+
+  const fromWorker = await fetchFromWorker(`/severe?station=${station}`);
+  if (fromWorker) {
+    cache.set(station, { data: fromWorker, expiresAt: Date.now() + CACHE_TTL_MS });
+    return NextResponse.json(fromWorker, { headers: { "Cache-Control": "private, max-age=45", "X-Radar-Source": "worker" } });
   }
 
   try {

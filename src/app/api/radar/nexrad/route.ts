@@ -3,6 +3,7 @@ import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { getRadarSite } from "@/lib/nexrad/site";
 import { getVolumeCached, extractLowestElevation } from "@/lib/nexrad/level2";
 import { computeReflectivityGrid, computeVelocityGrid } from "@/lib/nexrad/project";
+import { fetchFromWorker } from "@/lib/radar-worker-client";
 
 // In-house NEXRAD Level II radar — free, public-domain NOAA data (unlike
 // GribStream's paid, ToS-ambiguous MRMS resale), and inherently per-station
@@ -50,6 +51,12 @@ export async function GET(request: Request) {
   const cached = cache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     return NextResponse.json(cached.data, { headers: { "Cache-Control": "private, max-age=60", "X-Radar-Source": "cache" } });
+  }
+
+  const fromWorker = await fetchFromWorker(`/${moment}?station=${station}`);
+  if (fromWorker) {
+    cache.set(cacheKey, { data: fromWorker, expiresAt: Date.now() + CACHE_TTL_MS });
+    return NextResponse.json(fromWorker, { headers: { "Cache-Control": "private, max-age=60", "X-Radar-Source": "worker" } });
   }
 
   try {

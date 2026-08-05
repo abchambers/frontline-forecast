@@ -52,8 +52,47 @@ Verified for real, not assumed:
   needs to stream `unidata-nexrad-level2-chunks` and reassemble volumes itself
   for genuinely real-time freshness. That's Phase 2+/hosting work.
 
-## Next: Phase 2
+## Status: real HTTP service, not yet deployed
 
-Wire this into `radar-map.tsx` in place of GribStream for one location,
-verified live in the browser, then add velocity (already decodable — see
-`decodeLowestElevation(buffer, "velocity")`).
+`src/server.ts` exposes `/reflectivity`, `/velocity`, and `/severe` (each
+`?station=KFFC`-style), plus `/health` for Fly.io's health check. Payload
+shapes are identical to the main app's own `/api/radar/nexrad` and
+`/api/radar/nexrad-severe` routes on purpose — `src/lib/radar-worker-client.ts`
+in the main app tries this worker first (only if `RADAR_WORKER_URL` is set)
+and falls back to its own local S3-polling logic on any failure, so the
+worker is a speed optimization, never a hard dependency for radar to work.
+
+The whole reason this exists as a separate deployment target: a **persistent**
+process means `getVolumeCached`'s parsed-volume cache (and this server's own
+payload cache) actually stay warm across requests. On Vercel, a serverless
+cold start wipes those, which is why real production load times there were
+measured anywhere from ~0.15s to ~16s for superficially identical requests —
+see the in-house-nexrad-radar project memory entry on load-time investigation.
+
+`src/level2.ts`, `src/project.ts`, `src/site.ts`, `src/level3.ts`, and
+`src/level3-markers.ts` are kept in sync by hand with their `src/lib/nexrad/`
+counterparts in the main app — copied wholesale rather than shared via a
+package, since this is a separate deployment target with its own
+`tsconfig`/`package.json`. `src/types.ts` exists only because this project
+has no Next.js path aliases to resolve `@/lib/mrms-render`'s `MrmsPoint`/
+`MrmsBounds` types from.
+
+Storm-relative velocity (`computeStormRelativeVelocityGrid` in `level3.ts`)
+is intentionally NOT exposed as a worker route — it stays hidden from the UI
+in the main app too (see that file's own comments), so there's no reason to
+serve it here yet either.
+
+Run locally: `npm install && npm start` (or `npm run dev` for auto-reload),
+then `curl http://localhost:8080/reflectivity?station=KFFC`.
+
+## Next: deploy to Fly.io
+
+`Dockerfile` and `fly.toml` are ready — `fly.toml`'s `app` name is a
+placeholder and may need changing if it's taken. `min_machines_running = 1`
+and `auto_stop_machines = false` are deliberate: a scale-to-zero machine
+would reintroduce the exact cold-start problem this service exists to avoid.
+Deploying requires the account holder's own `flyctl`/Fly dashboard access —
+not something to attempt without them. Once deployed, set `RADAR_WORKER_URL`
+(and optionally `RADAR_WORKER_API_KEY`, matching the worker's own
+`WORKER_API_KEY` env var) in the main app's Vercel project env vars to switch
+it over.
