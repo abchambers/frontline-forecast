@@ -1,4 +1,4 @@
-import type { DecodedElevation } from "./level2";
+import type { DecodedElevation, DecodedRadial } from "./level2";
 import type { RadarSite } from "./site";
 import type { MrmsBounds, MrmsPoint } from "@/lib/mrms-render";
 
@@ -29,33 +29,118 @@ export function destinationPoint(site: RadarSite, bearingDeg: number, groundRang
   return { lat: (lat2 * 180) / Math.PI, lon: (((lon2 * 180) / Math.PI + 540) % 360) - 180 };
 }
 
-// Projects every gate of every radial to a real lat/lon — an irregular point
-// cloud at polar-native resolution (down to 250m near the radar). Kept
-// separate from resampling so geometry and output-resolution stay two
-// independently testable concerns.
-//
-// maxRangeKm crops gates beyond a useful local-viewing radius. Super-res
-// reflectivity's real max range is ~460km, which at any reasonable grid
-// resolution blows past src/lib/mrms-render.ts's 500,000-cell safety cap
-// (found live: the full-range grid silently failed to render and fell back
-// to GribStream every time — a real bug, not a hypothetical one). Cropping
-// to a closer radius also matches the RadarScope-style "local station view"
-// this app is aiming for, rather than trying to show the full detection range.
-function projectElevation(elevation: DecodedElevation, site: RadarSite, maxRangeKm: number): MrmsPoint[] {
-  const points: MrmsPoint[] = [];
-  const elevationRad = (elevation.elevationDeg * Math.PI) / 180;
+// Inverse of destinationPoint: given a real lat/lon, the bearing/ground-range
+// from the site that would produce it. Same flat-earth-ish approximation
+// tier as destinationPoint (spherical bearing/great-circle distance, no
+// beam curvature/refraction) — kept symmetric with it deliberately.
+function inverseDestinationPoint(site: RadarSite, lat: number, lon: number): { bearingDeg: number; groundRangeKm: number } {
+  const lat1 = (site.latitude * Math.PI) / 180;
+  const lon1 = (site.longitude * Math.PI) / 180;
+  const lat2 = (lat * Math.PI) / 180;
+  const lon2 = (lon * Math.PI) / 180;
+  const dLon = lon2 - lon1;
 
-  for (const radial of elevation.radials) {
-    for (let gateIndex = 0; gateIndex < radial.values.length; gateIndex += 1) {
-      const slantRangeKm = radial.firstGateKm + gateIndex * radial.gateSizeKm;
-      const groundRangeKm = slantRangeKm * Math.cos(elevationRad);
-      if (groundRangeKm > maxRangeKm) break; // gates are range-ordered, so nothing further out matters either.
-      const value = radial.values[gateIndex];
-      const { lat, lon } = destinationPoint(site, radial.azimuthDeg, groundRangeKm);
-      points.push({ lat, lon, dbz: value });
+  const y = Math.sin(dLon) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+  const bearingDeg = ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+
+  const dLat = lat2 - lat1;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  const groundRangeKm = 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(a)));
+
+  return { bearingDeg, groundRangeKm };
+}
+
+// Radials sorted by azimuth, for binary-search nearest-radial lookup below.
+type ElevationIndex = { sortedAzimuths: number[]; sortedRadials: DecodedRadial[] };
+
+function buildElevationIndex(elevation: DecodedElevation): ElevationIndex {
+  const sorted = [...elevation.radials].sort((a, b) => a.azimuthDeg - b.azimuthDeg);
+  return { sortedAzimuths: sorted.map((r) => r.azimuthDeg), sortedRadials: sorted };
+}
+
+// Real WSR-88D radials land ~0.5deg apart. A gap much wider than that means
+// genuinely missing coverage (dropped radials, VCP transition) — reject
+// rather than extrapolate a value from a radial that far away.
+const MAX_AZIMUTH_GAP_DEG = 1.0;
+
+function nearestRadial(index: ElevationIndex, bearingDeg: number): DecodedRadial | null {
+  const { sortedAzimuths, sortedRadials } = index;
+  const n = sortedAzimuths.length;
+  if (n === 0) return null;
+  let lo = 0;
+  let hi = n;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (sortedAzimuths[mid] < bearingDeg) lo = mid + 1;
+    else hi = mid;
+  }
+  let best: DecodedRadial | null = null;
+  let bestDelta = Infinity;
+  for (const idx of [lo % n, (lo - 1 + n) % n]) {
+    const delta = Math.min(Math.abs(sortedAzimuths[idx] - bearingDeg), 360 - Math.abs(sortedAzimuths[idx] - bearingDeg));
+    if (delta < bestDelta) {
+      bestDelta = delta;
+      best = sortedRadials[idx];
     }
   }
-  return points;
+  return bestDelta <= MAX_AZIMUTH_GAP_DEG ? best : null;
+}
+
+function boundsForSite(site: RadarSite, maxRangeKm: number): MrmsBounds {
+  const cosLat = Math.cos((site.latitude * Math.PI) / 180);
+  const latSpanDeg = maxRangeKm / 111;
+  const lonSpanDeg = maxRangeKm / (111 * cosLat);
+  return {
+    minLatitude: site.latitude - latSpanDeg,
+    maxLatitude: site.latitude + latSpanDeg,
+    minLongitude: site.longitude - lonSpanDeg,
+    maxLongitude: site.longitude + lonSpanDeg,
+  };
+}
+
+// Samples every OUTPUT grid cell within range by looking backward to its
+// nearest radial+gate, rather than scattering each polar sample forward into
+// whichever cell it happens to land in. This is the fix for a real, confirmed
+// artifact: radials are ~0.5deg apart, so the arc distance between adjacent
+// radials grows with range — past ~120km at this app's 0.01deg grid step, that
+// arc gap exceeds the grid cell size, so the old forward-scatter approach left
+// literal empty stripes between radials (visible live as parallel lines
+// slicing through real storm cells, worse the farther from the site — matches
+// exactly where the math predicts it). Gather-mapping guarantees every cell
+// in range gets a value (or a deliberate null from a real coverage gap), the
+// same approach real radar display software uses. Side benefit: reflectivity,
+// velocity, and correlation-coefficient grids for the same request now all
+// visit the identical candidate cell set, so they line up cell-for-cell by
+// construction rather than by coincidence of independently-scattered points.
+function sampleElevationGrid(elevation: DecodedElevation, site: RadarSite, stepDeg: number, maxRangeKm: number): Map<string, number | null> {
+  const index = buildElevationIndex(elevation);
+  const elevationRad = (elevation.elevationDeg * Math.PI) / 180;
+  const cosLat = Math.cos((site.latitude * Math.PI) / 180);
+  const latSpanDeg = maxRangeKm / 111;
+  const lonSpanDeg = maxRangeKm / (111 * cosLat);
+
+  const minRow = Math.round((site.latitude - latSpanDeg) / stepDeg);
+  const maxRow = Math.round((site.latitude + latSpanDeg) / stepDeg);
+  const minCol = Math.round((site.longitude - lonSpanDeg) / stepDeg);
+  const maxCol = Math.round((site.longitude + lonSpanDeg) / stepDeg);
+
+  const cells = new Map<string, number | null>();
+  for (let row = minRow; row <= maxRow; row += 1) {
+    const lat = row * stepDeg;
+    for (let col = minCol; col <= maxCol; col += 1) {
+      const lon = col * stepDeg;
+      const { bearingDeg, groundRangeKm } = inverseDestinationPoint(site, lat, lon);
+      if (groundRangeKm > maxRangeKm) continue;
+      const radial = nearestRadial(index, bearingDeg);
+      if (!radial) continue;
+      const slantRangeKm = groundRangeKm / Math.cos(elevationRad);
+      const gateIndex = Math.round((slantRangeKm - radial.firstGateKm) / radial.gateSizeKm);
+      if (gateIndex < 0 || gateIndex >= radial.values.length) continue;
+      cells.set(cellKey(lat, lon, stepDeg), radial.values[gateIndex]);
+    }
+  }
+  return cells;
 }
 
 // Absolute grid indexing (not relative to a per-call bounding box) so a
@@ -151,28 +236,27 @@ export function computeReflectivityGrid(
   maxRangeKm: number,
   correlationCoefficient?: DecodedElevation,
 ): { grid: MrmsPoint[]; bounds: MrmsBounds; echoMask: Set<string>; qualityControl: "noise-floor+correlation-coefficient" | "noise-floor" } {
-  const points = projectElevation(elevation, site, maxRangeKm);
-  const bounds = boundsOf(points);
+  const bounds = boundsForSite(site, maxRangeKm);
+  const rawCells = sampleElevationGrid(elevation, site, stepDeg, maxRangeKm);
 
   // Baseline: the same proven floor+despeckle pass regardless of whether CC
   // is available — unchanged from before CC existed.
   let cells = new Map<string, number | null>();
-  for (const p of points) {
-    const key = cellKey(p.lat, p.lon, stepDeg);
-    const value = p.dbz !== null && p.dbz < MIN_REFLECTIVITY_DBZ ? null : p.dbz;
-    cells.set(key, value);
+  for (const [key, value] of rawCells) {
+    cells.set(key, value !== null && value < MIN_REFLECTIVITY_DBZ ? null : value);
   }
   cells = despeckle(cells);
 
   // CC as an additional AND on top of the baseline — see the block comment
-  // above for why this isn't a replacement.
+  // above for why this isn't a replacement. Sampled with the same
+  // gather-mapping as reflectivity, so it lines up cell-for-cell without
+  // reintroducing the range-dependent gap this whole rewrite fixes.
   if (correlationCoefficient) {
-    const confidenceMask = new Set<string>();
-    for (const p of projectElevation(correlationCoefficient, site, maxRangeKm)) {
-      if (p.dbz !== null && p.dbz >= CORRELATION_COEFFICIENT_THRESHOLD) confidenceMask.add(cellKey(p.lat, p.lon, stepDeg));
-    }
+    const ccCells = sampleElevationGrid(correlationCoefficient, site, stepDeg, maxRangeKm);
     for (const [key, value] of cells) {
-      if (value !== null && !confidenceMask.has(key)) cells.set(key, null);
+      if (value === null) continue;
+      const cc = ccCells.get(key);
+      if (cc === undefined || cc === null || cc < CORRELATION_COEFFICIENT_THRESHOLD) cells.set(key, null);
     }
   }
 
@@ -204,13 +288,12 @@ export function computeVelocityGrid(
   maxRangeKm: number,
   echoMask: Set<string>,
 ): { grid: MrmsPoint[]; bounds: MrmsBounds } {
-  const points = projectElevation(elevation, site, maxRangeKm);
-  const bounds = boundsOf(points);
+  const bounds = boundsForSite(site, maxRangeKm);
+  const rawCells = sampleElevationGrid(elevation, site, stepDeg, maxRangeKm);
 
   const cells = new Map<string, number | null>();
-  for (const p of points) {
-    const key = cellKey(p.lat, p.lon, stepDeg);
-    cells.set(key, echoMask.has(key) ? p.dbz : null);
+  for (const [key, value] of rawCells) {
+    cells.set(key, echoMask.has(key) ? value : null);
   }
 
   return { grid: cellsToGrid(cells, stepDeg), bounds };
