@@ -2,6 +2,7 @@ import parseLevel3 from "nexrad-level-3-data";
 import type { RadarSite } from "./site";
 import type { MrmsBounds, MrmsPoint } from "@/lib/mrms-render";
 import { destinationPoint, cellKey, cellsToGrid, boundsOf } from "./project";
+import { fetchWithTimeout } from "./fetch-with-timeout";
 
 // Storm-Relative Mean Radial Velocity (product code 56, files named
 // {SSS}_N0S_...). NOT wired into the public UI yet — this exists to be
@@ -33,7 +34,7 @@ type S3Object = { key: string; lastModified: string };
 
 async function listProducts(prefix: string): Promise<S3Object[]> {
   const url = `${ARCHIVE_BUCKET}/?list-type=2&prefix=${encodeURIComponent(prefix)}`;
-  const response = await fetch(url, { cache: "no-store" });
+  const response = await fetchWithTimeout(url, { cache: "no-store" });
   if (!response.ok) throw new Error(`S3 list failed for ${prefix} (${response.status})`);
   const xml = await response.text();
   const objects: S3Object[] = [];
@@ -67,7 +68,7 @@ export async function fetchLatestLevel3Product(
   const latest = all[all.length - 1];
   if (!latest) return null;
 
-  const response = await fetch(`${ARCHIVE_BUCKET}/${latest.key}`, { cache: "no-store" });
+  const response = await fetchWithTimeout(`${ARCHIVE_BUCKET}/${latest.key}`, { cache: "no-store" }, 20_000);
   if (!response.ok) throw new Error(`Failed to download ${latest.key} (${response.status})`);
   const buffer = Buffer.from(await response.arrayBuffer());
   return { buffer, key: latest.key, lastModified: latest.lastModified };

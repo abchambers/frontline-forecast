@@ -1,3 +1,5 @@
+import { fetchWithTimeout } from "./fetch-with-timeout";
+
 // NEXRAD site locations are fixed, published reference data — resolved live via
 // the same NWS API family the app already uses for radar-site lookup
 // (src/app/api/location-lookup/route.ts), rather than a hardcoded station table.
@@ -10,7 +12,7 @@ export type RadarSite = {
 };
 
 export async function getRadarSite(stationId: string): Promise<RadarSite> {
-  const response = await fetch(`https://api.weather.gov/radar/stations/${stationId}`, {
+  const response = await fetchWithTimeout(`https://api.weather.gov/radar/stations/${stationId}`, {
     headers: { Accept: "application/geo+json", "User-Agent": "Frontline Forecast weather application" },
   });
   if (!response.ok) throw new Error(`NWS radar station lookup failed for ${stationId} (${response.status})`);

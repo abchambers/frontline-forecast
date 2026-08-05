@@ -1,4 +1,5 @@
 import pkg from "nexrad-level-2-data";
+import { fetchWithTimeout } from "./fetch-with-timeout";
 const { Level2Radar } = pkg;
 
 // Fetches the latest complete assembled volume from Unidata's public S3
@@ -21,7 +22,7 @@ type S3Object = { key: string; lastModified: string };
 
 async function listVolumes(prefix: string): Promise<S3Object[]> {
   const url = `${ARCHIVE_BUCKET}/?list-type=2&prefix=${encodeURIComponent(prefix)}`;
-  const response = await fetch(url, { cache: "no-store" });
+  const response = await fetchWithTimeout(url, { cache: "no-store" });
   if (!response.ok) throw new Error(`S3 list failed for ${prefix} (${response.status})`);
   const xml = await response.text();
   const objects: S3Object[] = [];
@@ -56,7 +57,7 @@ async function fetchLatestVolume(stationId: string): Promise<{ buffer: Buffer; k
   const latest = all[all.length - 1];
   if (!latest) throw new Error(`No Level II volumes found for ${stationId} in the last two days.`);
 
-  const response = await fetch(`${ARCHIVE_BUCKET}/${latest.key}`, { cache: "no-store" });
+  const response = await fetchWithTimeout(`${ARCHIVE_BUCKET}/${latest.key}`, { cache: "no-store" }, 20_000);
   if (!response.ok) throw new Error(`Failed to download ${latest.key} (${response.status})`);
   const buffer = Buffer.from(await response.arrayBuffer());
   return { buffer, key: latest.key, lastModified: latest.lastModified };
