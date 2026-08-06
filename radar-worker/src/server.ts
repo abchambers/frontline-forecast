@@ -39,13 +39,24 @@ function setCache(key: string, data: unknown, ttlMs: number) {
   payloadCache.set(key, { data, expiresAt: Date.now() + ttlMs });
 }
 
+// Temporary diagnostic instrumentation — the first real deploy showed /health
+// going unresponsive WHILE a /reflectivity request was in flight, which only
+// makes sense if something in this path is blocking Node's single event-loop
+// thread (synchronous CPU work), not just waiting on network I/O (which
+// wouldn't block concurrent requests). Logging stage timings to find out
+// where the time actually goes on real Fly hardware instead of guessing from
+// local-machine timings, which are not a reliable stand-in for a throttled
+// shared-cpu-1x machine.
 async function handleReflectivityOrVelocity(station: string, moment: "reflectivity" | "velocity") {
   const cacheKey = `${station}:${moment}`;
   const hit = cached(cacheKey);
   if (hit) return { status: 200, body: hit, source: "cache" as const };
 
+  const t0 = performance.now();
   const [site, volume] = await Promise.all([getRadarSite(station), getVolumeCached(station)]);
   const { radar } = volume;
+  const t1 = performance.now();
+  console.log(`[${station}:${moment}] fetch+parse volume: ${(t1 - t0).toFixed(0)}ms`);
 
   let correlationCoefficient;
   try {
@@ -53,20 +64,33 @@ async function handleReflectivityOrVelocity(station: string, moment: "reflectivi
   } catch {
     correlationCoefficient = undefined;
   }
+  const t2 = performance.now();
+  console.log(`[${station}:${moment}] extract CC elevation: ${(t2 - t1).toFixed(0)}ms`);
 
   let grid, bounds, elevationDeg, qualityControl;
   if (moment === "velocity") {
     const reflElevation = extractLowestElevation(radar, "reflectivity");
     const velElevation = extractLowestElevation(radar, "velocity");
+    const tExtract = performance.now();
+    console.log(`[${station}:${moment}] extract refl+vel elevations: ${(tExtract - t2).toFixed(0)}ms`);
     const { echoMask, qualityControl: qc } = computeReflectivityGrid(reflElevation, site, GRID_STEP_DEG, MAX_RANGE_KM, correlationCoefficient);
+    const tRefl = performance.now();
+    console.log(`[${station}:${moment}] computeReflectivityGrid (for echo mask): ${(tRefl - tExtract).toFixed(0)}ms`);
     ({ grid, bounds } = computeVelocityGrid(velElevation, site, GRID_STEP_DEG, MAX_RANGE_KM, echoMask));
+    const tVel = performance.now();
+    console.log(`[${station}:${moment}] computeVelocityGrid: ${(tVel - tRefl).toFixed(0)}ms`);
     elevationDeg = velElevation.elevationDeg;
     qualityControl = qc;
   } else {
     const elevation = extractLowestElevation(radar, "reflectivity");
+    const tExtract = performance.now();
+    console.log(`[${station}:${moment}] extract reflectivity elevation: ${(tExtract - t2).toFixed(0)}ms`);
     ({ grid, bounds, qualityControl } = computeReflectivityGrid(elevation, site, GRID_STEP_DEG, MAX_RANGE_KM, correlationCoefficient));
+    const tRefl = performance.now();
+    console.log(`[${station}:${moment}] computeReflectivityGrid: ${(tRefl - tExtract).toFixed(0)}ms`);
     elevationDeg = elevation.elevationDeg;
   }
+  console.log(`[${station}:${moment}] TOTAL: ${(performance.now() - t0).toFixed(0)}ms`);
 
   const hasSignal = grid.some((point) => point.dbz !== null);
   if (!hasSignal) throw new Error(`No ${moment} data available for ${station} in this volume.`);
@@ -147,6 +171,7 @@ const server = createServer((request, response) => {
   handler(station)
     .then((result) => respondJson(result.status, result.body, { "X-Radar-Source": result.source }))
     .catch((error: unknown) => {
+      console.error(`[${station}:${url.pathname}] request failed:`, error);
       respondJson(502, { error: error instanceof Error ? error.message : "Radar worker request failed." });
     });
 });
