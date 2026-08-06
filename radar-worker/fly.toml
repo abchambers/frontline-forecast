@@ -26,4 +26,9 @@ primary_region = "iad" # near the us-east-1 S3 buckets this worker reads from.
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "512mb"
+  # 512mb was NOT enough — confirmed live via `fly logs`: the kernel OOM-killed
+  # the Node process mid-request and the machine rebooted, which is what was
+  # causing the intermittent hangs and flapping health checks. Decoding a
+  # ~5-6MB binary NEXRAD volume plus building a ~160k-cell grid in memory adds
+  # up fast. Bumped to 1gb; revisit if this still OOMs under real traffic.
+  memory = "1024mb"
