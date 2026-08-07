@@ -250,3 +250,31 @@ const server = createServer((request, response) => {
 server.listen(PORT, () => {
   console.log(`Radar worker listening on :${PORT}${API_KEY ? " (API key required)" : " (no API key set — open access)"}`);
 });
+
+// Keeps the app's real preset locations' radar sites warm proactively, so a
+// real visitor's first request is far more likely to land on a payload-cache
+// hit (near-instant) instead of a cold compute (several seconds, and the
+// main app's own worker-client timeout may not even wait long enough for it
+// — see radar-worker-client.ts). Deliberately reflectivity-only, not
+// velocity: velocity is the secondary/non-default product and roughly
+// doubles peak memory (see the fly.toml/Dockerfile comments on the real OOM
+// that forced this app's resolution down) — not worth that cost just to
+// pre-warm a view most visitors won't load. Station list matches
+// src/lib/locations.ts's weatherDeskLocations exactly (KFFC covers
+// Athens/Atlanta/Gainesville, KBMX covers Birmingham) — update both places
+// together if the app's preset locations ever change.
+const PREWARM_STATIONS = ["KFFC", "KBMX"];
+const PREWARM_INTERVAL_MS = 80_000; // just under the 90s payload cache TTL, so a warm entry never fully expires under normal operation.
+
+async function prewarm() {
+  for (const station of PREWARM_STATIONS) {
+    try {
+      await handleReflectivityOrVelocity(station, "reflectivity");
+    } catch (error) {
+      console.error(`[prewarm:${station}] failed —`, error instanceof Error ? error.message : error);
+    }
+  }
+}
+
+prewarm();
+setInterval(prewarm, PREWARM_INTERVAL_MS);
