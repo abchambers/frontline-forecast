@@ -14,28 +14,33 @@ import { renderMrmsGridToDataUrl, renderVelocityGridToDataUrl } from "./render.j
 // requested twice in a row here hits a warm parsed volume, not a fresh S3
 // download + binary decode.
 //
-// 0.004deg (~445m) — deliberately finer than the main app's own fallback
-// route (still 0.01deg), affordable because this worker renders a PNG
-// server-side (render.ts) instead of shipping raw {lat,lon,dbz} JSON.
-// Two finer steps were tried and pulled back, each for a real measured
-// reason, not a guess:
-//   - 0.0025deg (~278m, near-native gate spacing): ~2.6M candidate cells —
-//     produced multi-hundred-second compute pileups under concurrent load
-//     (fixed by the request queue below, but the per-request cost itself was
-//     still disproportionately high — ~12.7s locally vs. a much smaller step
-//     down at 0.0033deg's ~4.6s, not a linear relationship, likely V8/GC
-//     overhead at that many live objects).
-//   - 0.0033deg (~370m, ~1.5M candidate cells): compute time was fine, but
-//     a genuine OOM recurred on the velocity path specifically (which holds
-//     reflectivity + CC + velocity Map<string,...> structures at once) —
-//     anon-rss hit 1.8GB against shared-cpu-1x's hard 2GB ceiling (confirmed
-//     live: Fly rejects any higher vm memory on this size class; upgrading
-//     to a paid `performance` tier for more RAM is a real recurring cost
-//     decision, not made unilaterally).
-// 0.004deg reduces candidate-cell count (and therefore memory) by roughly a
-// third versus 0.0033deg while still being a real ~2.5x resolution gain
-// over the 0.01deg original.
-const GRID_STEP_DEG = 0.004;
+// 0.006deg (~670m) — finer than the main app's own fallback route (still
+// 0.01deg), affordable because this worker renders a PNG server-side
+// (render.ts) instead of shipping raw {lat,lon,dbz} JSON. Pulled back
+// TWICE from more aggressive values, each for a real measured reason:
+//   - 0.0025deg (~278m): ~2.6M candidate cells, multi-hundred-second compute
+//     pileups under concurrent load (a scheduling bug, since fixed by the
+//     request queue below) and disproportionately slow even alone.
+//   - 0.0033/0.004deg (~370-445m): compute was fine in controlled testing,
+//     but real production OOMs kept recurring even after fixing an actual
+//     memory leak (see level2.ts/server.ts cache-eviction comments) — a
+//     FRESH machine, seconds into its life, OOM'd while decoding a real
+//     volume during active severe weather. The likely reason: the
+//     nexrad-level-2-data library eagerly parses the ENTIRE volume (every
+//     elevation/moment) regardless of which single elevation this app
+//     actually uses, so a severe-weather VCP (more tilts, more supplemental
+//     low-level scans) genuinely parses into a bigger object than a routine
+//     VCP does — a cost independent of this app's own GRID_STEP_DEG, and
+//     not something fixable without replacing that library (out of scope
+//     tonight). Pulling resolution back further buys more headroom for MY
+//     OWN sampling/render structures against that variable, sometimes-large
+//     baseline, since shared-cpu-1x's 2GB ceiling can't be raised further
+//     without a paid tier upgrade (a real recurring-cost decision, not made
+//     unilaterally). If OOMs recur even here, the real fix is switching
+//     per-cell storage from string-keyed Maps to typed arrays, or finding a
+//     way to avoid the library's eager full-volume parse — not another
+//     resolution cut.
+const GRID_STEP_DEG = 0.006;
 const MAX_RANGE_KM = 230;
 const PAYLOAD_CACHE_TTL_MS = 90_000;
 const SEVERE_CACHE_TTL_MS = 60_000;
