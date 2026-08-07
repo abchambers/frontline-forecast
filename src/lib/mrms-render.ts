@@ -30,6 +30,14 @@ const COLOR_STOPS: { dbz: number; rgb: [number, number, number] }[] = [
 // MRMS composite reflectivity legitimately includes negative dBZ noise-floor
 // values that aren't real precipitation signal.
 const NO_ECHO_THRESHOLD_DBZ = 2;
+// User-reported live: the radar read noticeably dimmer than reference apps.
+// Real, compounding cause found — this per-pixel alpha (previously 235/255,
+// ~92%) stacks multiplicatively with the separate user-facing opacity slider
+// (defaults to 72%), so the actual on-screen strength was ~92% * 72% =~66%,
+// not the 72% the slider implied. The slider is the intended control for
+// basemap-vs-radar balance; this constant has no reason to independently
+// dim on top of it. Raised to fully opaque so the slider is the only lever.
+const PIXEL_ALPHA = 255;
 
 // Cosmetic smoothing only — the underlying grid data is untouched, this
 // just softens how it's painted. Native single-radar resolution genuinely
@@ -105,7 +113,7 @@ export function renderMrmsGridToDataUrl(points: MrmsPoint[], bounds: MrmsBounds,
     imageData.data[index] = r;
     imageData.data[index + 1] = g;
     imageData.data[index + 2] = b;
-    imageData.data[index + 3] = 235;
+    imageData.data[index + 3] = PIXEL_ALPHA;
   }
   context.putImageData(imageData, 0, 0);
   return applySoftBlur(canvas);
@@ -175,7 +183,7 @@ export function renderVelocityGridToDataUrl(points: MrmsPoint[], bounds: MrmsBou
     imageData.data[index] = r;
     imageData.data[index + 1] = g;
     imageData.data[index + 2] = b;
-    imageData.data[index + 3] = 235;
+    imageData.data[index + 3] = PIXEL_ALPHA;
   }
   context.putImageData(imageData, 0, 0);
   return applySoftBlur(canvas);

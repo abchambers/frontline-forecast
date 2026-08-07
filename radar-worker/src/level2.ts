@@ -83,10 +83,21 @@ export type DecodedElevation = {
 // Level2Radar object means a velocity request right after a reflectivity
 // request for the same station (exactly what toggling the Data-layer picker
 // does) skips both the download AND the parse, going straight to
-// extractLowestElevation. Keyed by station only (not station+moment), TTL
-// matches the route's own payload cache so a warmed volume never outlives
-// the data it would be re-decoded into anyway.
-const VOLUME_CACHE_TTL_MS = 90_000;
+// extractLowestElevation.
+// Real incident, found live: during active severe weather, this parse alone
+// (nexrad-level-2-data eagerly decoding the entire volume — every elevation
+// and moment, not just the one this app extracts) measured 60-210+ SECONDS,
+// independent of anything in this app's own code (grid resolution, sampling
+// — none of it touches this step). A 90s TTL meant that expensive parse
+// often needed redoing again almost as soon as it finished, especially with
+// the pre-warm loop forcing it on a fixed schedule regardless of real
+// traffic — a major contributor to sustained memory pressure and repeated
+// OOMs. Volumes update roughly every 4-10 minutes depending on VCP anyway,
+// so a much longer TTL doesn't mean meaningfully staler data, just far less
+// re-parsing. Raised to 5 minutes as an immediate stabilization measure
+// during the severe-weather event; revisit once real parse times return to
+// their calmer-weather baseline (a few seconds).
+const VOLUME_CACHE_TTL_MS = 300_000;
 type VolumeCacheEntry = {
   radar: InstanceType<typeof Level2Radar>;
   key: string;

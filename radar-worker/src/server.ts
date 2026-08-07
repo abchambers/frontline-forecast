@@ -42,7 +42,13 @@ import { renderMrmsGridToDataUrl, renderVelocityGridToDataUrl } from "./render.j
 //     resolution cut.
 const GRID_STEP_DEG = 0.006;
 const MAX_RANGE_KM = 230;
-const PAYLOAD_CACHE_TTL_MS = 90_000;
+// Raised alongside level2.ts's VOLUME_CACHE_TTL_MS (90s -> 5min) — same real
+// incident, same reasoning: during active severe weather the volume parse
+// this payload is built from can itself take 60-210+ seconds, independent
+// of this app's own resolution/sampling code, so a short TTL just forced
+// that expensive work to repeat almost immediately. See level2.ts for the
+// full writeup.
+const PAYLOAD_CACHE_TTL_MS = 300_000;
 const SEVERE_CACHE_TTL_MS = 60_000;
 const PORT = Number(process.env.PORT ?? 8080);
 // Optional — if set, requests must carry a matching header. Unset by default
@@ -290,12 +296,20 @@ const PREWARM_STATIONS = ["KFFC", "KBMX"];
 // traffic (deliberately — it must respect the same concurrency safety, not
 // bypass it), that duty cycle meant a real user's request had a meaningful
 // chance of queuing behind a prewarm cycle instead of getting the fast path
-// pre-warming exists to provide. 150s trades some cache-staleness (the warm
-// entry can go cold for a stretch between cycles, in which case a real
-// request just takes the normal safe cold-compute-or-fallback path anyway,
-// same as if prewarm didn't exist) for leaving real traffic much more free
-// capacity.
-const PREWARM_INTERVAL_MS = 150_000;
+// pre-warming exists to provide. 150s traded some cache-staleness for
+// leaving real traffic more free capacity — but a second real incident (same
+// severe-weather event) showed even that was too aggressive: with the
+// underlying volume parse itself now taking up to 60-210+ seconds (see
+// level2.ts), forcing BOTH stations through that on a fixed schedule,
+// regardless of whether anyone's actually looking, was a major contributor
+// to sustained memory pressure and repeated OOMs — self-inflicted load
+// compounding with real, unavoidable severe-weather-driven cost. Raised to
+// match the cache TTL (5 min) so a cycle only ever fires right as the
+// existing warm entry would otherwise go stale, not on top of one still
+// providing value. The self-rescheduling fix below already makes the exact
+// interval value a soft target rather than a hard safety requirement — a
+// slow cycle simply pushes the next one later, it can never overlap.
+const PREWARM_INTERVAL_MS = 300_000;
 
 // Real bug found live, same incident as the cache-eviction fixes above:
 // setInterval fires unconditionally every PREWARM_INTERVAL_MS regardless of

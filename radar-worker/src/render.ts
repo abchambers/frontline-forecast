@@ -29,6 +29,12 @@ const COLOR_STOPS: { dbz: number; rgb: [number, number, number] }[] = [
 ];
 const NO_ECHO_THRESHOLD_DBZ = 2;
 const SOFT_BLUR_PX = 0.6;
+// Mirrors a real fix in src/lib/mrms-render.ts — was 235/255 (~92%), which
+// stacked multiplicatively with the separate user-facing opacity slider
+// (defaults to 72%), making the real on-screen strength ~66% even though the
+// slider read 72%. User-reported live as looking dimmer than reference
+// radar apps. Raised to fully opaque so the slider is the only opacity lever.
+const PIXEL_ALPHA = 255;
 
 function colorForDbz(dbz: number): [number, number, number] {
   if (dbz <= COLOR_STOPS[0].dbz) return COLOR_STOPS[0].rgb;
@@ -115,7 +121,7 @@ function renderGrid(
     imageData.data[index] = r;
     imageData.data[index + 1] = g;
     imageData.data[index + 2] = b;
-    imageData.data[index + 3] = 235;
+    imageData.data[index + 3] = PIXEL_ALPHA;
   }
   context.putImageData(imageData, 0, 0);
 
