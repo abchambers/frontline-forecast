@@ -27,6 +27,14 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
   const severeMarkersLayerRef = useRef<any>(null);
   const stationPickerLayerRef = useRef<any>(null);
   const [leafletLoaded, setLeafletLoaded] = useState(false);
+  // Only true for a station's FIRST radar layer (no previousLayer yet) — a refresh/timeline
+  // change already has a visible frame underneath and fades the new one in, so a loading overlay
+  // there would just flicker over a working map. This is specifically for the case a user reported
+  // live: opening the dashboard shows a bare basemap with nothing indicating the radar is still
+  // being fetched, which reads as broken rather than loading — especially since the worker+fallback
+  // chain can legitimately take 10-30s. Reuses the same `.radar-loading` sweep animation already
+  // built for the component-bundle loading state, so both loading moments look consistent.
+  const [isDataLoading, setIsDataLoading] = useState(false);
 
   useEffect(() => {
     if (window.L) setLeafletLoaded(true);
@@ -246,10 +254,12 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
     // Add the next frame at opacity 0 and fade it in once it's ready, rather than removing the
     // previous frame immediately — avoids a flash to the bare basemap between frames.
     const previousLayer = radarLayerRef.current;
+    if (!previousLayer) setIsDataLoading(true);
     let settled = false;
     const settle = (nextLayer: any, source: "nexrad" | "provider") => {
       if (settled || cancelled) return;
       settled = true;
+      setIsDataLoading(false);
       nextLayer.setOpacity(opacityRef.current);
       radarLayerRef.current = nextLayer;
       if (previousLayer && mapRef.current) mapRef.current.removeLayer(previousLayer);
@@ -308,6 +318,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
         })
         .catch(() => {
           if (cancelled || !mapRef.current) return;
+          setIsDataLoading(false);
           if (previousLayer) mapRef.current.removeLayer(previousLayer);
           radarLayerRef.current = null;
           onSourceChangeRef.current?.(null);
@@ -342,6 +353,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
       <Script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" strategy="afterInteractive" onReady={() => setLeafletLoaded(true)} />
       <div ref={mapElement} className="live-radar-map" aria-label={`Live NOAA radar map centered on ${location.name}`} />
+      {isDataLoading && <div className="radar-loading radar-loading-overlay" role="status">Loading live radar…</div>}
     </>
   );
 }
