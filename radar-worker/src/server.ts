@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { getRadarSite } from "./site.js";
 import { getVolumeCached, extractLowestElevation } from "./level2.js";
-import { computeReflectivityGrid, computeVelocityGrid } from "./project.js";
+import { computeReflectivityGrid, computeVelocityGrid, buildCandidateCells } from "./project.js";
 import { fetchStormTracks, fetchHailDetections, fetchTvsDetections, fetchMesocycloneDetections } from "./level3-markers.js";
 import { renderMrmsGridToDataUrl, renderVelocityGridToDataUrl } from "./render.js";
 
@@ -14,17 +14,19 @@ import { renderMrmsGridToDataUrl, renderVelocityGridToDataUrl } from "./render.j
 // requested twice in a row here hits a warm parsed volume, not a fresh S3
 // download + binary decode.
 //
-// 0.0025deg (~278m) is close to native super-res gate spacing — deliberately
-// pushed much finer than the main app's own fallback route (still 0.01deg),
-// which is affordable ONLY because this worker renders a PNG server-side
-// (render.ts) instead of shipping raw {lat,lon,dbz} JSON: measured live,
-// doubling resolution as raw JSON would have taken a 6.3MB payload to 26MB,
-// while the equivalent PNG at native-ish resolution is ~1.4MB. Compute time
-// (the gather-mapping sample pass) is the real cost of going this fine —
-// measured live at ~5.4s cold for reflectivity — bounded and absorbed by the
-// 90s payload cache below, not by the browser's own 500k-cell canvas cap
-// (this worker isn't subject to that; see render.ts).
-const GRID_STEP_DEG = 0.0025;
+// 0.0033deg (~370m) — deliberately finer than the main app's own fallback
+// route (still 0.01deg), affordable because this worker renders a PNG
+// server-side (render.ts) instead of shipping raw {lat,lon,dbz} JSON.
+// 0.0025deg (~278m, closer to native gate spacing) was tried first and
+// pulled back: measured live, the shared-geometry-optimized compute takes
+// ~4.6s locally at 0.0033deg vs. a disproportionate ~12.7s at 0.0025deg (V8/
+// GC overhead at ~2.6M candidate cells, not a linear cost increase), and
+// production hardware runs this class of CPU-bound work several times
+// slower than local — 0.0025deg produced real multi-hundred-second pileups
+// under even light concurrent load (see the request queue below for why
+// concurrency matters at all here). 0.0033deg keeps compute fast enough
+// that queuing is cheap even in the worst case.
+const GRID_STEP_DEG = 0.0033;
 const MAX_RANGE_KM = 230;
 const PAYLOAD_CACHE_TTL_MS = 90_000;
 const SEVERE_CACHE_TTL_MS = 60_000;
@@ -51,24 +53,66 @@ function setCache(key: string, data: unknown, ttlMs: number) {
   payloadCache.set(key, { data, expiresAt: Date.now() + ttlMs });
 }
 
-// Temporary diagnostic instrumentation — the first real deploy showed /health
-// going unresponsive WHILE a /reflectivity request was in flight, which only
-// makes sense if something in this path is blocking Node's single event-loop
-// thread (synchronous CPU work), not just waiting on network I/O (which
-// wouldn't block concurrent requests). Logging stage timings to find out
-// where the time actually goes on real Fly hardware instead of guessing from
-// local-machine timings, which are not a reliable stand-in for a throttled
-// shared-cpu-1x machine.
+// Real production incident, found live via fly logs: this app's heavy
+// compute (the gather-mapping sample pass) is fully synchronous with no
+// yield points, so Node's single event-loop thread runs one to completion
+// before touching anything else — including /health. Multiple concurrent
+// cold requests (a handful of real users, or in this case a debugging
+// session hammering the worker) don't run "concurrently" at all, they queue
+// up behind each other with zero coordination; logged TOTAL compute times
+// over 500 SECONDS for what should take a few seconds, and /health itself
+// went unresponsive for minutes, triggering Fly's own restart cycle. A
+// simple FIFO queue capping how many heavy computations can be in flight at
+// once turns that unbounded pileup into bounded, predictable serialization —
+// same total work, but it can never compound into the kind of runaway
+// backlog that starved health checks.
+const MAX_CONCURRENT_COMPUTE = 1;
+let activeCompute = 0;
+const computeQueue: (() => void)[] = [];
+
+async function withComputeSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (activeCompute >= MAX_CONCURRENT_COMPUTE) {
+    await new Promise<void>((resolve) => computeQueue.push(resolve));
+  }
+  activeCompute += 1;
+  try {
+    return await fn();
+  } finally {
+    activeCompute -= 1;
+    const next = computeQueue.shift();
+    if (next) next();
+  }
+}
+
+// In-flight request de-duplication — if the exact same station+moment is
+// already being computed (e.g. two browser tabs, or a client retry landing
+// while the first attempt is still running), share that one computation
+// instead of each starting an independent, fully redundant one competing
+// for the same compute slot above.
+const inFlight = new Map<string, Promise<{ status: number; body: unknown; source: "cache" | "live" }>>();
+
 async function handleReflectivityOrVelocity(station: string, moment: "reflectivity" | "velocity") {
   const cacheKey = `${station}:${moment}`;
   const hit = cached(cacheKey);
   if (hit) return { status: 200, body: hit, source: "cache" as const };
 
+  const existing = inFlight.get(cacheKey);
+  if (existing) return existing;
+
+  const promise = withComputeSlot(() => computeReflectivityOrVelocity(station, moment, cacheKey));
+  inFlight.set(cacheKey, promise);
+  try {
+    return await promise;
+  } finally {
+    inFlight.delete(cacheKey);
+  }
+}
+
+async function computeReflectivityOrVelocity(station: string, moment: "reflectivity" | "velocity", cacheKey: string) {
   const t0 = performance.now();
   const [site, volume] = await Promise.all([getRadarSite(station), getVolumeCached(station)]);
   const { radar } = volume;
   const t1 = performance.now();
-  console.log(`[${station}:${moment}] fetch+parse volume: ${(t1 - t0).toFixed(0)}ms`);
 
   let correlationCoefficient;
   try {
@@ -76,34 +120,28 @@ async function handleReflectivityOrVelocity(station: string, moment: "reflectivi
   } catch {
     correlationCoefficient = undefined;
   }
+
+  // Geometry (bearing/range per output cell) is independent of which moment
+  // is being sampled — built once here and shared across reflectivity, CC,
+  // and velocity below instead of each redoing the same expensive trig pass.
+  const candidateCells = buildCandidateCells(site, GRID_STEP_DEG, MAX_RANGE_KM);
   const t2 = performance.now();
-  console.log(`[${station}:${moment}] extract CC elevation: ${(t2 - t1).toFixed(0)}ms`);
 
   let grid, bounds, elevationDeg, qualityControl;
   if (moment === "velocity") {
     const reflElevation = extractLowestElevation(radar, "reflectivity");
     const velElevation = extractLowestElevation(radar, "velocity");
-    const tExtract = performance.now();
-    console.log(`[${station}:${moment}] extract refl+vel elevations: ${(tExtract - t2).toFixed(0)}ms`);
-    const { echoMask, qualityControl: qc } = computeReflectivityGrid(reflElevation, site, GRID_STEP_DEG, MAX_RANGE_KM, correlationCoefficient);
-    const tRefl = performance.now();
-    console.log(`[${station}:${moment}] computeReflectivityGrid (for echo mask): ${(tRefl - tExtract).toFixed(0)}ms`);
-    ({ grid, bounds } = computeVelocityGrid(velElevation, site, GRID_STEP_DEG, MAX_RANGE_KM, echoMask));
-    const tVel = performance.now();
-    console.log(`[${station}:${moment}] computeVelocityGrid: ${(tVel - tRefl).toFixed(0)}ms`);
+    const { echoMask, qualityControl: qc } = computeReflectivityGrid(reflElevation, site, GRID_STEP_DEG, MAX_RANGE_KM, correlationCoefficient, candidateCells);
+    ({ grid, bounds } = computeVelocityGrid(velElevation, site, GRID_STEP_DEG, MAX_RANGE_KM, echoMask, candidateCells));
     elevationDeg = velElevation.elevationDeg;
     qualityControl = qc;
   } else {
     const elevation = extractLowestElevation(radar, "reflectivity");
-    const tExtract = performance.now();
-    console.log(`[${station}:${moment}] extract reflectivity elevation: ${(tExtract - t2).toFixed(0)}ms`);
-    ({ grid, bounds, qualityControl } = computeReflectivityGrid(elevation, site, GRID_STEP_DEG, MAX_RANGE_KM, correlationCoefficient));
-    const tRefl = performance.now();
-    console.log(`[${station}:${moment}] computeReflectivityGrid: ${(tRefl - tExtract).toFixed(0)}ms`);
+    ({ grid, bounds, qualityControl } = computeReflectivityGrid(elevation, site, GRID_STEP_DEG, MAX_RANGE_KM, correlationCoefficient, candidateCells));
     elevationDeg = elevation.elevationDeg;
   }
   const tCompute = performance.now();
-  console.log(`[${station}:${moment}] TOTAL compute: ${(tCompute - t0).toFixed(0)}ms`);
+  console.log(`[${station}:${moment}] fetch+parse ${(t1 - t0).toFixed(0)}ms, geometry ${(t2 - t1).toFixed(0)}ms, sample ${(tCompute - t2).toFixed(0)}ms, total ${(tCompute - t0).toFixed(0)}ms`);
 
   const hasSignal = grid.some((point) => point.dbz !== null);
   if (!hasSignal) throw new Error(`No ${moment} data available for ${station} in this volume.`);
@@ -155,6 +193,8 @@ async function handleSevere(station: string) {
 const server = createServer((request, response) => {
   const url = new URL(request.url ?? "/", `http://localhost:${PORT}`);
 
+  // Never queued/gated — must always answer instantly regardless of compute
+  // load, or Fly's health check can't tell "busy" apart from "actually dead".
   if (url.pathname === "/health") {
     response.writeHead(200, { "Content-Type": "application/json" });
     response.end(JSON.stringify({ ok: true }));

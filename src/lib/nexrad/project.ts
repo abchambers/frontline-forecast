@@ -30,24 +30,22 @@ export function destinationPoint(site: RadarSite, bearingDeg: number, groundRang
 }
 
 // Inverse of destinationPoint: given a real lat/lon, the bearing/ground-range
-// from the site that would produce it. Same flat-earth-ish approximation
-// tier as destinationPoint (spherical bearing/great-circle distance, no
-// beam curvature/refraction) — kept symmetric with it deliberately.
-function inverseDestinationPoint(site: RadarSite, lat: number, lon: number): { bearingDeg: number; groundRangeKm: number } {
-  const lat1 = (site.latitude * Math.PI) / 180;
-  const lon1 = (site.longitude * Math.PI) / 180;
-  const lat2 = (lat * Math.PI) / 180;
-  const lon2 = (lon * Math.PI) / 180;
-  const dLon = lon2 - lon1;
+// from the site that would produce it. Flat-earth Cartesian approximation
+// (not the full spherical Haversine destinationPoint above uses) —
+// deliberately cheaper: this runs once per OUTPUT GRID CELL (hundreds of
+// thousands to low millions at this app's near-native resolution), found
+// live to be the dominant cost of a cold request (multiple seconds of pure
+// CPU time on Fly's shared-cpu-1x). At this app's max 230km range, the
+// error versus full spherical math is well under a single grid cell's
+// size — same "doesn't matter at this range" judgment already documented
+// on destinationPoint, just applied to the much hotter inverse path.
+const KM_PER_DEG_LAT = (EARTH_RADIUS_KM * Math.PI) / 180;
 
-  const y = Math.sin(dLon) * Math.cos(lat2);
-  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
-  const bearingDeg = ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
-
-  const dLat = lat2 - lat1;
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
-  const groundRangeKm = 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(a)));
-
+function inverseDestinationPointFast(cosSiteLat: number, siteLat: number, siteLon: number, lat: number, lon: number): { bearingDeg: number; groundRangeKm: number } {
+  const dy = (lat - siteLat) * KM_PER_DEG_LAT;
+  const dx = (lon - siteLon) * KM_PER_DEG_LAT * cosSiteLat;
+  const groundRangeKm = Math.sqrt(dx * dx + dy * dy);
+  const bearingDeg = ((Math.atan2(dx, dy) * 180) / Math.PI + 360) % 360;
   return { bearingDeg, groundRangeKm };
 }
 
@@ -99,23 +97,23 @@ function boundsForSite(site: RadarSite, maxRangeKm: number): MrmsBounds {
   };
 }
 
-// Samples every OUTPUT grid cell within range by looking backward to its
-// nearest radial+gate, rather than scattering each polar sample forward into
-// whichever cell it happens to land in. This is the fix for a real, confirmed
-// artifact: radials are ~0.5deg apart, so the arc distance between adjacent
-// radials grows with range — past ~120km at this app's 0.01deg grid step, that
-// arc gap exceeds the grid cell size, so the old forward-scatter approach left
-// literal empty stripes between radials (visible live as parallel lines
-// slicing through real storm cells, worse the farther from the site — matches
-// exactly where the math predicts it). Gather-mapping guarantees every cell
-// in range gets a value (or a deliberate null from a real coverage gap), the
-// same approach real radar display software uses. Side benefit: reflectivity,
-// velocity, and correlation-coefficient grids for the same request now all
-// visit the identical candidate cell set, so they line up cell-for-cell by
-// construction rather than by coincidence of independently-scattered points.
-function sampleElevationGrid(elevation: DecodedElevation, site: RadarSite, stepDeg: number, maxRangeKm: number): Map<string, number | null> {
-  const index = buildElevationIndex(elevation);
-  const elevationRad = (elevation.elevationDeg * Math.PI) / 180;
+// A candidate output cell with its (expensive) geometry already resolved —
+// bearing/ground-range from the site is independent of which moment/
+// elevation is being sampled, so this is computed ONCE per request and
+// reused across reflectivity, correlation coefficient, and velocity (see
+// buildCandidateCells below), instead of redone from scratch per moment.
+export type CandidateCell = { key: string; lat: number; lon: number; bearingDeg: number; groundRangeKm: number };
+
+// Enumerates every OUTPUT grid cell within range with its geometry resolved,
+// looking backward to what bearing/range it corresponds to, rather than
+// scattering each polar sample forward into whichever cell it happens to
+// land in. This is the fix for a real, confirmed artifact: radials are
+// ~0.5deg apart, so the arc distance between adjacent radials grows with
+// range — past ~120km at this app's original 0.01deg grid step, that arc
+// gap exceeded the grid cell size, leaving literal empty stripes between
+// radials. Gather-mapping guarantees every cell in range gets a value (or a
+// deliberate null from a real coverage gap).
+export function buildCandidateCells(site: RadarSite, stepDeg: number, maxRangeKm: number): CandidateCell[] {
   const cosLat = Math.cos((site.latitude * Math.PI) / 180);
   const latSpanDeg = maxRangeKm / 111;
   const lonSpanDeg = maxRangeKm / (111 * cosLat);
@@ -125,22 +123,43 @@ function sampleElevationGrid(elevation: DecodedElevation, site: RadarSite, stepD
   const minCol = Math.round((site.longitude - lonSpanDeg) / stepDeg);
   const maxCol = Math.round((site.longitude + lonSpanDeg) / stepDeg);
 
-  const cells = new Map<string, number | null>();
+  const cells: CandidateCell[] = [];
   for (let row = minRow; row <= maxRow; row += 1) {
     const lat = row * stepDeg;
     for (let col = minCol; col <= maxCol; col += 1) {
       const lon = col * stepDeg;
-      const { bearingDeg, groundRangeKm } = inverseDestinationPoint(site, lat, lon);
+      const { bearingDeg, groundRangeKm } = inverseDestinationPointFast(cosLat, site.latitude, site.longitude, lat, lon);
       if (groundRangeKm > maxRangeKm) continue;
-      const radial = nearestRadial(index, bearingDeg);
-      if (!radial) continue;
-      const slantRangeKm = groundRangeKm / Math.cos(elevationRad);
-      const gateIndex = Math.round((slantRangeKm - radial.firstGateKm) / radial.gateSizeKm);
-      if (gateIndex < 0 || gateIndex >= radial.values.length) continue;
-      cells.set(cellKey(lat, lon, stepDeg), radial.values[gateIndex]);
+      cells.push({ key: cellKey(lat, lon, stepDeg), lat, lon, bearingDeg, groundRangeKm });
     }
   }
   return cells;
+}
+
+// Resolves one elevation's values at an already-built candidate cell set —
+// the cheap part (binary search + a division, no trig) now that geometry is
+// shared rather than recomputed per moment.
+function sampleAtCandidateCells(elevation: DecodedElevation, candidateCells: CandidateCell[]): Map<string, number | null> {
+  const index = buildElevationIndex(elevation);
+  const cosElevation = Math.cos((elevation.elevationDeg * Math.PI) / 180);
+
+  const cells = new Map<string, number | null>();
+  for (const cell of candidateCells) {
+    const radial = nearestRadial(index, cell.bearingDeg);
+    if (!radial) continue;
+    const slantRangeKm = cell.groundRangeKm / cosElevation;
+    const gateIndex = Math.round((slantRangeKm - radial.firstGateKm) / radial.gateSizeKm);
+    if (gateIndex < 0 || gateIndex >= radial.values.length) continue;
+    cells.set(cell.key, radial.values[gateIndex]);
+  }
+  return cells;
+}
+
+// Backward-compatible one-shot form for callers that don't share candidate
+// cells across multiple moments in the same request (e.g. the main app's
+// Vercel fallback route, which only ever needs one elevation per call).
+function sampleElevationGrid(elevation: DecodedElevation, site: RadarSite, stepDeg: number, maxRangeKm: number): Map<string, number | null> {
+  return sampleAtCandidateCells(elevation, buildCandidateCells(site, stepDeg, maxRangeKm));
 }
 
 // Absolute grid indexing (not relative to a per-call bounding box) so a
@@ -255,9 +274,11 @@ export function computeReflectivityGrid(
   stepDeg: number,
   maxRangeKm: number,
   correlationCoefficient?: DecodedElevation,
+  candidateCells?: CandidateCell[],
 ): { grid: MrmsPoint[]; bounds: MrmsBounds; echoMask: Set<string>; qualityControl: "noise-floor+correlation-coefficient" | "noise-floor" } {
   const bounds = boundsForSite(site, maxRangeKm);
-  const rawCells = sampleElevationGrid(elevation, site, stepDeg, maxRangeKm);
+  const cells0 = candidateCells ?? buildCandidateCells(site, stepDeg, maxRangeKm);
+  const rawCells = sampleAtCandidateCells(elevation, cells0);
 
   // Baseline: the same proven floor+despeckle pass regardless of whether CC
   // is available — unchanged from before CC existed.
@@ -272,7 +293,7 @@ export function computeReflectivityGrid(
   // gather-mapping as reflectivity, so it lines up cell-for-cell without
   // reintroducing the range-dependent gap this whole rewrite fixes.
   if (correlationCoefficient) {
-    const ccCells = sampleElevationGrid(correlationCoefficient, site, stepDeg, maxRangeKm);
+    const ccCells = sampleAtCandidateCells(correlationCoefficient, cells0);
     for (const [key, value] of cells) {
       if (value === null) continue;
       const cc = ccCells.get(key);
@@ -307,9 +328,10 @@ export function computeVelocityGrid(
   stepDeg: number,
   maxRangeKm: number,
   echoMask: Set<string>,
+  candidateCells?: CandidateCell[],
 ): { grid: MrmsPoint[]; bounds: MrmsBounds } {
   const bounds = boundsForSite(site, maxRangeKm);
-  const rawCells = sampleElevationGrid(elevation, site, stepDeg, maxRangeKm);
+  const rawCells = sampleAtCandidateCells(elevation, candidateCells ?? buildCandidateCells(site, stepDeg, maxRangeKm));
 
   const cells = new Map<string, number | null>();
   for (const [key, value] of rawCells) {
