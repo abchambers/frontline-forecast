@@ -14,19 +14,28 @@ import { renderMrmsGridToDataUrl, renderVelocityGridToDataUrl } from "./render.j
 // requested twice in a row here hits a warm parsed volume, not a fresh S3
 // download + binary decode.
 //
-// 0.0033deg (~370m) — deliberately finer than the main app's own fallback
+// 0.004deg (~445m) — deliberately finer than the main app's own fallback
 // route (still 0.01deg), affordable because this worker renders a PNG
 // server-side (render.ts) instead of shipping raw {lat,lon,dbz} JSON.
-// 0.0025deg (~278m, closer to native gate spacing) was tried first and
-// pulled back: measured live, the shared-geometry-optimized compute takes
-// ~4.6s locally at 0.0033deg vs. a disproportionate ~12.7s at 0.0025deg (V8/
-// GC overhead at ~2.6M candidate cells, not a linear cost increase), and
-// production hardware runs this class of CPU-bound work several times
-// slower than local — 0.0025deg produced real multi-hundred-second pileups
-// under even light concurrent load (see the request queue below for why
-// concurrency matters at all here). 0.0033deg keeps compute fast enough
-// that queuing is cheap even in the worst case.
-const GRID_STEP_DEG = 0.0033;
+// Two finer steps were tried and pulled back, each for a real measured
+// reason, not a guess:
+//   - 0.0025deg (~278m, near-native gate spacing): ~2.6M candidate cells —
+//     produced multi-hundred-second compute pileups under concurrent load
+//     (fixed by the request queue below, but the per-request cost itself was
+//     still disproportionately high — ~12.7s locally vs. a much smaller step
+//     down at 0.0033deg's ~4.6s, not a linear relationship, likely V8/GC
+//     overhead at that many live objects).
+//   - 0.0033deg (~370m, ~1.5M candidate cells): compute time was fine, but
+//     a genuine OOM recurred on the velocity path specifically (which holds
+//     reflectivity + CC + velocity Map<string,...> structures at once) —
+//     anon-rss hit 1.8GB against shared-cpu-1x's hard 2GB ceiling (confirmed
+//     live: Fly rejects any higher vm memory on this size class; upgrading
+//     to a paid `performance` tier for more RAM is a real recurring cost
+//     decision, not made unilaterally).
+// 0.004deg reduces candidate-cell count (and therefore memory) by roughly a
+// third versus 0.0033deg while still being a real ~2.5x resolution gain
+// over the 0.01deg original.
+const GRID_STEP_DEG = 0.004;
 const MAX_RANGE_KM = 230;
 const PAYLOAD_CACHE_TTL_MS = 90_000;
 const SEVERE_CACHE_TTL_MS = 60_000;

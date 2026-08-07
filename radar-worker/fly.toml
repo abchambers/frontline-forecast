@@ -26,14 +26,18 @@ primary_region = "iad" # near the us-east-1 S3 buckets this worker reads from.
 
 [[vm]]
   size = "shared-cpu-1x"
-  # 512mb got OS-OOM-killed (kernel "Out of memory: Killed process", exit
-  # 137). 1024mb fixed that but then hit V8's own heap-limit abort instead
-  # (exit 134 — see Dockerfile's NODE_OPTIONS). 2gb covered reflectivity-only
-  # requests but a real OOM recurred on the velocity path specifically
-  # (anon-rss 1.8GB, killed) — velocity holds reflectivity + CC + velocity
-  # Map<string,...> structures over ~1.5M candidate cells simultaneously,
-  # meaningfully more than reflectivity alone. Bumped to 4gb with headroom;
-  # if this recurs even here, the real fix is switching the per-cell storage
-  # from string-keyed Maps to typed arrays (much lower per-entry overhead),
-  # not another memory bump — flagged for later, not attempted at this hour.
-  memory = "4096mb"
+  # 512mb got OS-OOM-killed (137), 1024mb hit V8's own heap-limit abort
+  # instead (134). 2gb is the real ceiling for shared-cpu-1x — Fly rejects
+  # anything higher on this size class (confirmed live: "invalid
+  # config.guest.memory_mb, cannot exceed 2048 MiB"); going bigger means
+  # upgrading to a paid `performance` tier, a real recurring cost increase
+  # not authorized to make unilaterally. A genuine OOM recurred on the
+  # velocity path at 2gb (anon-rss 1.8GB, killed — velocity holds
+  # reflectivity + CC + velocity Map<string,...> structures simultaneously,
+  # meaningfully more peak memory than reflectivity alone) — addressed by
+  # pulling GRID_STEP_DEG back one more notch (server.ts) to reduce the
+  # candidate-cell count and its memory footprint, not by paying for more
+  # RAM. If this still isn't enough headroom, the real fix is switching
+  # per-cell storage from string-keyed Maps to typed arrays (far lower
+  # per-entry overhead) — flagged for later, not attempted at this hour.
+  memory = "2048mb"

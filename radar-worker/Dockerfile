@@ -16,10 +16,11 @@ ENV PORT=8080
 # V8's own "heap limit reached" abort, not the OS killing it (no "Out of
 # memory: Killed process" kernel line for that crash). Explicitly raising
 # --max-old-space-size gives V8 room to actually use the container's memory
-# instead of self-limiting below it. Raised alongside fly.toml's vm memory
-# (2gb -> 4gb) after a real OOM recurred specifically on the velocity path
-# (holds reflectivity + CC + velocity Map structures simultaneously).
-ENV NODE_OPTIONS="--max-old-space-size=3072"
+# instead of self-limiting below it. shared-cpu-1x caps at 2gb total
+# (confirmed live — Fly rejects a higher vm memory on this size class), so
+# this has to leave real headroom under that ceiling for Node/native-module
+# baseline + OS overhead, not just for V8's own heap.
+ENV NODE_OPTIONS="--max-old-space-size=1536"
 
 # Runs via tsx rather than a compiled dist/ — this is a small service, and
 # running the exact same entrypoint in dev and production (see package.json's
