@@ -264,7 +264,19 @@ server.listen(PORT, () => {
 // Athens/Atlanta/Gainesville, KBMX covers Birmingham) — update both places
 // together if the app's preset locations ever change.
 const PREWARM_STATIONS = ["KFFC", "KBMX"];
-const PREWARM_INTERVAL_MS = 80_000; // just under the 90s payload cache TTL, so a warm entry never fully expires under normal operation.
+// Originally 80s (just under the 90s cache TTL, to never let it expire) —
+// found live via fly logs this was too aggressive: each station's cold
+// compute takes ~15-25s, so 2 stations back to back can occupy ~30-50s of
+// every 80s cycle. Since prewarm shares the same single compute slot as real
+// traffic (deliberately — it must respect the same concurrency safety, not
+// bypass it), that duty cycle meant a real user's request had a meaningful
+// chance of queuing behind a prewarm cycle instead of getting the fast path
+// pre-warming exists to provide. 150s trades some cache-staleness (the warm
+// entry can go cold for a stretch between cycles, in which case a real
+// request just takes the normal safe cold-compute-or-fallback path anyway,
+// same as if prewarm didn't exist) for leaving real traffic much more free
+// capacity.
+const PREWARM_INTERVAL_MS = 150_000;
 
 async function prewarm() {
   for (const station of PREWARM_STATIONS) {
