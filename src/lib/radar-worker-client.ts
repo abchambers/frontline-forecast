@@ -7,7 +7,12 @@
 // dependency for radar to work at all.
 const WORKER_URL = process.env.RADAR_WORKER_URL;
 const WORKER_API_KEY = process.env.RADAR_WORKER_API_KEY;
-const TIMEOUT_MS = 4000;
+// Measured live against the deployed worker: a cold decode (uncached
+// station, or its 90s payload cache expired) takes ~9-12s, warm cache ~1s.
+// This was previously 4000ms — found live via `vercel logs` showing every
+// production request silently falling back to local, because the timeout
+// was aborting the worker call before a cold decode could ever finish.
+const TIMEOUT_MS = 15_000;
 
 export async function fetchFromWorker(path: string): Promise<unknown | null> {
   if (!WORKER_URL) return null;
@@ -20,9 +25,13 @@ export async function fetchFromWorker(path: string): Promise<unknown | null> {
       signal: controller.signal,
       cache: "no-store",
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      console.error(`radar-worker-client: ${path} returned ${response.status}`);
+      return null;
+    }
     return await response.json();
-  } catch {
+  } catch (error) {
+    console.error(`radar-worker-client: ${path} failed —`, error instanceof Error ? error.message : error);
     return null;
   } finally {
     clearTimeout(timeout);
