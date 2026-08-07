@@ -5,6 +5,13 @@ import { getVolumeCached, extractLowestElevation } from "@/lib/nexrad/level2";
 import { computeReflectivityGrid, computeVelocityGrid } from "@/lib/nexrad/project";
 import { fetchFromWorker } from "@/lib/radar-worker-client";
 
+// A cold worker request (uncached station) can take up to ~25s at the
+// worker's current near-native grid resolution — Vercel's default function
+// timeout (10s on Hobby) would kill this route before that ever resolves,
+// which looks identical to every other failure mode but skips the graceful
+// local fallback entirely since the whole function dies, not just the fetch.
+export const maxDuration = 30;
+
 // In-house NEXRAD Level II radar — free, public-domain NOAA data (unlike
 // GribStream's paid, ToS-ambiguous MRMS resale), and inherently per-station
 // rather than metered, so cost doesn't scale with school count or with how

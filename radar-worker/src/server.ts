@@ -3,6 +3,7 @@ import { getRadarSite } from "./site.js";
 import { getVolumeCached, extractLowestElevation } from "./level2.js";
 import { computeReflectivityGrid, computeVelocityGrid } from "./project.js";
 import { fetchStormTracks, fetchHailDetections, fetchTvsDetections, fetchMesocycloneDetections } from "./level3-markers.js";
+import { renderMrmsGridToDataUrl, renderVelocityGridToDataUrl } from "./render.js";
 
 // The whole reason this worker exists instead of the Vercel route it mirrors:
 // a persistent process means the module-level caches below (and
@@ -12,7 +13,18 @@ import { fetchStormTracks, fetchHailDetections, fetchTvsDetections, fetchMesocyc
 // superficially identical requests — see project memory. Same station
 // requested twice in a row here hits a warm parsed volume, not a fresh S3
 // download + binary decode.
-const GRID_STEP_DEG = 0.01;
+//
+// 0.0025deg (~278m) is close to native super-res gate spacing — deliberately
+// pushed much finer than the main app's own fallback route (still 0.01deg),
+// which is affordable ONLY because this worker renders a PNG server-side
+// (render.ts) instead of shipping raw {lat,lon,dbz} JSON: measured live,
+// doubling resolution as raw JSON would have taken a 6.3MB payload to 26MB,
+// while the equivalent PNG at native-ish resolution is ~1.4MB. Compute time
+// (the gather-mapping sample pass) is the real cost of going this fine —
+// measured live at ~5.4s cold for reflectivity — bounded and absorbed by the
+// 90s payload cache below, not by the browser's own 500k-cell canvas cap
+// (this worker isn't subject to that; see render.ts).
+const GRID_STEP_DEG = 0.0025;
 const MAX_RANGE_KM = 230;
 const PAYLOAD_CACHE_TTL_MS = 90_000;
 const SEVERE_CACHE_TTL_MS = 60_000;
@@ -90,16 +102,26 @@ async function handleReflectivityOrVelocity(station: string, moment: "reflectivi
     console.log(`[${station}:${moment}] computeReflectivityGrid: ${(tRefl - tExtract).toFixed(0)}ms`);
     elevationDeg = elevation.elevationDeg;
   }
-  console.log(`[${station}:${moment}] TOTAL: ${(performance.now() - t0).toFixed(0)}ms`);
+  const tCompute = performance.now();
+  console.log(`[${station}:${moment}] TOTAL compute: ${(tCompute - t0).toFixed(0)}ms`);
 
   const hasSignal = grid.some((point) => point.dbz !== null);
   if (!hasSignal) throw new Error(`No ${moment} data available for ${station} in this volume.`);
+
+  // Rendered server-side rather than shipping raw points — see the
+  // GRID_STEP_DEG comment above for why this matters at this resolution.
+  const imageDataUrl =
+    moment === "velocity"
+      ? renderVelocityGridToDataUrl(grid, bounds, GRID_STEP_DEG)
+      : renderMrmsGridToDataUrl(grid, bounds, GRID_STEP_DEG);
+  if (!imageDataUrl) throw new Error(`Failed to render ${moment} image for ${station}.`);
+  console.log(`[${station}:${moment}] render+encode: ${(performance.now() - tCompute).toFixed(0)}ms, image ~${Math.round((imageDataUrl.length * 0.75) / 1024)}KB`);
 
   const payload = {
     time: volume.lastModified,
     bounds,
     step: GRID_STEP_DEG,
-    points: grid,
+    imageDataUrl,
     elevationDeg,
     qualityControl,
     source: `NEXRAD Level II (${station}, ${moment})`,

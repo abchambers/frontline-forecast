@@ -11,12 +11,13 @@
     "dev": "tsx watch src/server.ts"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^1.0.3",
     "nexrad-level-2-data": "^2.4.3",
     "nexrad-level-3-data": "^0.6.1"
   },
   "devDependencies": {
+    "@types/node": "^22.10.2",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2",
-    "@types/node": "^22.10.2"
+    "typescript": "^5.7.2"
   }
 }

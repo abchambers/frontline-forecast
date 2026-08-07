@@ -7,12 +7,16 @@
 // dependency for radar to work at all.
 const WORKER_URL = process.env.RADAR_WORKER_URL;
 const WORKER_API_KEY = process.env.RADAR_WORKER_API_KEY;
-// Measured live against the deployed worker: a cold decode (uncached
-// station, or its 90s payload cache expired) takes ~9-12s, warm cache ~1s.
-// This was previously 4000ms — found live via `vercel logs` showing every
-// production request silently falling back to local, because the timeout
-// was aborting the worker call before a cold decode could ever finish.
-const TIMEOUT_MS = 15_000;
+// Measured live against the deployed worker at the current (finer,
+// near-native-resolution) grid step: a cold decode+render (uncached station,
+// or its 90s payload cache expired) took ~12.5s on a dev machine — Fly's
+// shared-cpu-1x has measured meaningfully slower than that for the same
+// compute before (see project memory), so this leaves real margin rather
+// than cutting it close. Must stay under the calling route's own
+// `maxDuration` (see route.ts) or Vercel kills the whole function first,
+// which would look identical to a timeout here but skip this fallback logic
+// entirely.
+const TIMEOUT_MS = 25_000;
 
 export async function fetchFromWorker(path: string): Promise<unknown | null> {
   if (!WORKER_URL) return null;

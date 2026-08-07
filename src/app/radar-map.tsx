@@ -276,8 +276,19 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       window.setTimeout(() => settle(nextLayer, "provider"), 700);
     }
 
-    function addGridLayer(data: { points: MrmsPoint[]; bounds: MrmsBounds; step: number }, source: "nexrad", renderer: typeof renderMrmsGridToDataUrl) {
-      const dataUrl = renderer(data.points, data.bounds, data.step);
+    // The worker renders server-side and sends a ready PNG data URL directly
+    // (imageDataUrl) — used almost always, since RADAR_WORKER_URL is set in
+    // production. The Vercel route's own local fallback (only exercised if
+    // the worker itself is unreachable) still returns raw {points, step} for
+    // client-side rendering, at the coarser 0.01deg grid — both shapes are
+    // handled here so a worker outage degrades gracefully rather than
+    // breaking the map.
+    function addGridLayer(
+      data: { imageDataUrl?: string; points?: MrmsPoint[]; bounds: MrmsBounds; step: number },
+      source: "nexrad",
+      renderer: typeof renderMrmsGridToDataUrl,
+    ) {
+      const dataUrl = data.imageDataUrl ?? (data.points ? renderer(data.points, data.bounds, data.step) : null);
       if (!dataUrl || cancelled || !mapRef.current) throw new Error("Render failed");
       const bounds: [[number, number], [number, number]] = [[data.bounds.minLatitude, data.bounds.minLongitude], [data.bounds.maxLatitude, data.bounds.maxLongitude]];
       const nextLayer = window.L.imageOverlay(dataUrl, bounds, { opacity: 0, interactive: false });
@@ -292,7 +303,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       fetch(`/api/radar/nexrad?station=${location.radarSite}&moment=velocity`)
         .then(async (response) => {
           if (!response.ok) throw new Error("In-house velocity unavailable");
-          const data = await response.json() as { points: MrmsPoint[]; bounds: MrmsBounds; step: number };
+          const data = await response.json() as { imageDataUrl?: string; points?: MrmsPoint[]; bounds: MrmsBounds; step: number };
           addGridLayer(data, "nexrad", renderVelocityGridToDataUrl);
         })
         .catch(() => {
@@ -317,7 +328,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       fetch(`/api/radar/nexrad?station=${location.radarSite}`)
         .then(async (response) => {
           if (!response.ok) throw new Error("In-house NEXRAD unavailable");
-          const data = await response.json() as { points: MrmsPoint[]; bounds: MrmsBounds; step: number };
+          const data = await response.json() as { imageDataUrl?: string; points?: MrmsPoint[]; bounds: MrmsBounds; step: number };
           addGridLayer(data, "nexrad", renderMrmsGridToDataUrl);
         })
         .catch(() => { if (!cancelled) addProviderLayer(); });
