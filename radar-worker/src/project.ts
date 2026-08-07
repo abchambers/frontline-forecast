@@ -175,14 +175,34 @@ export function cellKey(lat: number, lon: number, stepDeg: number): string {
 // it can only remove cells the baseline already let through, never add ones
 // the baseline would have excluded, so it's strictly safe regardless of
 // which explanation for that spoke pattern turns out to be right.
+// Both constants below were originally tuned against the pre-gather-mapping
+// scatter algorithm's naturally sparse, gap-riddled point cloud — see the
+// striping-fix commit. Once that was fixed, gather-mapping produces a dense,
+// complete grid, and these two heuristics turned out to be far more
+// aggressive against REAL signal than intended. Measured live against a real
+// KFFC volume before changing anything: the old 15 dBZ floor alone removed
+// 50.4% of ALL raw non-null cells (not just weak biological-scatter noise —
+// half of everything the radar detected), and the old despeckle pass (no
+// strength gate) additionally removed cells with real dBZ up to 34 — solidly
+// real moderate rain, not noise, just spatially thin (a storm's leading
+// edge, a narrow band). This is very likely why the user saw noticeably
+// thinner/less-detailed storms live vs. RadarScope's same-time view, once
+// the gridding bug itself was already fixed.
 const CORRELATION_COEFFICIENT_THRESHOLD = 0.85;
-const MIN_REFLECTIVITY_DBZ = 15;
+const MIN_REFLECTIVITY_DBZ = 5; // lowered from 15 — matches RadarScope's own "0-10: very light reflectivity" bottom legend band rather than hard-cutting it.
 const DESPECKLE_MIN_NEIGHBORS = 3;
+// Cells at or above this always survive despeckling regardless of neighbor
+// count — real biological scatter/clutter is essentially always weak
+// (confirmed in the earlier noise investigation), so strong signal being
+// spatially isolated is virtually always a real, thin storm feature, not
+// noise. Despeckling should only ever be adjudicating genuinely marginal
+// signal, not throwing away a storm's leading edge.
+const DESPECKLE_STRENGTH_GATE_DBZ = 25;
 
 function despeckle(cells: Map<string, number | null>): Map<string, number | null> {
   const despeckled = new Map<string, number | null>();
   for (const [key, value] of cells) {
-    if (value === null) {
+    if (value === null || value >= DESPECKLE_STRENGTH_GATE_DBZ) {
       despeckled.set(key, value);
       continue;
     }
