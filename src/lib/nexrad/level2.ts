@@ -95,9 +95,24 @@ type VolumeCacheEntry = {
 };
 const volumeCache = new Map<string, VolumeCacheEntry>();
 
+// Mirrors a real leak fix in radar-worker/src/level2.ts (see that file for
+// the full incident) — expired entries were never deleted, just ignored by
+// the expiresAt check, so a distinct station's stale volume stayed in
+// memory forever. Lower-severity here since Vercel's serverless model
+// usually recycles the whole module on a cold start rather than keeping one
+// process running for hours/days the way the persistent worker does, but
+// fixed for correctness/consistency regardless.
+function evictExpiredVolumes() {
+  const now = Date.now();
+  for (const [key, entry] of volumeCache) {
+    if (entry.expiresAt <= now) volumeCache.delete(key);
+  }
+}
+
 export async function getVolumeCached(
   stationId: string,
 ): Promise<{ radar: InstanceType<typeof Level2Radar>; key: string; lastModified: string }> {
+  evictExpiredVolumes();
   const cached = volumeCache.get(stationId);
   if (cached && cached.expiresAt > Date.now()) return cached;
   const { buffer, key, lastModified } = await fetchLatestVolume(stationId);

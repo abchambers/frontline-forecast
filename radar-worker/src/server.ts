@@ -52,7 +52,21 @@ const STATION_ID_PATTERN = /^[A-Z0-9]{3,5}$/;
 type CacheEntry = { data: unknown; expiresAt: number };
 const payloadCache = new Map<string, CacheEntry>();
 
+// Same real leak class as level2.ts's volumeCache (see that file's comment
+// for the full incident writeup) — expired entries were never deleted, just
+// silently ignored by the expiresAt check, so every distinct station+moment
+// ever requested in this process's lifetime stayed in memory forever (each
+// entry holds a full base64 PNG, up to ~2MB). Sweeping on every access
+// bounds this to "recently active" rather than "all-time".
+function evictExpiredPayloads() {
+  const now = Date.now();
+  for (const [key, entry] of payloadCache) {
+    if (entry.expiresAt <= now) payloadCache.delete(key);
+  }
+}
+
 function cached(key: string): unknown | null {
+  evictExpiredPayloads();
   const entry = payloadCache.get(key);
   if (entry && entry.expiresAt > Date.now()) return entry.data;
   return null;
@@ -278,6 +292,20 @@ const PREWARM_STATIONS = ["KFFC", "KBMX"];
 // capacity.
 const PREWARM_INTERVAL_MS = 150_000;
 
+// Real bug found live, same incident as the cache-eviction fixes above:
+// setInterval fires unconditionally every PREWARM_INTERVAL_MS regardless of
+// whether the PREVIOUS prewarm() call has finished. Once real-world compute
+// started taking longer than the interval (which is exactly what the memory
+// leak above caused, via GC thrashing), each new interval firing added
+// another full prewarm cycle on top of one still running — a second,
+// independent way this could compound into a growing backlog even with the
+// per-station in-flight dedup already in place (dedup only helps while a
+// request for that exact station is still active; it doesn't stop a NEW
+// request from queuing the moment the old one finishes but before the next
+// stacked interval fires). Self-rescheduling instead: the next cycle is
+// only scheduled after the current one fully completes, so this can never
+// run more than one prewarm cycle at a time regardless of how slow compute
+// gets.
 async function prewarm() {
   for (const station of PREWARM_STATIONS) {
     try {
@@ -286,7 +314,7 @@ async function prewarm() {
       console.error(`[prewarm:${station}] failed —`, error instanceof Error ? error.message : error);
     }
   }
+  setTimeout(prewarm, PREWARM_INTERVAL_MS);
 }
 
 prewarm();
-setInterval(prewarm, PREWARM_INTERVAL_MS);

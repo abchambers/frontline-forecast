@@ -95,9 +95,31 @@ type VolumeCacheEntry = {
 };
 const volumeCache = new Map<string, VolumeCacheEntry>();
 
+// Real memory leak found live, hours into production uptime: this Map is
+// keyed by station, so a repeat request for the SAME station correctly
+// overwrites its old entry — but a DIFFERENT station's expired entry was
+// never being deleted anywhere, just silently ignored by the expiresAt
+// check below. With 159 selectable stations reachable via the map picker,
+// each holding a full parsed Level2Radar object (measured live: ~800MB+ RSS
+// contribution for a single volume), a handful of distinct stations
+// requested over the course of a day was enough to exhaust the worker's 2GB
+// ceiling — degrading into severe GC thrashing well before the actual OOM
+// (explains request times inflating from single-digit seconds to 200-350+
+// seconds, including for plain S3 fetches that have nothing to do with this
+// cache). Sweeping expired entries on every access bounds steady-state
+// memory to roughly "distinct stations requested within the last 90s",
+// not "every distinct station ever requested in this process's lifetime".
+function evictExpiredVolumes() {
+  const now = Date.now();
+  for (const [key, entry] of volumeCache) {
+    if (entry.expiresAt <= now) volumeCache.delete(key);
+  }
+}
+
 export async function getVolumeCached(
   stationId: string,
 ): Promise<{ radar: InstanceType<typeof Level2Radar>; key: string; lastModified: string }> {
+  evictExpiredVolumes();
   const cached = volumeCache.get(stationId);
   if (cached && cached.expiresAt > Date.now()) return cached;
   const { buffer, key, lastModified } = await fetchLatestVolume(stationId);
