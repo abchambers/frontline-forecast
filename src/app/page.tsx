@@ -356,7 +356,7 @@ function runTimestamp(time: string) {
 }
 
 const radarLegends: Record<RadarMapView, RadarLegend | null> = {
-  composite: { title: "Base reflectivity", left: "0", middle: "35", right: "70+", unit: "dBZ", gradient: "linear-gradient(90deg,#6fb7ff 0 7%,#3bd8e9 7% 14%,#35ca8a 14% 22%,#36b84d 22% 30%,#a9d337 30% 38%,#efe23a 38% 46%,#ffbf25 46% 54%,#ff8027 54% 62%,#ec3e32 62% 70%,#be1f57 70% 78%,#9b2678 78% 86%,#dbdce5 86% 100%)" },
+  composite: { title: "Base reflectivity", left: "0", middle: "35", right: "70+", unit: "dBZ", gradient: "linear-gradient(90deg,#00ecec 0 6.67%,#01a0f6 6.67% 13.33%,#0000f6 13.33% 20%,#00ff00 20% 26.67%,#00c800 26.67% 33.33%,#009000 33.33% 40%,#ffff00 40% 46.67%,#e7c000 46.67% 53.33%,#ff9000 53.33% 60%,#ff0000 60% 66.67%,#d60000 66.67% 73.33%,#c00000 73.33% 80%,#ff00ff 80% 86.67%,#9955c9 86.67% 93.33%,#ffffff 93.33% 100%)" },
   velocity: { title: "Base velocity", left: "-30", middle: "0", right: "+30", unit: "m/s · in-house NEXRAD only", gradient: "linear-gradient(90deg,#00441b 0 12%,#00823c 12% 25%,#5abf6e 25% 37%,#c7e9c0 37% 47%,#fdd0c2 53% 63%,#ef6548 63% 75%,#ba1621 75% 88%,#67000d 88% 100%)" },
   future_reflectivity: { title: "HRRR simulated reflectivity", left: "0", middle: "35", right: "70+", unit: "dBZ · forecast", gradient: "linear-gradient(90deg,#6fb7ff 0 7%,#3bd8e9 7% 14%,#35ca8a 14% 22%,#36b84d 22% 30%,#a9d337 30% 38%,#efe23a 38% 46%,#ffbf25 46% 54%,#ff8027 54% 62%,#ec3e32 62% 70%,#be1f57 70% 78%,#9b2678 78% 86%,#dbdce5 86% 100%)" },
   satellite: null,

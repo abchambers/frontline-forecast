@@ -13,19 +13,28 @@ import type { MrmsBounds, MrmsPoint } from "./types.js";
 // on the same smooth gradients + huge empty areas that make the raw JSON so
 // repetitive), which is what actually lets this app get toward
 // RadarScope-grade detail instead of trading detail for load time.
+// The real NWS 16-level reflectivity color table, pixel-sampled directly off a live IEM N0Q
+// radar image (mesonet.agron.iastate.edu/GIS/radmap.php) rather than approximated: fetched the
+// actual image via canvas, read RGB values across both the embedded legend swatch and real storm
+// pixels on the map itself to confirm the mapping. Replaces an earlier 12-stop gradient that was
+// never verified against a reference and had visibly wrong hues (no true saturated blue band, a
+// muddy plum instead of magenta at the high end, no pure white core).
 const COLOR_STOPS: { dbz: number; rgb: [number, number, number] }[] = [
-  { dbz: 0, rgb: [111, 183, 255] },
-  { dbz: 6.25, rgb: [59, 216, 233] },
-  { dbz: 12.5, rgb: [53, 202, 138] },
-  { dbz: 18.75, rgb: [54, 184, 77] },
-  { dbz: 25, rgb: [169, 211, 55] },
-  { dbz: 31.25, rgb: [239, 226, 58] },
-  { dbz: 37.5, rgb: [255, 191, 37] },
-  { dbz: 43.75, rgb: [255, 128, 39] },
-  { dbz: 50, rgb: [236, 62, 50] },
-  { dbz: 56.25, rgb: [190, 31, 87] },
-  { dbz: 62.5, rgb: [155, 38, 120] },
-  { dbz: 68.75, rgb: [219, 220, 229] },
+  { dbz: 0, rgb: [0, 236, 236] },
+  { dbz: 5, rgb: [1, 160, 246] },
+  { dbz: 10, rgb: [0, 0, 246] },
+  { dbz: 15, rgb: [0, 255, 0] },
+  { dbz: 20, rgb: [0, 200, 0] },
+  { dbz: 25, rgb: [0, 144, 0] },
+  { dbz: 30, rgb: [255, 255, 0] },
+  { dbz: 35, rgb: [231, 192, 0] },
+  { dbz: 40, rgb: [255, 144, 0] },
+  { dbz: 45, rgb: [255, 0, 0] },
+  { dbz: 50, rgb: [214, 0, 0] },
+  { dbz: 55, rgb: [192, 0, 0] },
+  { dbz: 60, rgb: [255, 0, 255] },
+  { dbz: 65, rgb: [153, 85, 201] },
+  { dbz: 70, rgb: [255, 255, 255] },
 ];
 const NO_ECHO_THRESHOLD_DBZ = 2;
 const SOFT_BLUR_PX = 0.6;
@@ -36,26 +45,18 @@ const SOFT_BLUR_PX = 0.6;
 // radar apps. Raised to fully opaque so the slider is the only opacity lever.
 const PIXEL_ALPHA = 255;
 
+// Discrete/stepped, NOT interpolated — real radar displays (IEM, RadarScope, weather.gov) render
+// hard 5 dBZ color bands, not a smooth gradient between them. Confirmed directly against a live IEM
+// image: sampling adjacent pixels across a real storm core jumps abruptly between exact palette
+// values with no blending (aside from single-pixel anti-aliasing at a band edge) — the "banded"
+// look is a real, deliberate part of how these displays read, not a rendering limitation to smooth
+// over. This app's earlier smooth interpolation was a big part of why it looked more like a
+// heatmap/model-guidance render than an actual radar display.
 function colorForDbz(dbz: number): [number, number, number] {
-  if (dbz <= COLOR_STOPS[0].dbz) return COLOR_STOPS[0].rgb;
-  const last = COLOR_STOPS[COLOR_STOPS.length - 1];
-  if (dbz >= last.dbz) return last.rgb;
-  let lower = COLOR_STOPS[0];
-  let upper = last;
-  for (let i = 0; i < COLOR_STOPS.length - 1; i += 1) {
-    if (dbz >= COLOR_STOPS[i].dbz && dbz <= COLOR_STOPS[i + 1].dbz) {
-      lower = COLOR_STOPS[i];
-      upper = COLOR_STOPS[i + 1];
-      break;
-    }
+  for (let i = COLOR_STOPS.length - 1; i >= 0; i -= 1) {
+    if (dbz >= COLOR_STOPS[i].dbz) return COLOR_STOPS[i].rgb;
   }
-  const span = upper.dbz - lower.dbz || 1;
-  const t = (dbz - lower.dbz) / span;
-  return [
-    Math.round(lower.rgb[0] + (upper.rgb[0] - lower.rgb[0]) * t),
-    Math.round(lower.rgb[1] + (upper.rgb[1] - lower.rgb[1]) * t),
-    Math.round(lower.rgb[2] + (upper.rgb[2] - lower.rgb[2]) * t),
-  ];
+  return COLOR_STOPS[0].rgb;
 }
 
 const VELOCITY_COLOR_STOPS: { velocity: number; rgb: [number, number, number] }[] = [
