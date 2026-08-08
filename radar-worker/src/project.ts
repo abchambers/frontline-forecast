@@ -155,6 +155,101 @@ function sampleAtCandidateCells(elevation: DecodedElevation, candidateCells: Can
   return cells;
 }
 
+function angularDelta(a: number, b: number): number {
+  const d = Math.abs(a - b);
+  return Math.min(d, 360 - d);
+}
+
+// Bilinear-style interpolation across the two bracketing radials (azimuth)
+// and two bracketing gates (range), instead of nearest-neighbor — used for
+// CONTINUOUS fields (reflectivity, correlation coefficient) only. Deliberately
+// NOT used for velocity (computeVelocityGrid keeps sampleAtCandidateCells) —
+// linearly blending raw Doppler velocity across gates can wash out real,
+// small, adjacent-gate rotation/divergence couplets, exactly the severe-
+// weather signal this app cares about; same reason despeckle is deliberately
+// not applied to velocity either.
+//
+// Real motivation, found via live before/after comparison against RadarScope
+// and IEM's N0Q mosaic on the same storm: at this app's 0.006deg (~670m)
+// grid step, WSR-88D's ~0.5deg native radial spacing means the arc gap
+// between adjacent radials exceeds a grid cell's width past a modest range,
+// so nearest-neighbor gather-mapping stamps the SAME source sample across
+// several adjacent output cells — a real, confirmed source of the
+// "blockier/gappier than RadarScope" look, upstream of and separate from the
+// noise-floor/despeckle/CC filtering (measured near-identical on/off against
+// the same real distant storms, so not the cause of this specific texture
+// gap — see the in-house-nexrad-radar memory entry for that diagnostic).
+//
+// Degrades gracefully at coverage edges: if only one of the (up to) four
+// corners has real data, the weighted average reduces to exactly that
+// corner's raw value (dividing by its own partial weight), not a fabricated
+// blend — only a cell with ZERO available corners returns null.
+function sampleAtCandidateCellsInterpolated(elevation: DecodedElevation, candidateCells: CandidateCell[]): Map<string, number | null> {
+  const index = buildElevationIndex(elevation);
+  const { sortedAzimuths, sortedRadials } = index;
+  const n = sortedAzimuths.length;
+  const cosElevation = Math.cos((elevation.elevationDeg * Math.PI) / 180);
+  const cells = new Map<string, number | null>();
+  if (n === 0) return cells;
+
+  const accumulate = (radial: DecodedRadial, slantRangeKm: number, azimuthWeight: number, acc: { weightSum: number; valueSum: number }) => {
+    const values = radial.values;
+    const length = values.length;
+    const exactGate = (slantRangeKm - radial.firstGateKm) / radial.gateSizeKm;
+    const gateFloor = Math.floor(exactGate);
+    const gateFrac = exactGate - gateFloor;
+    if (gateFloor >= 0 && gateFloor < length) {
+      const v = values[gateFloor];
+      if (v !== null) {
+        const w = azimuthWeight * (1 - gateFrac);
+        acc.weightSum += w;
+        acc.valueSum += v * w;
+      }
+    }
+    const gateCeil = gateFloor + 1;
+    if (gateCeil >= 0 && gateCeil < length) {
+      const v = values[gateCeil];
+      if (v !== null) {
+        const w = azimuthWeight * gateFrac;
+        acc.weightSum += w;
+        acc.valueSum += v * w;
+      }
+    }
+  };
+
+  for (const cell of candidateCells) {
+    let lo = 0;
+    let hi = n;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (sortedAzimuths[mid] < cell.bearingDeg) lo = mid + 1;
+      else hi = mid;
+    }
+    const idxA = lo % n;
+    const idxB = (lo - 1 + n) % n;
+    const deltaA = angularDelta(sortedAzimuths[idxA], cell.bearingDeg);
+    const deltaB = idxB === idxA ? Infinity : angularDelta(sortedAzimuths[idxB], cell.bearingDeg);
+    const aOk = deltaA <= MAX_AZIMUTH_GAP_DEG;
+    const bOk = deltaB <= MAX_AZIMUTH_GAP_DEG;
+    if (!aOk && !bOk) continue;
+
+    // Tent weighting: the closer radial gets more weight, degrading to 1/0
+    // when only one side is within range (identical result to nearestRadial
+    // in that case).
+    const totalGap = aOk && bOk ? deltaA + deltaB || 1e-9 : 1;
+    const weightA = aOk ? (bOk ? deltaB / totalGap : 1) : 0;
+    const weightB = bOk ? (aOk ? deltaA / totalGap : 1) : 0;
+
+    const slantRangeKm = cell.groundRangeKm / cosElevation;
+    const acc = { weightSum: 0, valueSum: 0 };
+    if (aOk) accumulate(sortedRadials[idxA], slantRangeKm, weightA, acc);
+    if (bOk) accumulate(sortedRadials[idxB], slantRangeKm, weightB, acc);
+
+    if (acc.weightSum > 0) cells.set(cell.key, acc.valueSum / acc.weightSum);
+  }
+  return cells;
+}
+
 // Backward-compatible one-shot form for callers that don't share candidate
 // cells across multiple moments in the same request (e.g. the main app's
 // Vercel fallback route, which only ever needs one elevation per call).
@@ -278,7 +373,7 @@ export function computeReflectivityGrid(
 ): { grid: MrmsPoint[]; bounds: MrmsBounds; echoMask: Set<string>; qualityControl: "noise-floor+correlation-coefficient" | "noise-floor" } {
   const bounds = boundsForSite(site, maxRangeKm);
   const cells0 = candidateCells ?? buildCandidateCells(site, stepDeg, maxRangeKm);
-  const rawCells = sampleAtCandidateCells(elevation, cells0);
+  const rawCells = sampleAtCandidateCellsInterpolated(elevation, cells0);
 
   // Baseline: the same proven floor+despeckle pass regardless of whether CC
   // is available — unchanged from before CC existed.
@@ -290,10 +385,11 @@ export function computeReflectivityGrid(
 
   // CC as an additional AND on top of the baseline — see the block comment
   // above for why this isn't a replacement. Sampled with the same
-  // gather-mapping as reflectivity, so it lines up cell-for-cell without
-  // reintroducing the range-dependent gap this whole rewrite fixes.
+  // gather-mapping (and the same interpolation) as reflectivity, so it lines
+  // up cell-for-cell without reintroducing the range-dependent gap this
+  // whole rewrite fixes.
   if (correlationCoefficient) {
-    const ccCells = sampleAtCandidateCells(correlationCoefficient, cells0);
+    const ccCells = sampleAtCandidateCellsInterpolated(correlationCoefficient, cells0);
     for (const [key, value] of cells) {
       if (value === null) continue;
       const cc = ccCells.get(key);
