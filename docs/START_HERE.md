@@ -4,6 +4,8 @@ Use this page to resume work from any computer. Bookmark the links you use most.
 
 **AI collaborators**: read [`WORKING_WITH_ANDREW.md`](WORKING_WITH_ANDREW.md) first — it's auto-loaded via `CLAUDE.md` in this repo, but worth knowing it exists.
 
+**Setting up on a brand-new Mac with nothing installed?** Use [`new-machine-setup.md`](new-machine-setup.md) — covers Homebrew, GitHub CLI, and everything below from zero.
+
 ## Use the product
 
 - [Frontline Forecast production app](https://frontline-forecast.com/)

@@ -2,6 +2,8 @@
 
 If you're an AI collaborator setting this up, also read [`WORKING_WITH_ANDREW.md`](WORKING_WITH_ANDREW.md) — auto-loaded via `CLAUDE.md`, but flagging it here too.
 
+Starting from a completely fresh Mac with no Homebrew, Git, or Node installed? Use [`new-machine-setup.md`](new-machine-setup.md) instead — it covers everything from zero. This page assumes those are already installed.
+
 ## The easy way: open the live site
 
 Use [production Frontline Forecast](https://frontline-forecast.com/) on any phone, tablet, or computer. It is deployed on Vercel, so it remains available when this Mac is asleep, powered off, or its Terminal windows are closed.
