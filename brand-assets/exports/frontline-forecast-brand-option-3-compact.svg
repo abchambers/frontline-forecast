@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="360" viewBox="0 0 900 360">
+  <title>Frontline Forecast — compact brand lockup option 3</title>
+  <desc>Editable compact label lockup with a short square-ended divider for small-size use.</desc>
+  <rect id="background-panel" width="900" height="360" rx="12" fill="#363A9D"/>
+  <g id="brand-name-option-3-compact" fill="#FFFFFF" font-family="Arial, Helvetica, sans-serif">
+    <text x="86" y="132" font-size="56" font-weight="700" letter-spacing="10">FRONTLINE</text>
+    <rect id="short-divider" x="86" y="178" width="150" height="2" fill="#42A5F5"/>
+    <text x="86" y="253" font-size="39" font-weight="400" letter-spacing="15">FORECAST</text>
+  </g>
+</svg>

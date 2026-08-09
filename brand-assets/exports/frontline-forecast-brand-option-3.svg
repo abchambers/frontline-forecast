@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="360" viewBox="0 0 900 360">
+  <title>Frontline Forecast — brand lockup option 3</title>
+  <desc>Editable refined label lockup for Frontline Forecast.</desc>
+  <rect id="background-panel" width="900" height="360" rx="12" fill="#363A9D"/>
+  <g id="brand-name-option-3" fill="#FFFFFF" font-family="Arial, Helvetica, sans-serif">
+    <text x="86" y="138" font-size="58" font-weight="700" letter-spacing="11">FRONTLINE</text>
+    <line x1="86" y1="182" x2="690" y2="182" stroke="#42A5F5" stroke-width="3" stroke-linecap="round"/>
+    <text x="86" y="250" font-size="40" font-weight="400" letter-spacing="16">FORECAST</text>
+  </g>
+</svg>
