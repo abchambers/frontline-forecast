@@ -1,1 +1,2 @@
 @AGENTS.md
+@docs/WORKING_WITH_ANDREW.md
