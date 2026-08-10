@@ -265,13 +265,26 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
     const previousLayer = radarLayerRef.current;
     if (!previousLayer) setIsDataLoading(true);
     let settled = false;
+    // CROSSFADE_MS must stay ahead of .leaflet-tile/.leaflet-image-layer's own CSS transition
+    // (globals.css, 0.25s) — a real bug found live: this used to call removeLayer on the previous
+    // frame in the SAME tick as setting the new frame's opacity, so the old frame vanished
+    // instantly while the new one only *started* fading in from blank. That's not a crossfade,
+    // it's "flash to the bare map, then pop to full color" every single frame swap — the actual
+    // cause of reported choppiness/color flicker during playback, not just an absent transition.
+    // Fading the OLD layer's own opacity to 0 (instead of removing it outright) means both layers
+    // are genuinely on-screen and animating simultaneously during the transition window, then the
+    // old one is removed only once it's actually invisible.
+    const CROSSFADE_MS = 300;
     const settle = (nextLayer: any, source: "nexrad" | "provider", meta: RadarFrameMeta = null) => {
       if (settled || cancelled) return;
       settled = true;
       setIsDataLoading(false);
       nextLayer.setOpacity(opacityRef.current);
       radarLayerRef.current = nextLayer;
-      if (previousLayer && mapRef.current) mapRef.current.removeLayer(previousLayer);
+      if (previousLayer && mapRef.current) {
+        previousLayer.setOpacity(0);
+        window.setTimeout(() => { if (mapRef.current) mapRef.current.removeLayer(previousLayer); }, CROSSFADE_MS);
+      }
       onSourceChangeRef.current?.(source);
       onFrameMetaRef.current?.(meta);
     };
