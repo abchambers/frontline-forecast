@@ -1604,8 +1604,22 @@ export default function Home() {
 
   useEffect(() => {
     if (!radarPlaying || radarFrames.length < 2) return;
-    const playId = window.setInterval(() => setRadarFrameIndex((index) => (index + 1) % radarFrames.length), 650);
-    return () => window.clearInterval(playId);
+    // Self-rescheduling setTimeout instead of a uniform setInterval so the loop can pause longer on
+    // the most-recent frame before restarting — the standard radar-loop convention (RadarScope, NWS
+    // loop viewers) precisely because that's the one frame worth actually reading, not just glancing
+    // past on the way back to the oldest one. A flat 650ms advance made every frame equally
+    // fleeting, current or 50 minutes old, which was part of what read as "choppy."
+    let timeoutId: number;
+    const advance = () => {
+      setRadarFrameIndex((index) => {
+        const next = (index + 1) % radarFrames.length;
+        const landedOnMostRecent = next === radarFrames.length - 1;
+        timeoutId = window.setTimeout(advance, landedOnMostRecent ? 2200 : 700);
+        return next;
+      });
+    };
+    timeoutId = window.setTimeout(advance, 700);
+    return () => window.clearTimeout(timeoutId);
   }, [radarPlaying, radarFrames.length]);
 
   useEffect(() => {
