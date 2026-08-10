@@ -10,14 +10,20 @@ declare global {
 
 type RadarStationSummary = { id: string; name: string; latitude: number; longitude: number };
 
-type RadarMapProps = { opacity?: number; showReflectivity?: boolean; moment?: "reflectivity" | "velocity"; showAlerts?: boolean; showOutlook?: boolean; showSevereMarkers?: boolean; showStationPicker?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; theme?: "light" | "dark"; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string }; onSourceChange?: (source: "nexrad" | "provider" | null) => void; onStationSelect?: (station: RadarStationSummary) => void };
+// Reported alongside onSourceChange, only ever populated for the in-house NEXRAD path (the
+// worker/fallback response already returns elevationDeg + time; the provider/IEM fallback has
+// neither, since it's a mosaic, not a single-site elevation scan). Used to print the on-map
+// product/tilt/time readout, RadarScope-style, instead of just the color-scale legend.
+export type RadarFrameMeta = { elevationDeg: number | null; observedAt: string | null } | null;
+
+type RadarMapProps = { opacity?: number; showReflectivity?: boolean; moment?: "reflectivity" | "velocity"; showAlerts?: boolean; showOutlook?: boolean; showSevereMarkers?: boolean; showStationPicker?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; theme?: "light" | "dark"; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string }; onSourceChange?: (source: "nexrad" | "provider" | null) => void; onFrameMeta?: (meta: RadarFrameMeta) => void; onStationSelect?: (station: RadarStationSummary) => void };
 
 const basemapTiles = {
   light: { url: "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
   dark: { url: "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
 };
 
-export default function RadarMap({ opacity = 0.72, showReflectivity = true, moment = "reflectivity", showAlerts = true, showOutlook = false, showSevereMarkers = false, showStationPicker = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, isCurrentFrame = true, theme = "light", location, onSourceChange, onStationSelect }: RadarMapProps) {
+export default function RadarMap({ opacity = 0.72, showReflectivity = true, moment = "reflectivity", showAlerts = true, showOutlook = false, showSevereMarkers = false, showStationPicker = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, isCurrentFrame = true, theme = "light", location, onSourceChange, onFrameMeta, onStationSelect }: RadarMapProps) {
   const mapElement = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const baseLayerRef = useRef<any>(null);
@@ -241,6 +247,8 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
   // parent re-render, not just on an actual location/frame change.
   const onSourceChangeRef = useRef(onSourceChange);
   useEffect(() => { onSourceChangeRef.current = onSourceChange; }, [onSourceChange]);
+  const onFrameMetaRef = useRef(onFrameMeta);
+  useEffect(() => { onFrameMetaRef.current = onFrameMeta; }, [onFrameMeta]);
 
   useEffect(() => {
     if (!leafletLoaded || !mapRef.current || !window.L) return;
@@ -248,6 +256,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       if (radarLayerRef.current) mapRef.current.removeLayer(radarLayerRef.current);
       radarLayerRef.current = null;
       onSourceChangeRef.current?.(null);
+      onFrameMetaRef.current?.(null);
       return;
     }
     let cancelled = false;
@@ -256,7 +265,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
     const previousLayer = radarLayerRef.current;
     if (!previousLayer) setIsDataLoading(true);
     let settled = false;
-    const settle = (nextLayer: any, source: "nexrad" | "provider") => {
+    const settle = (nextLayer: any, source: "nexrad" | "provider", meta: RadarFrameMeta = null) => {
       if (settled || cancelled) return;
       settled = true;
       setIsDataLoading(false);
@@ -264,6 +273,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       radarLayerRef.current = nextLayer;
       if (previousLayer && mapRef.current) mapRef.current.removeLayer(previousLayer);
       onSourceChangeRef.current?.(source);
+      onFrameMetaRef.current?.(meta);
     };
 
     function addProviderLayer() {
@@ -294,7 +304,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
     // handled here so a worker outage degrades gracefully rather than
     // breaking the map.
     function addGridLayer(
-      data: { imageDataUrl?: string; points?: MrmsPoint[]; bounds: MrmsBounds; step: number },
+      data: { imageDataUrl?: string; points?: MrmsPoint[]; bounds: MrmsBounds; step: number; elevationDeg?: number; time?: string },
       source: "nexrad",
       renderer: typeof renderMrmsGridToDataUrl,
     ) {
@@ -303,7 +313,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       const bounds: [[number, number], [number, number]] = [[data.bounds.minLatitude, data.bounds.minLongitude], [data.bounds.maxLatitude, data.bounds.maxLongitude]];
       const nextLayer = window.L.imageOverlay(dataUrl, bounds, { opacity: 0, interactive: false });
       nextLayer.addTo(mapRef.current);
-      settle(nextLayer, source);
+      settle(nextLayer, source, { elevationDeg: data.elevationDeg ?? null, observedAt: data.time ?? null });
     }
 
     if (moment === "velocity") {
@@ -313,7 +323,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       fetch(`/api/radar/nexrad?station=${location.radarSite}&moment=velocity`)
         .then(async (response) => {
           if (!response.ok) throw new Error("In-house velocity unavailable");
-          const data = await response.json() as { imageDataUrl?: string; points?: MrmsPoint[]; bounds: MrmsBounds; step: number };
+          const data = await response.json() as { imageDataUrl?: string; points?: MrmsPoint[]; bounds: MrmsBounds; step: number; elevationDeg?: number; time?: string };
           addGridLayer(data, "nexrad", renderVelocityGridToDataUrl);
         })
         .catch(() => {
@@ -322,6 +332,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
           if (previousLayer) mapRef.current.removeLayer(previousLayer);
           radarLayerRef.current = null;
           onSourceChangeRef.current?.(null);
+          onFrameMetaRef.current?.(null);
         });
     } else if (!isCurrentFrame) {
       // Scrubbed to a past position in the timeline loop — the current-moment sources below only
@@ -339,7 +350,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       fetch(`/api/radar/nexrad?station=${location.radarSite}`)
         .then(async (response) => {
           if (!response.ok) throw new Error("In-house NEXRAD unavailable");
-          const data = await response.json() as { imageDataUrl?: string; points?: MrmsPoint[]; bounds: MrmsBounds; step: number };
+          const data = await response.json() as { imageDataUrl?: string; points?: MrmsPoint[]; bounds: MrmsBounds; step: number; elevationDeg?: number; time?: string };
           addGridLayer(data, "nexrad", renderMrmsGridToDataUrl);
         })
         .catch(() => { if (!cancelled) addProviderLayer(); });
