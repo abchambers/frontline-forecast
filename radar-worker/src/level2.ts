@@ -98,6 +98,26 @@ export type DecodedElevation = {
 // during the severe-weather event; revisit once real parse times return to
 // their calmer-weather baseline (a few seconds).
 const VOLUME_CACHE_TTL_MS = 300_000;
+// The dashboard's two always-warm stations (see server.ts's PREWARM_STATIONS and
+// src/lib/locations.ts's weatherDeskLocations — keep this list in sync with both if the app's
+// presets ever change). These two volumes are ALREADY concurrently cached in production
+// continuously (the prewarm cycle refreshes both every 5 minutes) without incident, so they keep
+// the full TTL above. Real incident, found live via a stress test while building the radar
+// timeline buffer feature: requesting 5 distinct stations in quick succession (exercising the
+// station picker's real, unbounded 159-site range, not just the two presets) OOM'd this worker.
+// Each parsed volume measures ~800MB+ RSS (see the leak-fix comment below), and nothing
+// previously bounded how many distinct NON-preset stations' volumes could be alive at once within
+// the TTL window — the existing TTL-sweep fix bounds GROWTH RATE, not a worst-case CEILING.
+const PRESET_STATIONS = new Set(["KFFC", "KBMX"]);
+// Short enough that an ad-hoc station's volume can't meaningfully accumulate, long enough to still
+// cover the one real benefit this cache exists for on a non-preset station: toggling between the
+// Reflectivity and Velocity picker for the SAME station in one viewing session (see
+// getVolumeCached's own comment) without re-downloading and re-parsing.
+const NON_PRESET_VOLUME_TTL_MS = 90_000;
+// At most one ad-hoc station's volume alive at a time, beyond the two presets — bounds worst-case
+// concurrent volumes to a small, fixed number (3) regardless of how many of the 159 real stations
+// get requested over the worker's lifetime, instead of unbounded.
+const MAX_NON_PRESET_STATIONS = 1;
 type VolumeCacheEntry = {
   radar: InstanceType<typeof Level2Radar>;
   key: string;
@@ -127,15 +147,30 @@ function evictExpiredVolumes() {
   }
 }
 
+// Evicts the least-recently-set non-preset entry (or entries) when a new NON-preset station would
+// push the count past MAX_NON_PRESET_STATIONS. Never touches preset entries — only their own TTL
+// governs those, exactly as before this fix.
+function evictExcessNonPresetVolumes(incomingStation: string) {
+  if (PRESET_STATIONS.has(incomingStation)) return;
+  const nonPresetEntries = [...volumeCache.entries()].filter(([station]) => !PRESET_STATIONS.has(station));
+  if (nonPresetEntries.length < MAX_NON_PRESET_STATIONS) return;
+  nonPresetEntries.sort((a, b) => a[1].expiresAt - b[1].expiresAt);
+  for (let i = 0; i <= nonPresetEntries.length - MAX_NON_PRESET_STATIONS; i += 1) {
+    volumeCache.delete(nonPresetEntries[i][0]);
+  }
+}
+
 export async function getVolumeCached(
   stationId: string,
 ): Promise<{ radar: InstanceType<typeof Level2Radar>; key: string; lastModified: string }> {
   evictExpiredVolumes();
   const cached = volumeCache.get(stationId);
   if (cached && cached.expiresAt > Date.now()) return cached;
+  evictExcessNonPresetVolumes(stationId);
   const { buffer, key, lastModified } = await fetchLatestVolume(stationId);
   const radar = await new Level2Radar(buffer);
-  const entry = { radar, key, lastModified, expiresAt: Date.now() + VOLUME_CACHE_TTL_MS };
+  const ttl = PRESET_STATIONS.has(stationId) ? VOLUME_CACHE_TTL_MS : NON_PRESET_VOLUME_TTL_MS;
+  const entry = { radar, key, lastModified, expiresAt: Date.now() + ttl };
   volumeCache.set(stationId, entry);
   return entry;
 }

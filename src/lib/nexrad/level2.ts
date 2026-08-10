@@ -87,6 +87,15 @@ export type DecodedElevation = {
 // matches the route's own payload cache so a warmed volume never outlives
 // the data it would be re-decoded into anyway.
 const VOLUME_CACHE_TTL_MS = 90_000;
+// Mirrors radar-worker/src/level2.ts's PRESET_STATIONS/MAX_NON_PRESET_STATIONS fix (see that file
+// for the full incident: a live stress test hitting 5 distinct stations in quick succession OOM'd
+// the persistent worker, since nothing bounded how many ~800MB+ parsed volumes could be alive at
+// once for the station picker's effectively unbounded 159-site range). Lower-severity here since
+// Vercel's serverless model usually recycles the whole module on a cold start, but a warm instance
+// can still serve several requests in a row, so the same unbounded-accumulation shape is possible
+// here too — fixed for consistency/defense-in-depth.
+const PRESET_STATIONS = new Set(["KFFC", "KBMX"]);
+const MAX_NON_PRESET_STATIONS = 1;
 type VolumeCacheEntry = {
   radar: InstanceType<typeof Level2Radar>;
   key: string;
@@ -109,12 +118,23 @@ function evictExpiredVolumes() {
   }
 }
 
+function evictExcessNonPresetVolumes(incomingStation: string) {
+  if (PRESET_STATIONS.has(incomingStation)) return;
+  const nonPresetEntries = [...volumeCache.entries()].filter(([station]) => !PRESET_STATIONS.has(station));
+  if (nonPresetEntries.length < MAX_NON_PRESET_STATIONS) return;
+  nonPresetEntries.sort((a, b) => a[1].expiresAt - b[1].expiresAt);
+  for (let i = 0; i <= nonPresetEntries.length - MAX_NON_PRESET_STATIONS; i += 1) {
+    volumeCache.delete(nonPresetEntries[i][0]);
+  }
+}
+
 export async function getVolumeCached(
   stationId: string,
 ): Promise<{ radar: InstanceType<typeof Level2Radar>; key: string; lastModified: string }> {
   evictExpiredVolumes();
   const cached = volumeCache.get(stationId);
   if (cached && cached.expiresAt > Date.now()) return cached;
+  evictExcessNonPresetVolumes(stationId);
   const { buffer, key, lastModified } = await fetchLatestVolume(stationId);
   const radar = await new Level2Radar(buffer);
   const entry = { radar, key, lastModified, expiresAt: Date.now() + VOLUME_CACHE_TTL_MS };
