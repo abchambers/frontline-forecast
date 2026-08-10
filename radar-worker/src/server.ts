@@ -5,6 +5,59 @@ import { computeReflectivityGrid, computeVelocityGrid, buildCandidateCells } fro
 import { fetchStormTracks, fetchHailDetections, fetchTvsDetections, fetchMesocycloneDetections } from "./level3-markers.js";
 import { renderMrmsGridToDataUrl, renderVelocityGridToDataUrl } from "./render.js";
 
+// Ring buffer of this worker's own past renders, so the app can build a real in-house timeline
+// instead of only ever showing "now" and falling back to an external mosaic for every past frame.
+// Reflectivity only (matches PREWARM_STATIONS' own reflectivity-only scope below) and deliberately
+// tiny: stores only the already-rendered ~2MB PNG payload, never a raw volume (~800MB+, see
+// level2.ts), and only ever retains a copy of a render that was going to happen anyway (a real
+// request or the existing prewarm cycle) — this adds NO new compute load, never triggers an extra
+// decode/render pass. Hard-capped on both axes, not just TTL — TTL-only eviction (sweep on access,
+// no count/byte cap) is exactly the pattern that caused this worker's past OOM incidents: at most
+// MAX_FRAMES_PER_STATION per station, and at most MAX_STATIONS_TRACKED distinct stations tracked at
+// once (evicting the least-recently-touched station's entire history beyond that — the station
+// picker lets a user land on any of 159 real sites, not just the two prewarmed presets, so this
+// can't assume a small fixed station set). Worst case is a small, fixed, predictable
+// ~MAX_STATIONS_TRACKED * MAX_FRAMES_PER_STATION * 2MB (~96MB) regardless of how many distinct
+// stations get requested over the worker's lifetime.
+const MAX_FRAMES_PER_STATION = 12;
+const RETENTION_WINDOW_MS = 2 * 60 * 60 * 1000;
+const MAX_STATIONS_TRACKED = 4;
+
+type FramePayload = { time: string; elevationDeg: number; [key: string]: unknown };
+const frameHistory = new Map<string, FramePayload[]>();
+const stationLastTouched = new Map<string, number>();
+
+function recordFrame(station: string, payload: FramePayload) {
+  const now = Date.now();
+  if (!frameHistory.has(station) && frameHistory.size >= MAX_STATIONS_TRACKED) {
+    let oldestStation: string | null = null;
+    let oldestTouch = Infinity;
+    for (const [trackedStation, touchedAt] of stationLastTouched) {
+      if (touchedAt < oldestTouch) {
+        oldestTouch = touchedAt;
+        oldestStation = trackedStation;
+      }
+    }
+    if (oldestStation) {
+      frameHistory.delete(oldestStation);
+      stationLastTouched.delete(oldestStation);
+    }
+  }
+  stationLastTouched.set(station, now);
+
+  const cutoff = now - RETENTION_WINDOW_MS;
+  const frames = (frameHistory.get(station) ?? []).filter((frame) => new Date(frame.time).getTime() >= cutoff);
+  // A retried request or a second concurrent tab can legitimately recompute the same volume —
+  // don't double-store the same moment.
+  if (frames.some((frame) => frame.time === payload.time)) {
+    frameHistory.set(station, frames);
+    return;
+  }
+  frames.push(payload);
+  if (frames.length > MAX_FRAMES_PER_STATION) frames.shift();
+  frameHistory.set(station, frames);
+}
+
 // The whole reason this worker exists instead of the Vercel route it mirrors:
 // a persistent process means the module-level caches below (and
 // getVolumeCached's own volume cache in level2.ts) actually stay warm across
@@ -199,7 +252,25 @@ async function computeReflectivityOrVelocity(station: string, moment: "reflectiv
     source: `NEXRAD Level II (${station}, ${moment})`,
   };
   setCache(cacheKey, payload, PAYLOAD_CACHE_TTL_MS);
+  if (moment === "reflectivity") recordFrame(station, payload);
   return { status: 200, body: payload, source: "live" as const };
+}
+
+async function handleFrameHistory(station: string) {
+  const frames = frameHistory.get(station) ?? [];
+  return {
+    status: 200,
+    body: { frames: frames.map((frame) => ({ time: frame.time, elevationDeg: frame.elevationDeg })) },
+    source: "cache" as const,
+  };
+}
+
+async function handleFrame(station: string, time: string | null) {
+  if (!time) return { status: 400, body: { error: "A time parameter is required." }, source: "cache" as const };
+  const frames = frameHistory.get(station) ?? [];
+  const match = frames.find((frame) => frame.time === time);
+  if (!match) return { status: 404, body: { error: "No retained frame for that station/time." }, source: "cache" as const };
+  return { status: 200, body: match, source: "cache" as const };
 }
 
 async function handleSevere(station: string) {
@@ -252,6 +323,8 @@ const server = createServer((request, response) => {
     "/reflectivity": (s) => handleReflectivityOrVelocity(s, "reflectivity"),
     "/velocity": (s) => handleReflectivityOrVelocity(s, "velocity"),
     "/severe": (s) => handleSevere(s),
+    "/frames": (s) => handleFrameHistory(s),
+    "/frame": (s) => handleFrame(s, url.searchParams.get("time")),
   };
 
   const handler = routes[url.pathname];

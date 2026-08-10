@@ -16,14 +16,14 @@ type RadarStationSummary = { id: string; name: string; latitude: number; longitu
 // product/tilt/time readout, RadarScope-style, instead of just the color-scale legend.
 export type RadarFrameMeta = { elevationDeg: number | null; observedAt: string | null } | null;
 
-type RadarMapProps = { opacity?: number; showReflectivity?: boolean; moment?: "reflectivity" | "velocity"; showAlerts?: boolean; showOutlook?: boolean; showSevereMarkers?: boolean; showStationPicker?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; theme?: "light" | "dark"; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string }; onSourceChange?: (source: "nexrad" | "provider" | null) => void; onFrameMeta?: (meta: RadarFrameMeta) => void; onStationSelect?: (station: RadarStationSummary) => void };
+type RadarMapProps = { opacity?: number; showReflectivity?: boolean; moment?: "reflectivity" | "velocity"; showAlerts?: boolean; showOutlook?: boolean; showSevereMarkers?: boolean; showStationPicker?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; inHouseFrameTime?: string | null; theme?: "light" | "dark"; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string }; onSourceChange?: (source: "nexrad" | "provider" | null) => void; onFrameMeta?: (meta: RadarFrameMeta) => void; onStationSelect?: (station: RadarStationSummary) => void };
 
 const basemapTiles = {
   light: { url: "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
   dark: { url: "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
 };
 
-export default function RadarMap({ opacity = 0.72, showReflectivity = true, moment = "reflectivity", showAlerts = true, showOutlook = false, showSevereMarkers = false, showStationPicker = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, isCurrentFrame = true, theme = "light", location, onSourceChange, onFrameMeta, onStationSelect }: RadarMapProps) {
+export default function RadarMap({ opacity = 0.72, showReflectivity = true, moment = "reflectivity", showAlerts = true, showOutlook = false, showSevereMarkers = false, showStationPicker = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, isCurrentFrame = true, inHouseFrameTime = null, theme = "light", location, onSourceChange, onFrameMeta, onStationSelect }: RadarMapProps) {
   const mapElement = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const baseLayerRef = useRef<any>(null);
@@ -335,9 +335,23 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
           onFrameMetaRef.current?.(null);
         });
     } else if (!isCurrentFrame) {
-      // Scrubbed to a past position in the timeline loop — the current-moment sources below only
-      // ever answer "what's happening right now," so historical frames stay on the provider mosaic.
-      addProviderLayer();
+      // Scrubbed to a past position in the timeline loop. If the worker retained its own render for
+      // this exact moment (see radar-worker/src/server.ts's frameHistory), prefer it — real in-house
+      // data, same color table as "now" — over the coarser provider mosaic. `inHouseFrameTime` is
+      // only ever set by the parent when /api/radar/frames found a matching retained frame; falls
+      // back to the provider on any fetch failure or when no in-house frame exists for this slot,
+      // same graceful-degradation pattern as the live-frame branch below.
+      if (inHouseFrameTime) {
+        fetch(`/api/radar/nexrad?station=${location.radarSite}&time=${encodeURIComponent(inHouseFrameTime)}`)
+          .then(async (response) => {
+            if (!response.ok) throw new Error("In-house past frame unavailable");
+            const data = await response.json() as { imageDataUrl?: string; points?: MrmsPoint[]; bounds: MrmsBounds; step: number; elevationDeg?: number; time?: string };
+            addGridLayer(data, "nexrad", renderMrmsGridToDataUrl);
+          })
+          .catch(() => { if (!cancelled) addProviderLayer(); });
+      } else {
+        addProviderLayer();
+      }
     } else {
       // In-house NEXRAD Level II is the primary live source — free, real, per-station data,
       // rendered into a colored overlay client-side. Falls back directly to the IEM/NWS provider
@@ -357,7 +371,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
     }
 
     return () => { cancelled = true; };
-  }, [leafletLoaded, showReflectivity, moment, refreshToken, timelineTileUrl, isCurrentFrame, location]);
+  }, [leafletLoaded, showReflectivity, moment, refreshToken, timelineTileUrl, isCurrentFrame, inHouseFrameTime, location]);
 
   return (
     <>

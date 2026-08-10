@@ -46,12 +46,27 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const station = searchParams.get("station")?.trim().toUpperCase();
   const moment = searchParams.get("moment") ?? "reflectivity";
+  const time = searchParams.get("time");
 
   if (!station || !STATION_ID_PATTERN.test(station)) {
     return NextResponse.json({ error: "A valid radar station ID is required, e.g. KFFC." }, { status: 400 });
   }
   if (!MOMENTS.has(moment)) {
     return NextResponse.json({ error: "moment must be 'reflectivity' or 'velocity'." }, { status: 400 });
+  }
+
+  // A specific past frame — only ever served from the worker's own retained-frame buffer (see
+  // radar-worker/src/server.ts's frameHistory). This route's own local fallback below only ever
+  // fetches the LATEST volume; it has no way to reconstruct an arbitrary past one, so there's no
+  // fallback path here. A miss (worker unreachable, frame already evicted, or a station that's
+  // never been retained) is a normal, expected case, not an error — the client already knows to
+  // fall back to the provider mosaic tile for that timeline slot.
+  if (time) {
+    const fromWorker = await fetchFromWorker(`/frame?station=${station}&time=${encodeURIComponent(time)}`);
+    if (fromWorker) {
+      return NextResponse.json(fromWorker, { headers: { "Cache-Control": "public, max-age=300, immutable", "X-Radar-Source": "worker" } });
+    }
+    return NextResponse.json({ error: "That past frame is not available in-house." }, { status: 404 });
   }
 
   const cacheKey = `${station}:${moment}`;
