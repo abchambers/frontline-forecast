@@ -174,7 +174,7 @@ async function provisionAndMintSession(): Promise<
   const verifyResponse = await fetch(`${supabaseUrl}/auth/v1/verify`, {
     method: "POST",
     headers: { apikey: anonKey, "Content-Type": "application/json" },
-    body: JSON.stringify({ type: "magiclink", token: hashedToken }),
+    body: JSON.stringify({ type: "magiclink", token_hash: hashedToken }),
   });
   const verifyData = await verifyResponse.json().catch(() => null);
   if (!verifyResponse.ok || !verifyData?.access_token) {
