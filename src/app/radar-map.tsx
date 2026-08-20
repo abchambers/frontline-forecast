@@ -16,14 +16,14 @@ type RadarStationSummary = { id: string; name: string; latitude: number; longitu
 // product/tilt/time readout, RadarScope-style, instead of just the color-scale legend.
 export type RadarFrameMeta = { elevationDeg: number | null; observedAt: string | null } | null;
 
-type RadarMapProps = { opacity?: number; showReflectivity?: boolean; moment?: "reflectivity" | "velocity"; showAlerts?: boolean; showOutlook?: boolean; showSevereMarkers?: boolean; showStationPicker?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; inHouseFrameTime?: string | null; forceProvider?: boolean; theme?: "light" | "dark"; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string }; onSourceChange?: (source: "nexrad" | "provider" | null) => void; onFrameMeta?: (meta: RadarFrameMeta) => void; onStationSelect?: (station: RadarStationSummary) => void };
+type RadarMapProps = { opacity?: number; showReflectivity?: boolean; moment?: "reflectivity" | "velocity"; showAlerts?: boolean; showOutlook?: boolean; showSevereMarkers?: boolean; showStationPicker?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; inHouseFrameTime?: string | null; forceProvider?: boolean; theme?: "light" | "dark"; scrollZoom?: boolean; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string }; onSourceChange?: (source: "nexrad" | "provider" | null) => void; onFrameMeta?: (meta: RadarFrameMeta) => void; onStationSelect?: (station: RadarStationSummary) => void };
 
 const basemapTiles = {
   light: { url: "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
   dark: { url: "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
 };
 
-export default function RadarMap({ opacity = 0.72, showReflectivity = true, moment = "reflectivity", showAlerts = true, showOutlook = false, showSevereMarkers = false, showStationPicker = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, isCurrentFrame = true, inHouseFrameTime = null, forceProvider = false, theme = "light", location, onSourceChange, onFrameMeta, onStationSelect }: RadarMapProps) {
+export default function RadarMap({ opacity = 0.72, showReflectivity = true, moment = "reflectivity", showAlerts = true, showOutlook = false, showSevereMarkers = false, showStationPicker = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, isCurrentFrame = true, inHouseFrameTime = null, forceProvider = false, theme = "light", scrollZoom = false, location, onSourceChange, onFrameMeta, onStationSelect }: RadarMapProps) {
   const mapElement = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const baseLayerRef = useRef<any>(null);
@@ -50,7 +50,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
     if (!leafletLoaded || !mapElement.current || !window.L) return;
 
     const coordinates = [location.latitude, location.longitude] as const;
-    const map = window.L.map(mapElement.current, { zoomControl: false, scrollWheelZoom: false }).setView(coordinates, 8);
+    const map = window.L.map(mapElement.current, { zoomControl: false, scrollWheelZoom: scrollZoom }).setView(coordinates, 8);
     window.L.control.zoom({ position: "bottomleft" }).addTo(map);
     mapRef.current = map;
     window.L.circleMarker(coordinates, { color: "#18222f", fillColor: "#ffffff", fillOpacity: 1, weight: 2, radius: 6 })
@@ -67,7 +67,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       mapRef.current = null;
       map.remove();
     };
-  }, [leafletLoaded, location]);
+  }, [leafletLoaded, location, scrollZoom]);
 
   useEffect(() => {
     if (!leafletLoaded || !mapRef.current || !window.L) return;
