@@ -167,6 +167,8 @@
 .avatar-menu-head strong { font-size:.84rem; overflow-wrap:anywhere; }
 .avatar-menu-head small { color:var(--muted); font-size:.72rem; overflow-wrap:anywhere; }
 .avatar-menu-label { color:var(--muted); font-size:.67rem; font-weight:800; letter-spacing:.04em; text-transform:uppercase; }
+.avatar-menu-desk-open { background:transparent; border:0; color:var(--ink); font:inherit; padding:2px 0; text-align:left; }
+.avatar-menu-desk-open:hover strong { text-decoration:underline; }
 .avatar-menu-desk { border-bottom:1px solid var(--line); display:grid; gap:4px; padding-bottom:9px; }
 .avatar-menu-desk-trigger { align-items:center; background:transparent; border:1px solid var(--line); border-radius:7px; color:var(--ink); display:flex; font:inherit; font-weight:700; justify-content:space-between; padding:8px; }
 .avatar-menu-desk-trigger:hover { border-color:var(--accent); }
