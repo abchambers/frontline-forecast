@@ -1276,6 +1276,17 @@ export default function Home() {
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const [deskListOpen, setDeskListOpen] = useState(false);
   const [myDisplayName, setMyDisplayName] = useState<string | null>(null);
+  useEffect(() => {
+    if (!workspaceMenuOpen) return;
+    const dismissIfOutside = (event: MouseEvent) => {
+      if (!(event.target as HTMLElement).closest(".avatar-menu-wrap")) {
+        setWorkspaceMenuOpen(false);
+        setDeskListOpen(false);
+      }
+    };
+    document.addEventListener("click", dismissIfOutside);
+    return () => document.removeEventListener("click", dismissIfOutside);
+  }, [workspaceMenuOpen]);
   const [workspaceContextStatus, setWorkspaceContextStatus] = useState("");
   const [managedOrganizations, setManagedOrganizations] = useState<OrganizationWorkspace[]>([]);
   const [managedClassrooms, setManagedClassrooms] = useState<ClassroomWorkspace[]>([]);
@@ -3114,7 +3125,7 @@ export default function Home() {
       </>}
 
       {activeSection === "radar" && <section className="radar-workspace">
-        <div className="radar-workspace-heading"><div><p className="eyebrow">Radar workspace</p><h2>Observed weather</h2></div><div><button type="button" onClick={() => setActiveSection("dashboard")}>Desk</button></div></div>
+        <div className="radar-workspace-heading"><div><p className="eyebrow">Radar workspace</p><h2>Observed weather</h2></div></div>
         <div className="radar radar-workspace-map">
           <button type="button" className="radar-recenter-btn" title="Recenter" aria-label="Recenter radar" onClick={() => setRadarRecenterToken((value) => value + 1)}>⌖</button>
           <RadarControlsMenu radarMapView={radarMapView} onSelectView={selectRadarView} radarProviderPreference={radarProviderPreference} onProviderPreferenceChange={setRadarProviderPreference} reflectivityLabel="Reflectivity" showNwsAlerts={showNwsAlerts} onToggleAlerts={setShowNwsAlerts} showOutlookToggle showSpcOutlook={showSpcOutlook} onToggleOutlook={setShowSpcOutlook} showSevereMarkers={showSevereMarkers} onToggleSevereMarkers={setShowSevereMarkers} showStationPicker={showStationPicker} onToggleStationPicker={setShowStationPicker} radarOpacity={radarOpacity} onOpacityChange={setRadarOpacity} caption={radarMapView === "satellite" ? "NOAA GOES-East GeoColor imagery." : radarMapView === "velocity" ? `Live base velocity · ${radarSourceLabels[radarSource ?? "provider"]} · ${selectedLocation.radarSite}.` : `Live composite reflectivity · ${radarSourceLabels[radarSource ?? "provider"]} · ${selectedLocation.radarSite}.`} />
