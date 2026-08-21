@@ -72,6 +72,7 @@ type SavedForecast = {
   runId?: string;
   parentRunId?: string | null;
   authorId?: string;
+  assignmentId?: string | null;
   scenarioId?: string | null;
   periodIds?: { day?: string; night?: string };
   locationId?: string;
@@ -97,7 +98,7 @@ type ReferenceItem = { id: string; label: string; detail: string; preview?: Refe
 type PeriodDraft = { highLow: string; conditions: string; rainChance: string; timing: string; wind: string; confidence: string; hazards: string; reasoning: string; references: ReferenceItem[]; iconCondition: string };
 type ForecastDayDraft = { date: string; day: PeriodDraft; night: PeriodDraft };
 type ForecastRunDraft = { id: string; days: ForecastDayDraft[]; initialHorizonDays: number };
-type CloudRunRow = { id: string; user_id: string; parent_run_id?: string | null; scenario_id?: string | null; created_at: string; status: string; location_name?: string | null; forecast_periods: { id: string; valid_date: string; period: "day" | "night"; forecast_data: PeriodDraft; evidence_snapshot: SavedForecast["evidence"]; forecast_verifications?: { observed_data: ActualPeriod; score_data: { automaticScore?: number | null } }[] }[] };
+type CloudRunRow = { id: string; user_id: string; parent_run_id?: string | null; scenario_id?: string | null; assignment_id?: string | null; created_at: string; status: string; location_name?: string | null; forecast_periods: { id: string; valid_date: string; period: "day" | "night"; forecast_data: PeriodDraft; evidence_snapshot: SavedForecast["evidence"]; forecast_verifications?: { observed_data: ActualPeriod; score_data: { automaticScore?: number | null } }[] }[] };
 type ActualPeriod = ForecastPeriodActual;
 type AutomaticVerification = { station: string; fetchedAt: string; day: ActualPeriod; night: ActualPeriod; dayScore: number | null; nightScore: number | null };
 type VerificationRow = { forecast_period_id: string; observed_data: ActualPeriod; score_data: { automaticScore?: number | null } | null };
@@ -767,7 +768,7 @@ function archiveRecordsFromRun(run: CloudRunRow): SavedForecast[] {
     const nightData = night?.forecast_data ?? emptyPeriod("night");
     const status: SavedForecast["status"] = ["draft", "submitted", "revised", "verified", "withdrawn"].includes(run.status) ? run.status as SavedForecast["status"] : "submitted";
     return {
-      id: `${run.id}:${targetDate}`, runId: run.id, parentRunId: run.parent_run_id ?? null, authorId: run.user_id, scenarioId: run.scenario_id ?? null, periodIds: { day: day?.id, night: night?.id }, locationId: runLocation.id, locationName: run.location_name ?? runLocation.name, savedAt: run.created_at, label: archiveTitle({ savedAt: run.created_at }), targetDate, status, versionNumber: 1,
+      id: `${run.id}:${targetDate}`, runId: run.id, parentRunId: run.parent_run_id ?? null, authorId: run.user_id, assignmentId: run.assignment_id ?? null, scenarioId: run.scenario_id ?? null, periodIds: { day: day?.id, night: night?.id }, locationId: runLocation.id, locationName: run.location_name ?? runLocation.name, savedAt: run.created_at, label: archiveTitle({ savedAt: run.created_at }), targetDate, status, versionNumber: 1,
       day: { high: dayData.highLow, conditions: dayData.conditions, rainChance: dayData.rainChance, timing: dayData.timing, hazards: dayData.hazards, reasoning: dayData.reasoning, references: savedReferences(dayData.references), iconCondition: dayData.iconCondition },
       night: { low: nightData.highLow, conditions: nightData.conditions, rainChance: nightData.rainChance, timing: nightData.timing, hazards: nightData.hazards, reasoning: nightData.reasoning, references: savedReferences(nightData.references), iconCondition: nightData.iconCondition },
       evidence: day?.evidence_snapshot ?? night?.evidence_snapshot ?? { observation: "No observation snapshot", forecast: "No NWS snapshot", alerts: "No alert snapshot" },
@@ -856,6 +857,49 @@ function buildClassForecastSnapshot(assignment: ClassroomAssignment, submissions
   const days = assignmentDates(assignment).map(summaryForDate);
   const primary = days[0] ?? summaryForDate(assignment.target_date);
   return { generated_at: new Date().toISOString(), target_date: assignment.target_date, submitted_count: latest.length, total_students: studentIds.size, day: primary.day, night: primary.night, days };
+}
+
+function buildLiveClassForecastSnapshot(archives: SavedForecast[], activeDates: string[], students: AcademicRosterMember[]): ClassForecastSnapshot {
+  const studentIds = new Set(students.filter((member) => member.role === "student").map((member) => member.userId));
+  const relevant = archives.filter((archive) => !archive.assignmentId && archive.status !== "withdrawn" && archive.authorId && studentIds.has(archive.authorId) && activeDates.includes(archive.targetDate));
+  const latestByStudentDate = new Map<string, SavedForecast>();
+  relevant.forEach((archive) => { const key = `${archive.authorId}:${archive.targetDate}`; const existing = latestByStudentDate.get(key); if (!existing || new Date(archive.savedAt).getTime() > new Date(existing.savedAt).getTime()) latestByStudentDate.set(key, archive); });
+  const latest = [...latestByStudentDate.values()];
+  const commonConditions = (records: SavedForecast[], period: "day" | "night") => [...new Set(records.map((record) => conditionLabel(record[period].conditions)).filter(Boolean))].slice(0, 3);
+  const summaryForDate = (date: string): ClassForecastDay => {
+    const onDate = latest.filter((record) => record.targetDate === date);
+    return { date, submitted_count: onDate.length, day: { high_f: averageForecastValue(onDate.map((record) => record.day.high)), pop: averageForecastValue(onDate.map((record) => record.day.rainChance)), conditions: commonConditions(onDate, "day") }, night: { low_f: averageForecastValue(onDate.map((record) => record.night.low)), pop: averageForecastValue(onDate.map((record) => record.night.rainChance)), conditions: commonConditions(onDate, "night") } };
+  };
+  const days = [...activeDates].sort().map(summaryForDate);
+  const primary = days[0];
+  return { generated_at: new Date().toISOString(), target_date: primary?.date ?? "", submitted_count: latest.length, total_students: studentIds.size, day: primary?.day ?? { high_f: null, pop: null, conditions: [] }, night: primary?.night ?? { low_f: null, pop: null, conditions: [] }, days };
+}
+
+function ClassroomLiveForecast({ archives, activeDates, roster, canManage, onSaveActiveDates, message }: { archives: SavedForecast[]; activeDates: string[]; roster: AcademicRosterMember[]; canManage: boolean; onSaveActiveDates: (dates: string[]) => void; message: string }) {
+  const students = roster.filter((member) => member.role === "student");
+  const [editingDates, setEditingDates] = useState(false);
+  const [draftDates, setDraftDates] = useState<string[]>(activeDates);
+  useEffect(() => setDraftDates(activeDates), [activeDates.join(",")]);
+  const snapshot = buildLiveClassForecastSnapshot(archives, activeDates, roster);
+  const days = snapshot.days ?? [];
+  const [selectedDate, setSelectedDate] = useState(days[0]?.date ?? "");
+  useEffect(() => { if (days.length && !days.some((day) => day.date === selectedDate)) setSelectedDate(days[0].date); }, [activeDates.join(","), days.length]);
+  const selectedDay = days.find((day) => day.date === selectedDate) ?? days[0];
+  const contributorsForDate = (date: string) => {
+    const studentIds = new Set(students.map((member) => member.userId));
+    const latestByStudent = new Map<string, SavedForecast>();
+    archives.filter((archive) => !archive.assignmentId && archive.status !== "withdrawn" && archive.targetDate === date && archive.authorId && studentIds.has(archive.authorId)).forEach((archive) => { const existing = latestByStudent.get(archive.authorId!); if (!existing || new Date(archive.savedAt).getTime() > new Date(existing.savedAt).getTime()) latestByStudent.set(archive.authorId!, archive); });
+    return students.map((student) => ({ student, latest: latestByStudent.get(student.userId) ?? null }));
+  };
+  return <section className="class-forecast-hub class-forecast-hub-v2 classroom-live-forecast">
+    <header className="section-heading"><div><p className="eyebrow">Class forecast</p><h2>Live class outlook</h2><p>Built automatically from every student's latest forecast for the dates you've made active. A resubmission always replaces that student's number here — instructors can still see what was submitted and when.</p></div>{canManage && <button type="button" onClick={() => setEditingDates((open) => !open)}>{editingDates ? "Close" : "Set active dates"}</button>}</header>
+    {editingDates && canManage && <div className="active-dates-editor"><AssignmentDatePicker value={draftDates} onChange={setDraftDates} /><div className="settings-actions"><button type="button" onClick={() => { onSaveActiveDates(draftDates); setEditingDates(false); }}>Save active dates</button></div></div>}
+    {!activeDates.length ? <p className="empty">{canManage ? "No forecast dates are active yet. Set active dates so student forecasts start contributing here." : "Your instructor hasn't opened any forecast dates yet."}</p> : <>
+      <section className="outlook-strip class-outlook-strip" aria-label="Class seven-day outlook"><div className="outlook-cards">{days.map((day) => <button type="button" key={day.date} className={day.date === selectedDay?.date ? "active" : ""} onClick={() => setSelectedDate(day.date)}><strong>{new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: "America/New_York" }).format(new Date(`${day.date}T12:00:00`))}</strong><b aria-hidden="true"><WeatherIcon description={day.day.conditions[0] || day.night.conditions[0] || "Forecast"} style="traditional" /></b><span>{day.day.conditions[0] || day.night.conditions[0] || "No forecasts yet"}</span><em>{day.day.high_f ?? "—"}° / {day.night.low_f ?? "—"}°</em><small>{day.submitted_count}/{students.length || "—"} submitted</small></button>)}</div></section>
+      {selectedDay && <section className="class-outlook-detail"><header><div><p className="eyebrow">Selected day</p><h3>{forecastTargetTitle(selectedDay.date)}</h3><p>{selectedDay.submitted_count} of {students.length || "—"} students represented.</p></div></header><div className="class-outlook-readout"><strong>{selectedDay.day.conditions[0] || selectedDay.night.conditions[0] || "No forecasts yet"}</strong><b>{selectedDay.day.high_f ?? "—"}° / {selectedDay.night.low_f ?? "—"}°</b><span>Day {selectedDay.day.pop ?? "—"}% · Night {selectedDay.night.pop ?? "—"}%</span></div>{canManage && <div className="class-participation-list"><strong>Participation</strong><div>{contributorsForDate(selectedDay.date).map(({ student, latest }) => <article key={student.userId}><span>{student.label}</span>{latest ? <em>V{latest.versionNumber} · {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(latest.savedAt))}</em> : <em className="not-submitted">Not submitted</em>}</article>)}</div></div>}</section>}
+    </>}
+    {message && <p className="control-message" role="status">{message}</p>}
+  </section>;
 }
 
 function SchoolDesk({ workspace, classrooms, members, codes, entitlement, onOpenClassroom, onCreateClassroom, onRenameClassroom, onAssignInstructor, onCreateCode, onRetireCode, message }: { workspace: WorkspaceContext; classrooms: WorkspaceContext[]; members: OrganizationMember[]; codes: ClassroomJoinCode[]; entitlement: { class_limit: number; class_seat_limit: number; status: string; next_payment_due_at: string | null } | null; onOpenClassroom: (workspace: WorkspaceContext) => void; onCreateClassroom: (name: string, term: string, seatLimit?: number) => void; onRenameClassroom: (classroom: WorkspaceContext, name: string, term: string) => void; onAssignInstructor: (classroomId: string, userId: string) => void; onCreateCode: (classroomId: string, label: string, maxUses: number | null, expiresAt: string | null) => Promise<string | null>; onRetireCode: (id: string) => void; message: string }) {
@@ -1033,7 +1077,9 @@ function emptyOfficialClassForecast() : ClassForecastSnapshot {
   return <section className="class-forecast-hub"><header className="section-heading"><div><p className="eyebrow">Class forecast</p><h2>Official class outlook</h2><p>One class-owned seven-day forecast. Assignment consensus can be applied to any matching day.</p></div><span>{official?.published_at ? "Published to class" : "Classroom draft"}</span></header><section className="official-class-outlook"><header><div><h3>Class outlook</h3><p>{official?.published_at ? `Published ${new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "America/New_York" }).format(new Date(official.published_at))}` : "Build this forecast from class discussion and assignment consensus."}</p></div>{canManage && <div><button type="button" onClick={() => onSave(draft)}>Save draft</button><button type="button" onClick={() => onPublish(draft)}>Publish to class</button></div>}</header><div className="official-outlook-grid">{days.map((day) => <article key={day.date}><strong>{forecastTargetTitle(day.date)}</strong>{canManage ? <><label>High<input inputMode="numeric" value={day.day.high_f ?? ""} onChange={(event) => updateDay(day.date, "day", "temperature", event.target.value)} placeholder="—" />°</label><label>Low<input inputMode="numeric" value={day.night.low_f ?? ""} onChange={(event) => updateDay(day.date, "night", "temperature", event.target.value)} placeholder="—" />°</label><label>Day PoP<input inputMode="numeric" value={day.day.pop ?? ""} onChange={(event) => updateDay(day.date, "day", "pop", event.target.value)} placeholder="—" />%</label><label>Night PoP<input inputMode="numeric" value={day.night.pop ?? ""} onChange={(event) => updateDay(day.date, "night", "pop", event.target.value)} placeholder="—" />%</label><label className="wide">Conditions<input value={day.day.conditions[0] ?? ""} onChange={(event) => updateDay(day.date, "day", "conditions", event.target.value)} placeholder="Conditions" /></label></> : <><b>{day.day.conditions[0] || day.night.conditions[0] || "Forecast"}</b><em>{day.day.high_f ?? "—"}° / {day.night.low_f ?? "—"}°</em><small>Day {day.day.pop ?? "—"}% · Night {day.night.pop ?? "—"}%</small></>}</article>)}</div></section><section className="official-guidance-compare"><header><div><p className="eyebrow">Forecast comparison</p><h3>Class outlook vs. local guidance</h3><p>Compare the class’s published approach with the current seven-day weather guidance.</p></div></header><div>{days.map((day) => { const guidance = publicGuidance.find((item) => item.date === day.date); return <article key={day.date}><strong>{forecastTargetTitle(day.date)}</strong><div><span>Class</span><b>{day.day.conditions[0] || "—"}</b><em>{day.day.high_f ?? "—"}° / {day.night.low_f ?? "—"}° · {day.day.pop ?? "—"}%</em></div><div><span>Local</span><b>{guidance?.shortForecast ?? "—"}</b><em>{guidance?.high ?? "—"}° / {guidance?.low ?? "—"}° · {guidance?.precipitationChance ?? "—"}%</em></div></article>; })}</div></section>{consensus && <section className="assignment-consensus"><header><div><p className="eyebrow">Assignment comparison</p><h3>{assignment?.title}</h3><p>Latest student submissions for this assignment. Apply a day only when you want it in the official outlook.</p></div></header><div>{(consensus.days ?? []).map((day) => <article key={day.date}><span><strong>{forecastTargetTitle(day.date)}</strong><small>{day.submitted_count}/{consensus.total_students || "—"} student forecasts</small></span><b>{day.day.conditions[0] || day.night.conditions[0] || "No consensus"}</b><em>{day.day.high_f ?? "—"}° / {day.night.low_f ?? "—"}° · {day.day.pop ?? "—"}%/{day.night.pop ?? "—"}%</em>{canManage && <button type="button" onClick={() => applyConsensusDay(day)}>Use for this day</button>}</article>)}</div></section>}</section>;
 } */
 
-function ClassForecastHubV2({ official, publicGuidance, canManage, onSave, onPublish }: { official: ClassroomOfficialForecast | null; publicGuidance: { date: string; label: string; high: number | null; low: number | null; shortForecast: string; precipitationChance: number | null }[]; canManage: boolean; onSave: (forecast: ClassForecastSnapshot) => void; onPublish: (forecast: ClassForecastSnapshot) => void }) {
+// deprecated: superseded by ClassroomLiveForecast, which derives the class outlook automatically
+// from student submissions instead of an instructor hand-typed forecast. Kept for reference.
+/* function ClassForecastHubV2({ official, publicGuidance, canManage, onSave, onPublish }: { official: ClassroomOfficialForecast | null; publicGuidance: { date: string; label: string; high: number | null; low: number | null; shortForecast: string; precipitationChance: number | null }[]; canManage: boolean; onSave: (forecast: ClassForecastSnapshot) => void; onPublish: (forecast: ClassForecastSnapshot) => void }) {
   const source = official?.forecast?.days?.length ? official.forecast : emptyOfficialClassForecast();
   const [draft, setDraft] = useState<ClassForecastSnapshot>(source);
   const [selectedDate, setSelectedDate] = useState(source.days?.[0]?.date ?? source.target_date);
@@ -1084,7 +1130,7 @@ function ClassForecastHubV2({ official, publicGuidance, canManage, onSave, onPub
     </section>
     {selectedDay && <section className="class-outlook-detail"><header><div><p className="eyebrow">Selected day</p><h3>{forecastTargetTitle(selectedDay.date)}</h3><p>Review the class forecast and current local guidance for this day.</p></div>{canManage && <div><button type="button" onClick={() => onSave(draft)}>Save draft</button><button type="button" onClick={() => onPublish(draft)}>Publish to class</button></div>}</header><div><fieldset><legend>Class forecast</legend>{canManage ? <div className="class-outlook-fields"><label>High<input inputMode="numeric" value={selectedDay.day.high_f ?? ""} onChange={(event) => update("day", "high_f", event.target.value)} />°</label><label>Low<input inputMode="numeric" value={selectedDay.night.low_f ?? ""} onChange={(event) => update("night", "low_f", event.target.value)} />°</label><label>Day PoP<input inputMode="numeric" value={selectedDay.day.pop ?? ""} onChange={(event) => update("day", "pop", event.target.value)} />%</label><label>Night PoP<input inputMode="numeric" value={selectedDay.night.pop ?? ""} onChange={(event) => update("night", "pop", event.target.value)} />%</label><label className="wide">Conditions<input value={selectedDay.day.conditions[0] ?? ""} onChange={(event) => update("day", "conditions", event.target.value)} placeholder="Conditions" /></label></div> : <div className="class-outlook-readout"><strong>{selectedDay.day.conditions[0] || selectedDay.night.conditions[0] || "Forecast not set"}</strong><b>{selectedDay.day.high_f ?? "—"}° / {selectedDay.night.low_f ?? "—"}°</b><span>Day {selectedDay.day.pop ?? "—"}% · Night {selectedDay.night.pop ?? "—"}%</span></div>}</fieldset><fieldset><legend>Local guidance</legend><div className="class-outlook-readout"><strong>{selectedGuidance?.shortForecast ?? "Guidance unavailable"}</strong><b>{selectedGuidance?.high ?? "—"}° / {selectedGuidance?.low ?? "—"}°</b><span>{selectedGuidance?.precipitationChance ?? "—"}% PoP</span></div>{canManage && selectedGuidance && <button type="button" onClick={() => generateDayFromGuidance(selectedDay.date)}>Use local guidance for this day</button>}</fieldset></div></section>}
   </section>;
-}
+} */
 
 function AssignmentDatePicker({ value, onChange }: { value: string[]; onChange: (dates: string[]) => void }) {
   const start = new Date(`${nextForecastDate()}T12:00:00`);
@@ -1325,13 +1371,14 @@ export default function Home() {
   const [academicMessage, setAcademicMessage] = useState("");
   const [classroomAssignments, setClassroomAssignments] = useState<ClassroomAssignment[]>([]);
   const [classroomOfficialForecast, setClassroomOfficialForecast] = useState<ClassroomOfficialForecast | null>(null);
+  const [classroomActiveForecastDates, setClassroomActiveForecastDates] = useState<string[]>([]);
   const [assignmentSubmissions, setAssignmentSubmissions] = useState<ClassroomAssignmentSubmission[]>([]);
   const [assignmentSubmissionRefreshToken, setAssignmentSubmissionRefreshToken] = useState(0);
   const [selectedClassroomAssignmentId, setSelectedClassroomAssignmentId] = useState("");
   const [classroomHubTab, setClassroomHubTab] = useState<ClassroomHubTab>(() => {
     if (typeof window === "undefined") return "assignments";
     const tab = new URLSearchParams(window.location.search).get("tab");
-    return tab === "today" || tab === "outlook" || tab === "progress" || tab === "leaderboard" ? tab : "assignments";
+    return tab === "today" || tab === "outlook" || tab === "progress" || tab === "leaderboard" ? tab : "outlook";
   });
   const [publishInstructorForecast, setPublishInstructorForecast] = useState(false);
   const [revisionParentRunId, setRevisionParentRunId] = useState<string | null>(null);
@@ -1400,7 +1447,7 @@ export default function Home() {
     setWorkspaceMenuOpen(false);
     setWorkspaceContextStatus(`${workspaceDeskLabel(workspace)} is now active.`);
     if (workspace.kind === "classroom") {
-      setClassroomHubTab("assignments");
+      setClassroomHubTab("outlook");
       setActiveSection("classroom");
       return;
     }
@@ -1787,7 +1834,7 @@ export default function Home() {
           ? "&organization_id=is.null&classroom_id=is.null"
           : "";
     Promise.all([
-      fetch(`${supabaseUrl}/rest/v1/forecast_runs?select=id,user_id,parent_run_id,scenario_id,created_at,status,location_name,forecast_periods(id,valid_date,period,forecast_data,evidence_snapshot,forecast_verifications(observed_data,score_data))&status=neq.withdrawn${workspaceFilter}&order=created_at.desc`, { headers }),
+      fetch(`${supabaseUrl}/rest/v1/forecast_runs?select=id,user_id,parent_run_id,scenario_id,assignment_id,created_at,status,location_name,forecast_periods(id,valid_date,period,forecast_data,evidence_snapshot,forecast_verifications(observed_data,score_data))&status=neq.withdrawn${workspaceFilter}&order=created_at.desc`, { headers }),
       fetch(`${supabaseUrl}/rest/v1/forecasts?select=id,created_at,forecast_data,evidence_snapshot&status=neq.withdrawn&order=created_at.desc`, { headers }),
       fetch(`${supabaseUrl}/rest/v1/forecast_verifications?select=forecast_period_id,observed_data,score_data`, { headers }),
     ]).then(async ([runResponse, legacyResponse, verificationResponse]) => {
@@ -1829,6 +1876,14 @@ export default function Home() {
       .then((response) => response.ok ? response.json() : Promise.reject(new Error("Class outlook is not ready. Apply the latest classroom migration.")))
       .then((rows: ClassroomOfficialForecast[]) => setClassroomOfficialForecast(rows[0] ?? null))
       .catch(() => setClassroomOfficialForecast(null));
+  }, [activeWorkspaceKey, session]);
+
+  useEffect(() => {
+    if (!session || !supabaseUrl || !supabaseKey || activeWorkspace?.kind !== "classroom" || !activeWorkspace.classroomId) { setClassroomActiveForecastDates([]); return; }
+    fetch(`${supabaseUrl}/rest/v1/classrooms?select=active_forecast_dates&id=eq.${activeWorkspace.classroomId}`, { headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` } })
+      .then((response) => response.ok ? response.json() : [])
+      .then((rows: { active_forecast_dates: string[] }[]) => setClassroomActiveForecastDates(rows[0]?.active_forecast_dates ?? []))
+      .catch(() => setClassroomActiveForecastDates([]));
   }, [activeWorkspaceKey, session]);
 
   useEffect(() => {
@@ -2973,7 +3028,8 @@ export default function Home() {
     setAssignmentMessage(publish ? "Class forecast published to this class. It is not public." : "Class average saved as an instructor draft.");
   }
 
-  async function saveOfficialClassForecast(snapshot: ClassForecastSnapshot, publish = false) {
+  // deprecated: superseded by saveClassroomActiveForecastDates + ClassroomLiveForecast. Kept for reference.
+  /* async function saveOfficialClassForecast(snapshot: ClassForecastSnapshot, publish = false) {
     if (!session || !supabaseUrl || !supabaseKey || !canManageActiveClassroom || !activeWorkspace?.classroomId) return;
     setAssignmentMessage(publish ? "Publishing class outlook…" : "Saving class outlook…");
     const timestamp = new Date().toISOString();
@@ -2982,6 +3038,17 @@ export default function Home() {
     if (!response.ok || !rows[0]) { setAssignmentMessage("Class outlook could not be saved. Apply the latest classroom migration, then try again."); return; }
     setClassroomOfficialForecast(rows[0] as ClassroomOfficialForecast);
     setAssignmentMessage(publish ? "Class outlook published to this class." : "Class outlook saved.");
+  } */
+
+  async function saveClassroomActiveForecastDates(dates: string[]) {
+    if (!session || !supabaseUrl || !supabaseKey || !canManageActiveClassroom || !activeWorkspace?.classroomId) return;
+    setAssignmentMessage("Saving active forecast dates…");
+    const sorted = [...dates].sort();
+    const response = await fetch(`${supabaseUrl}/rest/v1/classrooms?id=eq.${activeWorkspace.classroomId}`, { method: "PATCH", headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json", Prefer: "return=representation" }, body: JSON.stringify({ active_forecast_dates: sorted }) });
+    const rows = await response.json().catch(() => []);
+    if (!response.ok || !rows[0]) { setAssignmentMessage("Active forecast dates could not be saved."); return; }
+    setClassroomActiveForecastDates(rows[0].active_forecast_dates ?? sorted);
+    setAssignmentMessage("Active forecast dates saved. Student forecasts for these dates now count toward the class forecast.");
   }
 
   async function saveForecastReview(runId: string) {
@@ -3213,7 +3280,7 @@ export default function Home() {
         <div className="section-heading"><div><p className="eyebrow">Classroom desk</p><h2>{workspaceDeskLabel(activeWorkspace)}</h2><p>{activeWorkspace.active === false ? "Your access to this class has ended. Assignments and class tools are no longer available, but your past forecasts and grades are still yours to review under Verify." : canManageActiveClassroom ? "Plan assignments, assess submissions, and follow class progress in one private space." : "Find assignments, build a forecast, and learn from private feedback."}</p></div><span>{activeWorkspace.active === false ? "access ended" : activeWorkspace.role ?? "member"}</span></div>
         <nav className="classroom-hub-tabs" aria-label="Classroom sections">
           <button type="button" className={classroomHubTab === "today" ? "active" : ""} onClick={() => setClassroomHubTab("today")}>My work</button>
-          <button type="button" className={classroomHubTab === "assignments" ? "active" : ""} onClick={() => setClassroomHubTab("assignments")}>Assignments</button>
+          <button type="button" className={classroomHubTab === "assignments" ? "active" : ""} onClick={() => setClassroomHubTab("assignments")}>Practice</button>
           <button type="button" className={classroomHubTab === "outlook" ? "active" : ""} onClick={() => setClassroomHubTab("outlook")}>Class forecast</button>
           <button type="button" className={classroomHubTab === "progress" ? "active" : ""} onClick={() => setClassroomHubTab("progress")}>{canManageActiveClassroom ? "Class progress" : "Progress"}</button>
           <button type="button" className={classroomHubTab === "leaderboard" ? "active" : ""} onClick={() => setClassroomHubTab("leaderboard")}>Leaderboard</button>
@@ -3221,7 +3288,7 @@ export default function Home() {
         </nav>
         {classroomHubTab === "today" && <ClassroomToday assignment={selectedClassroomAssignment} submissions={assignmentSubmissions} roster={academicRoster} canManage={canManageActiveClassroom} canOpenForecast={showForecastAssignmentContext} onOpenForecast={() => openClassroomAssignment(selectedClassroomAssignment!)} />}
         {classroomHubTab === "assignments" && (reviewTarget && reviewTarget.classroomId === activeWorkspace.classroomId ? <><ClassroomReviewPanel target={reviewTarget} runs={visibleReviewRuns} selectedRun={selectedReviewRun} notes={reviewNotes} comment={reviewComment} manualScore={reviewManualScore} message={reviewMessage} onSelectRun={setSelectedReviewRunId} onCommentChange={setReviewComment} onManualScoreChange={setReviewManualScore} onSave={saveForecastReview} onClose={() => { setReviewTarget(null); setReviewRuns([]); setReviewNotes({}); }} />{selectedReviewRun && <InstructorRubricCard rubric={reviewRubric} onRubricChange={setReviewRubric} notes={reviewNotes[selectedReviewRun.id] ?? []} onSave={() => saveForecastReview(selectedReviewRun.id)} />}</> : <ClassroomAssignmentDesk assignments={classroomAssignments} submissions={assignmentSubmissions} roster={academicRoster} selectedAssignmentId={selectedClassroomAssignmentId} canManage={canManageActiveClassroom} onCreate={createClassroomAssignment} onSelectAssignment={selectClassroomAssignment} onSaveClassForecast={(snapshot) => saveClassForecastSnapshot(snapshot)} onPublishClassForecast={() => { const assignment = classroomAssignments.find((item) => item.id === selectedClassroomAssignmentId); if (!assignment) return; saveClassForecastSnapshot(buildClassForecastSnapshot(assignment, assignmentSubmissions, academicRoster.filter((member) => member.role === "student")), true); }} onReviewStudent={(student) => setReviewTarget({ userId: student.userId, label: student.label, organizationId: activeWorkspace.organizationId!, classroomId: activeWorkspace.classroomId, assignmentId: selectedClassroomAssignmentId })} message={assignmentMessage} />)}
-        {classroomHubTab === "outlook" && <ClassForecastHubV2 official={classroomOfficialForecast} publicGuidance={outlook} canManage={canManageActiveClassroom} onSave={(forecast) => saveOfficialClassForecast(forecast)} onPublish={(forecast) => saveOfficialClassForecast(forecast, true)} />}
+        {classroomHubTab === "outlook" && <ClassroomLiveForecast archives={archives} activeDates={classroomActiveForecastDates} roster={academicRoster} canManage={canManageActiveClassroom} onSaveActiveDates={saveClassroomActiveForecastDates} message={assignmentMessage} />}
         {classroomHubTab === "progress" && <ClassroomProgress assignments={classroomAssignments} submissions={assignmentSubmissions} roster={academicRoster} canManage={canManageActiveClassroom} currentUserId={session.user.id} />}
         {classroomHubTab === "leaderboard" && <ClassroomLeaderboard assignments={classroomAssignments} submissions={assignmentSubmissions} roster={academicRoster} currentUserId={session.user.id} />}
         {classroomHubTab === "roster" && canManageActiveClassroom && <ClassroomRosterPanel roster={classroomRoster} message={classroomRosterMessage} onRevoke={(userId) => setClassroomMemberStatus(userId, "suspended")} onRestore={(userId) => setClassroomMemberStatus(userId, "active")} />}
