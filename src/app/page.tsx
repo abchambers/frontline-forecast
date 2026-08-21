@@ -17,7 +17,7 @@ type GuidanceGroup = "high-res" | "global";
 type RadarMapView = "composite" | "velocity" | "future_reflectivity" | "satellite";
 type RadarLegend = { title: string; left: string; middle: string; right: string; unit: string; gradient: string };
 type OpenMeteoModel = "best_match" | "hrrr_conus" | "nbm_conus" | "nam_conus" | "gfs_global" | "ecmwf_ifs" | "icon_global" | "gem_global";
-type WorkspaceSection = "dashboard" | "radar" | "about" | "forecast" | "verify" | "school" | "classroom" | "control";
+type WorkspaceSection = "dashboard" | "radar" | "about" | "forecast" | "practice" | "verify" | "school" | "classroom" | "control";
 type PublicNavigationItem = { id: string; label: string; target: "weather" | "radar" | "about" | "login"; access: "public" | "member" | "staff" | "owner"; enabled: boolean };
 type WorkspaceNavigationItem = { id: "weather" | "radar" | "about" | "forecast" | "verify" | "control"; label: string; access: "public" | "member" | "staff" | "owner"; enabled: boolean };
 type HomepageContent = { title: string; description: string; primaryAction: string; secondaryAction: string; outlookTitle: string; outlookCaption: string; radarTitle: string; radarCaption: string; referenceTitle: string; referenceCaption: string; showOutlook: boolean; showRadar: boolean; showReferences: boolean };
@@ -935,7 +935,7 @@ function ClassroomToday({ assignment, submissions, roster, canManage, canOpenFor
   const studentIds = new Set(students.map((member) => member.userId));
   const studentCount = students.length;
   const submittedCount = assignment ? new Set(submissions.filter((submission) => submission.assignment_id === assignment.id && (!canManage || studentIds.has(submission.user_id))).map((submission) => submission.user_id)).size : 0;
-  return <section className="classroom-today"><header><div><p className="eyebrow">My work</p><h3>{assignment?.title ?? "No active assignment"}</h3><p>{assignment ? `${assignmentDates(assignment).map(forecastTargetTitle).join(" · ")}${assignment.due_at ? ` · due ${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(assignment.due_at))}` : ""}` : "No assignment needs attention right now."}</p></div>{canOpenForecast && <button type="button" onClick={onOpenForecast}>Start forecast</button>}</header>{assignment?.scenario && <div className="assignment-linker scenario-context"><div><strong>Historical scenario</strong><small>This date has already happened — it's a real past event, not a hypothetical.</small>{assignment.scenario.summary && <em>{assignment.scenario.summary}</em>}{(assignment.scenario.reference_notes || assignment.scenario.reference_links.length > 0) && <details className="scenario-reference-details"><summary>Reference data</summary>{assignment.scenario.reference_notes && <p>{assignment.scenario.reference_notes}</p>}{assignment.scenario.reference_links.length > 0 && <ul>{assignment.scenario.reference_links.map((link) => <li key={link.label}>{link.label}{link.detail ? ` — ${link.detail}` : ""}{link.url && <> · <a href={link.url} target="_blank" rel="noreferrer">Open</a></>}</li>)}</ul>}</details>}</div></div>}{assignment && <div className="classroom-today-grid"><article><span>Instructor example</span><strong>{assignment.instructor_forecast ? "Available" : "Not posted"}</strong><small>{assignment.instructor_forecast ? "Open Assignments to review it." : "A shared class reference when posted."}</small></article><article><span>{canManage ? "Submissions" : "Your work"}</span><strong>{canManage ? `${submittedCount}/${studentCount || "—"}` : submittedCount ? "Submitted" : "To do"}</strong><small>{canManage ? "latest student forecasts" : submittedCount ? "This assignment is complete." : "Start the linked forecast when ready."}</small></article></div>}</section>;
+  return <section className="classroom-today"><header><div><p className="eyebrow">My work</p><h3>{assignment?.title ?? "No active assignment"}</h3><p>{assignment ? `${assignmentDates(assignment).map(forecastTargetTitle).join(" · ")}${assignment.due_at ? ` · due ${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(assignment.due_at))}` : ""}` : "No assignment needs attention right now."}</p></div>{canOpenForecast && <button type="button" onClick={onOpenForecast}>{canManage ? "Build example" : "Start assignment"}</button>}</header>{assignment?.scenario && <div className="assignment-linker scenario-context"><div><strong>Historical scenario</strong><small>This date has already happened — it's a real past event, not a hypothetical.</small>{assignment.scenario.summary && <em>{assignment.scenario.summary}</em>}{(assignment.scenario.reference_notes || assignment.scenario.reference_links.length > 0) && <details className="scenario-reference-details"><summary>Reference data</summary>{assignment.scenario.reference_notes && <p>{assignment.scenario.reference_notes}</p>}{assignment.scenario.reference_links.length > 0 && <ul>{assignment.scenario.reference_links.map((link) => <li key={link.label}>{link.label}{link.detail ? ` — ${link.detail}` : ""}{link.url && <> · <a href={link.url} target="_blank" rel="noreferrer">Open</a></>}</li>)}</ul>}</details>}</div></div>}{assignment && <div className="classroom-today-grid"><article><span>Instructor example</span><strong>{assignment.instructor_forecast ? "Available" : "Not posted"}</strong><small>{assignment.instructor_forecast ? "Open Assignments to review it." : "A shared class reference when posted."}</small></article><article><span>{canManage ? "Submissions" : "Your work"}</span><strong>{canManage ? `${submittedCount}/${studentCount || "—"}` : submittedCount ? "Submitted" : "To do"}</strong><small>{canManage ? "latest student forecasts" : submittedCount ? "This assignment is complete." : "Start the linked forecast when ready."}</small></article></div>}</section>;
 }
 
 function ClassroomProgress({ assignments, submissions, roster, canManage, currentUserId }: { assignments: ClassroomAssignment[]; submissions: ClassroomAssignmentSubmission[]; roster: AcademicRosterMember[]; canManage: boolean; currentUserId?: string }) {
@@ -1158,7 +1158,7 @@ function ClassroomAssignmentStudio({ assignments, submissions, roster, selectedA
     {selectedAssignment && <section className="assignment-focus"><header><div><p className="eyebrow">Selected assignment</p><h3>{selectedAssignment.title}</h3><p>{selectedAssignment.instructions || "No additional directions were added."}</p><small>{selectedDates.map(forecastTargetTitle).join(" · ")}{selectedAssignment.due_at ? ` · due ${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(selectedAssignment.due_at))}` : ""}</small></div></header>
       {selectedAssignment.instructor_forecast && <section className="assignment-example"><p className="eyebrow">Instructor example</p><div>{selectedDates.map((date) => <ForecastDayMiniCard key={date} date={date} periods={selectedAssignment.instructor_forecast?.days.find((day) => day.date === date) ? [{ valid_date: date, period: "day", forecast_data: selectedAssignment.instructor_forecast!.days.find((day) => day.date === date)!.day, forecast_verifications: [] }, { valid_date: date, period: "night", forecast_data: selectedAssignment.instructor_forecast!.days.find((day) => day.date === date)!.night, forecast_verifications: [] }] : []} />)}</div></section>}
       {canManage && <section className="assignment-submissions"><header><div><p className="eyebrow">Student work</p><h4>{latestSubmissions.length} submitted</h4><p>Open a student to see each assigned day as a compact forecast record before reviewing it.</p></div></header><div>{latestSubmissions.map((submission) => <details key={submission.id}><summary><span><strong>{studentName(submission.user_id)}</strong><small>Submitted {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(submission.created_at))}</small></span><b>{selectedDates.filter((date) => submission.forecast_periods.some((period) => period.valid_date === date)).length}/{selectedDates.length} days</b></summary><div className="assignment-submission-days">{selectedDates.map((date) => <ForecastDayMiniCard key={date} date={date} periods={submission.forecast_periods} />)}</div></details>)}{!latestSubmissions.length && <p className="empty">No student submissions have been linked to this assignment yet.</p>}</div></section>}
-      {!canManage && <section className="assignment-student-note"><strong>Your work stays private.</strong><p>Use Start assignment to open only these dates in Forecast. Your instructor can review your submission; other students cannot.</p></section>}
+      {!canManage && <section className="assignment-student-note"><strong>Your work stays private.</strong><p>Use Start assignment to open its own practice worksheet, separate from your Forecast tab drafts. Your instructor can review your submission; other students cannot.</p></section>}
     </section>}
     {message && <p className="control-message" role="status">{message}</p>}
   </section>;
@@ -1314,6 +1314,11 @@ export default function Home() {
   const [locationMenuOpen, setLocationMenuOpen] = useState(false);
   const [forecastRun, setForecastRun] = useState<ForecastRunDraft>(() => ({ id: crypto.randomUUID(), initialHorizonDays: 1, days: [createForecastDay(nextForecastDate())] }));
   const [selectedForecastDay, setSelectedForecastDay] = useState(0);
+  const [practiceRun, setPracticeRun] = useState<ForecastRunDraft | null>(null);
+  const [selectedPracticeDay, setSelectedPracticeDay] = useState(0);
+  const [practiceMessage, setPracticeMessage] = useState("");
+  const [practiceSubmitting, setPracticeSubmitting] = useState(false);
+  const [practiceSubmissionToken, setPracticeSubmissionToken] = useState("");
   const [tabMenuIndex, setTabMenuIndex] = useState<number | null>(null);
   const [tabMenuMessage, setTabMenuMessage] = useState("");
   const [tabMenuPosition, setTabMenuPosition] = useState({ left: 0, top: 0 });
@@ -1428,13 +1433,15 @@ export default function Home() {
     setSelectedClassroomAssignmentId(assignment.id);
     setPublishInstructorForecast(canManageActiveClassroom);
     const dates = assignmentDates(assignment);
-    const days = [...forecastRun.days];
-    dates.forEach((date) => { if (!days.some((day) => day.date === date)) days.push(createForecastDay(date)); });
-    days.sort((a, b) => a.date.localeCompare(b.date));
-    setForecastRun({ ...forecastRun, days });
-    setSelectedForecastDay(days.findIndex((day) => day.date === dates[0]));
-    setAssignmentMessage(`Opened “${assignment.title}” for ${dates.map(forecastTargetTitle).join(" · ")}. Your existing draft was kept.`);
-    setActiveSection("forecast");
+    setPracticeRun((current) => {
+      const alreadyOpen = current && dates.length === current.days.length && dates.every((date) => current.days.some((day) => day.date === date));
+      if (alreadyOpen) return current;
+      return { id: crypto.randomUUID(), initialHorizonDays: dates.length, days: dates.map((date) => createForecastDay(date)) };
+    });
+    setSelectedPracticeDay(0);
+    setPracticeMessage(`Opened “${assignment.title}” for ${dates.map(forecastTargetTitle).join(" · ")}.`);
+    setPracticeSubmissionToken("");
+    setActiveSection("practice");
   };
 
   const selectClassroomAssignment = (assignment: ClassroomAssignment) => {
@@ -2326,6 +2333,7 @@ export default function Home() {
     setRecordFocusDate(addDays(new Date(`${recordWindowStart}T12:00:00`), 1));
   }, [recordWindowStart]);
   const selectedDay = forecastRun.days[selectedForecastDay] ?? forecastRun.days[0];
+  const selectedPracticeDayDraft = practiceRun?.days[selectedPracticeDay] ?? practiceRun?.days[0] ?? null;
   const archiveMenu = archives.find((archive) => archive.id === archiveMenuId) ?? null;
   const pendingArchiveRemoval = archives.find((archive) => archive.id === pendingArchiveRemovalId) ?? null;
   const outlook = liveWeather?.forecastPeriods.reduce<{ date: string; label: string; high: number | null; low: number | null; shortForecast: string; precipitationChance: number | null }[]>((days, period) => {
@@ -2405,6 +2413,89 @@ export default function Home() {
         [period]: { ...day[period], references: day[period].references.filter((reference) => reference.id !== referenceId) },
       }),
     }));
+  }
+
+  // Practice (assignment) worksheet: a deliberately separate draft from forecastRun so
+  // opening an assignment never mixes its dates into a student's personal Forecast tab drafts.
+  function updatePracticePeriod(period: "day" | "night", field: Exclude<keyof PeriodDraft, "references">, value: string) {
+    setPracticeRun((run) => run && { ...run, days: run.days.map((day, index) => index === selectedPracticeDay ? { ...day, [period]: { ...day[period], [field]: value } } : day) });
+  }
+
+  function formatPracticePeriodField(period: "day" | "night", field: "highLow" | "rainChance" | "timing") {
+    if (!selectedPracticeDayDraft) return;
+    const value = selectedPracticeDayDraft[period][field].trim();
+    if (!value) return;
+    if (field === "highLow") {
+      const number = temperatureInputValue(value);
+      updatePracticePeriod(period, field, number ? number.replace(/\.0+$/, "") : "");
+      return;
+    }
+    if (field === "rainChance") {
+      const number = Number.parseInt(percentInputValue(value), 10);
+      updatePracticePeriod(period, field, Number.isFinite(number) ? String(Math.max(0, Math.min(100, number))) : "");
+      return;
+    }
+    const normalized = value.replace(/\s*(a\.?m\.?|p\.?m\.?)\b/gi, (_, meridiem: string) => ` ${meridiem[0].toUpperCase()}M`).replace(/\s*-\s*/g, "–");
+    updatePracticePeriod(period, field, /\b(?:AM|PM)\b/.test(normalized) ? normalized : `${normalized} PM`);
+  }
+
+  function addFreshPracticeReference(period: "day" | "night", item: ReferenceItem) {
+    const freshReference = { ...item, id: `${item.id}-${crypto.randomUUID()}` };
+    setPracticeRun((run) => run && { ...run, days: run.days.map((day, index) => index !== selectedPracticeDay ? day : { ...day, [period]: { ...day[period], references: [...day[period].references, freshReference] } }) });
+    setPracticeMessage(`${item.label} added as a fresh ${period} reference snapshot.`);
+  }
+
+  function removePracticeReference(period: "day" | "night", referenceId: string) {
+    setPracticeRun((run) => run && { ...run, days: run.days.map((day, index) => index !== selectedPracticeDay ? day : { ...day, [period]: { ...day[period], references: day[period].references.filter((reference) => reference.id !== referenceId) } }) });
+  }
+
+  async function submitPracticeAssignment(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (practiceSubmitting || !practiceRun || !practiceRun.days.length) return;
+    if (!session || !supabaseUrl || !supabaseKey) { setPracticeMessage("Sign in before submitting so this forecast can be archived safely."); return; }
+    if (selectedClassroomAssignment && assignmentDates(selectedClassroomAssignment).some((date) => !practiceRun.days.some((day) => day.date === date))) {
+      setPracticeMessage(`This worksheet must include every target date for “${selectedClassroomAssignment.title}.”`);
+      return;
+    }
+    setPracticeSubmitting(true);
+    setPracticeSubmissionToken("");
+    const savedAt = new Date().toISOString();
+    const nextArchives = practiceRun.days.map((day) => ({
+      id: crypto.randomUUID(), locationId: selectedLocation.id, locationName: selectedLocation.name, savedAt, label: archiveTitle({ savedAt }), targetDate: day.date,
+      status: "submitted" as const, versionNumber: 1, parentRunId: null, authorId: session.user.id,
+      day: { high: day.day.highLow, conditions: day.day.conditions, rainChance: day.day.rainChance, timing: day.day.timing, hazards: day.day.hazards, reasoning: day.day.reasoning, references: day.day.references },
+      night: { low: day.night.highLow, conditions: day.night.conditions, rainChance: day.night.rainChance, timing: day.night.timing, hazards: day.night.hazards, reasoning: day.night.reasoning, references: day.night.references },
+      evidence: {
+        observation: liveWeather ? `${liveWeather.observation.temperatureF ?? "—"}°F, ${liveWeather.observation.description}; ${liveWeather.observation.station || liveWeather.observation.stationName || "NWS observation station"} at ${observedAt}` : "No live observation available when saved",
+        forecast: liveWeather?.forecast ? `${liveWeather.forecast.period}: ${liveWeather.forecast.shortForecast}; ${liveWeather.forecast.precipitationChance ?? 0}% precipitation chance` : "No NWS forecast available when saved",
+        alerts: liveWeather?.alerts.length ? liveWeather.alerts.map((alert) => alert.event).join(", ") : liveWeather?.alertsAvailable === false ? "NWS alert feed unavailable when saved" : "No active NWS alerts when saved",
+      },
+    } satisfies SavedForecast));
+    try {
+      const cloudRecord = await saveForecastRunToCloud(savedAt, practiceRun.days);
+      let instructorExamplePublished = false;
+      if (publishInstructorForecast && selectedClassroomAssignmentId) {
+        try {
+          await publishInstructorForecastSnapshot(selectedClassroomAssignmentId, savedAt);
+          instructorExamplePublished = true;
+        } catch (error) {
+          setPracticeMessage(error instanceof Error ? error.message : "The forecast saved, but the instructor example could not be published.");
+        }
+      }
+      const cloudArchives = nextArchives.map((archive) => ({ ...archive, id: `${cloudRecord.runId}:${archive.targetDate}`, runId: cloudRecord.runId, periodIds: cloudRecord.periodIdsByDate[archive.targetDate] }));
+      const combinedArchives = numberArchiveVersions([...cloudArchives, ...archives].slice(0, 50));
+      setArchives(combinedArchives);
+      if (selectedClassroomAssignmentId) setAssignmentSubmissionRefreshToken((value) => value + 1);
+      if (session) window.localStorage.setItem(archiveStorageKeyFor(session.user.id), JSON.stringify(combinedArchives));
+      const detail = `${cloudArchives.length}-day practice forecast submitted${instructorExamplePublished ? " · instructor example published" : ""} · archive token ${cloudRecord.runId.slice(0, 8).toUpperCase()}`;
+      setPracticeMessage(`${detail}.`);
+      setPracticeSubmissionToken(detail);
+      setPublishInstructorForecast(false);
+    } catch (error) {
+      setPracticeMessage(`Forecast was not submitted: ${error instanceof Error ? error.message : "Cloud storage could not be reached."}`);
+    } finally {
+      setPracticeSubmitting(false);
+    }
   }
 
   function attachDeskReference(reference: ReferenceItem, targetDate?: string) {
@@ -3265,6 +3356,43 @@ export default function Home() {
           </div></fieldset></div>
           {submissionToken && <div className="submission-token" role="status"><span>✓</span><div><strong>Forecast archived</strong><small>{submissionToken}</small></div><button type="button" aria-label="Dismiss submission confirmation" onClick={() => setSubmissionToken("")}>×</button></div>}
           <div className="form-actions"><span>{saveMessage || (forecastRun.days.some((day) => day.ready) ? "Draft is saved automatically in this browser. Mark a day Ready to include it, or post it alone from its card." : "Draft is saved automatically in this browser. Submitting archives every tab as an immutable record.")}</span><button type="submit" disabled={isSubmitting}>{isSubmitting ? "Submitting forecast…" : forecastRun.days.some((day) => day.ready) ? `Submit ${forecastRun.days.filter((day) => day.ready).length} ready day${forecastRun.days.filter((day) => day.ready).length === 1 ? "" : "s"}` : "Submit forecast run"}</button></div>
+        </form>
+      </section>}
+
+      {activeSection === "practice" && !session && <section className="workspace-card access-wall"><h2>Log in to forecast</h2><p>Practice worksheets stay private to your account.</p><button type="button" onClick={() => setLoginMenuOpen(true)}>Open login</button></section>}
+      {activeSection === "practice" && session && (!selectedClassroomAssignment || !practiceRun || !selectedPracticeDayDraft) && <section className="workspace-card"><p className="empty">No practice assignment is open. <button type="button" onClick={() => { setActiveSection("classroom"); setClassroomHubTab("assignments"); }}>Back to Practice</button></p></section>}
+      {activeSection === "practice" && session && selectedClassroomAssignment && practiceRun && selectedPracticeDayDraft && <section className="workspace-card practice-desk">
+        <div className="section-heading forecast-title"><div><p className="eyebrow">Practice</p><h2>{selectedClassroomAssignment.title}</h2><p>{assignmentDates(selectedClassroomAssignment).map(forecastTargetTitle).join(" · ")}{selectedClassroomAssignment.due_at ? ` · due ${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(selectedClassroomAssignment.due_at))}` : ""}</p></div><button type="button" onClick={() => { setActiveSection("classroom"); setClassroomHubTab("assignments"); }}>← Back to Practice</button></div>
+        {selectedClassroomAssignment.instructions && <p className="practice-instructions">{selectedClassroomAssignment.instructions}</p>}
+        {canManageActiveClassroom && <label className="assignment-instructor-toggle"><input type="checkbox" checked={publishInstructorForecast} onChange={(event) => setPublishInstructorForecast(event.target.checked)} /> <span><strong>Share as instructor example</strong><small>Visible to this class after submission.</small></span></label>}
+        {practiceRun.days.length > 1 && <div className="day-outlook-cards" role="tablist" aria-label="Practice days">{practiceRun.days.map((day, index) => <button type="button" key={day.date} className={index === selectedPracticeDay ? "active" : ""} onClick={() => setSelectedPracticeDay(index)}><span className="dow">{new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(new Date(`${day.date}T12:00:00`))}</span><img src={`/weather-icons/${weatherIconStyle}/${periodIconCondition(day.day)}.svg`} alt="" /><em>{displayForecastTemperature(day.day.highLow)} / {displayForecastTemperature(day.night.highLow)}</em><small>{day.day.rainChance ? `${displayForecastChance(day.day.rainChance)} PoP` : "No PoP yet"}</small></button>)}</div>}
+        <form onSubmit={submitPracticeAssignment}><div className="forecast-period-columns">
+          <fieldset className="forecast-period"><legend>{new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric" }).format(new Date(`${selectedPracticeDayDraft.date}T12:00:00`))} day <small>7 AM–7 PM</small></legend><div className="forecast-fields">
+            <label>High temperature<span className="unit-input" style={unitInputStyle(temperatureInputValue(selectedPracticeDayDraft.day.highLow), 2)}><input inputMode="decimal" placeholder="72" value={temperatureInputValue(selectedPracticeDayDraft.day.highLow)} onChange={(event) => updatePracticePeriod("day", "highLow", temperatureInputValue(event.target.value))} onBlur={() => formatPracticePeriodField("day", "highLow")} /><i aria-hidden="true">°</i></span></label>
+            <label>Conditions<select value={selectedPracticeDayDraft.day.conditions} onChange={(event) => updatePracticePeriod("day", "conditions", event.target.value)}><option value="">Choose conditions</option>{conditionOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+            <label className="wide-field">Icon<IconPicker value={periodIconCondition(selectedPracticeDayDraft.day)} onChange={(next) => updatePracticePeriod("day", "iconCondition", next)} style={weatherIconStyle} /></label>
+            <label>Rain chance<span className="unit-input" style={unitInputStyle(percentInputValue(selectedPracticeDayDraft.day.rainChance), 2)}><input inputMode="numeric" placeholder="40" value={percentInputValue(selectedPracticeDayDraft.day.rainChance)} onChange={(event) => updatePracticePeriod("day", "rainChance", percentInputValue(event.target.value))} onBlur={() => formatPracticePeriodField("day", "rainChance")} /><i aria-hidden="true">%</i></span></label>
+            <label>Likely timing<input placeholder="3–8 PM" value={selectedPracticeDayDraft.day.timing} onChange={(event) => updatePracticePeriod("day", "timing", event.target.value)} onBlur={() => formatPracticePeriodField("day", "timing")} /></label>
+            <label>Wind<input value={selectedPracticeDayDraft.day.wind} onChange={(event) => updatePracticePeriod("day", "wind", event.target.value)} /></label>
+            <label>Confidence<select value={selectedPracticeDayDraft.day.confidence} onChange={(event) => updatePracticePeriod("day", "confidence", event.target.value)}><option value="low">Low</option><option value="moderate">Moderate</option><option value="high">High</option></select></label>
+            <label className="wide-field">Hazards<textarea rows={2} placeholder="Hazards, impacts, or confidence notes" value={selectedPracticeDayDraft.day.hazards} onChange={(event) => updatePracticePeriod("day", "hazards", event.target.value)} /></label>
+            <div className="wide-field reference-picker"><span>Quick-add current reference data</span><div>{referenceOptions.map((item) => <button type="button" key={item.id} onClick={() => addFreshPracticeReference("day", item)}>+ {item.label}</button>)}</div>{selectedPracticeDayDraft.day.references.length > 0 && <div className="attached-draft-references"><strong>Added to this day</strong><div className="attached-reference-table"><div className="attached-reference-heading"><span>Reference</span><span>Snapshot</span><span>Action</span></div>{selectedPracticeDayDraft.day.references.map((reference) => <div className="attached-reference-row" key={reference.id}><b>{reference.label}</b><small>{reference.detail.split("\n")[0]}</small><button type="button" onClick={() => removePracticeReference("day", reference.id)}>Remove</button></div>)}</div></div>}<small>Each quick-add captures a new current snapshot; previous snapshots stay only in this list.</small></div>
+            <label className="wide-field">Day reasoning<textarea value={selectedPracticeDayDraft.day.reasoning} onChange={(event) => updatePracticePeriod("day", "reasoning", event.target.value)} /></label>
+          </div></fieldset>
+          <fieldset className="forecast-period"><legend>{new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric" }).format(new Date(`${selectedPracticeDayDraft.date}T12:00:00`))} night <small>7 PM–7 AM</small></legend><div className="forecast-fields">
+            <label>Low temperature<span className="unit-input" style={unitInputStyle(temperatureInputValue(selectedPracticeDayDraft.night.highLow), 2)}><input inputMode="decimal" placeholder="61" value={temperatureInputValue(selectedPracticeDayDraft.night.highLow)} onChange={(event) => updatePracticePeriod("night", "highLow", temperatureInputValue(event.target.value))} onBlur={() => formatPracticePeriodField("night", "highLow")} /><i aria-hidden="true">°</i></span></label>
+            <label>Conditions<select value={selectedPracticeDayDraft.night.conditions} onChange={(event) => updatePracticePeriod("night", "conditions", event.target.value)}><option value="">Choose conditions</option>{conditionOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+            <label className="wide-field">Icon<IconPicker value={periodIconCondition(selectedPracticeDayDraft.night)} onChange={(next) => updatePracticePeriod("night", "iconCondition", next)} style={weatherIconStyle} /></label>
+            <label>Rain chance<span className="unit-input" style={unitInputStyle(percentInputValue(selectedPracticeDayDraft.night.rainChance), 2)}><input inputMode="numeric" placeholder="20" value={percentInputValue(selectedPracticeDayDraft.night.rainChance)} onChange={(event) => updatePracticePeriod("night", "rainChance", percentInputValue(event.target.value))} onBlur={() => formatPracticePeriodField("night", "rainChance")} /><i aria-hidden="true">%</i></span></label>
+            <label>Likely timing<input placeholder="Before 10 PM" value={selectedPracticeDayDraft.night.timing} onChange={(event) => updatePracticePeriod("night", "timing", event.target.value)} onBlur={() => formatPracticePeriodField("night", "timing")} /></label>
+            <label>Wind<input value={selectedPracticeDayDraft.night.wind} onChange={(event) => updatePracticePeriod("night", "wind", event.target.value)} /></label>
+            <label>Confidence<select value={selectedPracticeDayDraft.night.confidence} onChange={(event) => updatePracticePeriod("night", "confidence", event.target.value)}><option value="low">Low</option><option value="moderate">Moderate</option><option value="high">High</option></select></label>
+            <label className="wide-field">Hazards<textarea rows={2} placeholder="Hazards, impacts, or confidence notes" value={selectedPracticeDayDraft.night.hazards} onChange={(event) => updatePracticePeriod("night", "hazards", event.target.value)} /></label>
+            <div className="wide-field reference-picker"><span>Quick-add current reference data</span><div>{referenceOptions.map((item) => <button type="button" key={item.id} onClick={() => addFreshPracticeReference("night", item)}>+ {item.label}</button>)}</div>{selectedPracticeDayDraft.night.references.length > 0 && <div className="attached-draft-references"><strong>Added to this night</strong><div className="attached-reference-table"><div className="attached-reference-heading"><span>Reference</span><span>Snapshot</span><span>Action</span></div>{selectedPracticeDayDraft.night.references.map((reference) => <div className="attached-reference-row" key={reference.id}><b>{reference.label}</b><small>{reference.detail.split("\n")[0]}</small><button type="button" onClick={() => removePracticeReference("night", reference.id)}>Remove</button></div>)}</div></div>}<small>Each quick-add captures a new current snapshot; previous snapshots stay only in this list.</small></div>
+            <label className="wide-field">Night reasoning<textarea value={selectedPracticeDayDraft.night.reasoning} onChange={(event) => updatePracticePeriod("night", "reasoning", event.target.value)} /></label>
+          </div></fieldset></div>
+          {practiceSubmissionToken && <div className="submission-token" role="status"><span>✓</span><div><strong>Practice forecast archived</strong><small>{practiceSubmissionToken}</small></div><button type="button" aria-label="Dismiss submission confirmation" onClick={() => setPracticeSubmissionToken("")}>×</button></div>}
+          <div className="form-actions"><span>{practiceMessage || "Submitting archives this practice worksheet as an immutable record. It does not change the class forecast."}</span><button type="submit" disabled={practiceSubmitting}>{practiceSubmitting ? "Submitting…" : "Submit practice forecast"}</button></div>
         </form>
       </section>}
 
