@@ -153,8 +153,11 @@ const radarSourceLabels: Record<"nexrad" | "provider", string> = {
   nexrad: "NEXRAD Level II (in-house)",
   provider: "NWS/NEXRAD (IEM)",
 };
-const archiveStorageKey = "weather-desk-forecast-archives";
-const forecastDraftStorageKey = "weather-desk-active-forecast-draft";
+// Scoped per signed-in user id -- a flat, unscoped key here would leak one
+// person's drafts and submitted-forecast cache to the next person signed in
+// on the same browser, which is a real scenario on a shared school computer.
+const archiveStorageKeyFor = (userId: string) => `weather-desk-forecast-archives:${userId}`;
+const forecastDraftStorageKeyFor = (userId: string) => `weather-desk-active-forecast-draft:${userId}`;
 const sessionStorageKey = "weather-desk-supabase-session";
 const locationStorageKey = "weather-desk-location";
 const customLocationStorageKey = "weather-desk-custom-location";
@@ -1688,19 +1691,21 @@ export default function Home() {
   }, [radarPlaying, radarFrames.length]);
 
   useEffect(() => {
-    const storedDraft = window.localStorage.getItem(forecastDraftStorageKey);
-    if (!storedDraft) return;
+    if (!session) { setForecastRun(createNewForecastRun()); return; }
+    const storedDraft = window.localStorage.getItem(forecastDraftStorageKeyFor(session.user.id));
+    if (!storedDraft) { setForecastRun(createNewForecastRun()); return; }
     try {
       const parsed = JSON.parse(storedDraft) as ForecastRunDraft;
       if (parsed.days?.length) setForecastRun({ ...parsed, days: parsed.days.map((day) => ({ ...day, date: fallbackForecastDate(day.date), day: { ...emptyPeriod("day"), ...day.day, references: savedReferences(day.day.references) }, night: { ...emptyPeriod("night"), ...day.night, references: savedReferences(day.night.references) } })) });
     } catch {
-      window.localStorage.removeItem(forecastDraftStorageKey);
+      window.localStorage.removeItem(forecastDraftStorageKeyFor(session.user.id));
     }
-  }, []);
+  }, [session?.user?.id]);
 
   useEffect(() => {
-    window.localStorage.setItem(forecastDraftStorageKey, JSON.stringify(forecastRun));
-  }, [forecastRun]);
+    if (!session) return;
+    window.localStorage.setItem(forecastDraftStorageKeyFor(session.user.id), JSON.stringify(forecastRun));
+  }, [forecastRun, session?.user?.id]);
 
   useEffect(() => {
     const savedSession = window.localStorage.getItem(sessionStorageKey) ?? window.sessionStorage.getItem(sessionStorageKey);
@@ -2200,16 +2205,17 @@ export default function Home() {
   }, [activeSection, dataPanel, soundingModel, soundingRunOffset, locationId, hasModelAccess]);
 
   useEffect(() => {
-    const storedArchives = window.localStorage.getItem(archiveStorageKey);
-    if (!storedArchives) return;
+    if (!session) { setArchives([]); setSelectedArchiveId(null); return; }
+    const storedArchives = window.localStorage.getItem(archiveStorageKeyFor(session.user.id));
+    if (!storedArchives) { setArchives([]); setSelectedArchiveId(null); return; }
     try {
       const parsed = numberArchiveVersions(JSON.parse(storedArchives) as SavedForecast[]);
       setArchives(parsed);
       setSelectedArchiveId(parsed[0]?.id ?? null);
     } catch {
-      window.localStorage.removeItem(archiveStorageKey);
+      window.localStorage.removeItem(archiveStorageKeyFor(session.user.id));
     }
-  }, []);
+  }, [session?.user?.id]);
 
   const observedAt = liveWeather
     ? new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York", timeZoneName: "short" }).format(new Date(liveWeather.observation.observedAt))
@@ -2517,7 +2523,7 @@ export default function Home() {
       setArchives(combinedArchives);
       if (selectedClassroomAssignmentId) setAssignmentSubmissionRefreshToken((value) => value + 1);
       setSelectedArchiveId(cloudArchives[0]?.id ?? null);
-      window.localStorage.setItem(archiveStorageKey, JSON.stringify(combinedArchives));
+      if (session) window.localStorage.setItem(archiveStorageKeyFor(session.user.id), JSON.stringify(combinedArchives));
       const detail = `${cloudArchives.length}-day forecast submitted${instructorExamplePublished ? " · instructor example published" : ""} · archive token ${cloudRecord.runId.slice(0, 8).toUpperCase()}`;
       setSaveMessage(`${detail}.`);
       setSubmissionToken(detail);
@@ -2625,7 +2631,7 @@ export default function Home() {
     if (archive.status !== "draft") return;
     const nextArchives = archives.filter((item) => item.id !== archive.id);
     setArchives(nextArchives); setSelectedArchiveId(nextArchives[0]?.id ?? null); setArchiveMenuId(null);
-    window.localStorage.setItem(archiveStorageKey, JSON.stringify(nextArchives));
+    if (session) window.localStorage.setItem(archiveStorageKeyFor(session.user.id), JSON.stringify(nextArchives));
     if (session && supabaseUrl && supabaseKey) {
       const target = archive.runId ? `forecast_runs?id=eq.${archive.runId}` : `forecasts?id=eq.${archive.id}`;
       fetch(`${supabaseUrl}/rest/v1/${target}`, { method: "DELETE", headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` } });
@@ -2636,7 +2642,7 @@ export default function Home() {
     if (archive.status === "draft") { deleteArchive(archive); return; }
     const nextArchives = archives.filter((item) => item.id !== archive.id);
     setArchives(nextArchives); setSelectedArchiveId(nextArchives[0]?.id ?? null); setArchiveMenuId(null);
-    window.localStorage.setItem(archiveStorageKey, JSON.stringify(nextArchives));
+    if (session) window.localStorage.setItem(archiveStorageKeyFor(session.user.id), JSON.stringify(nextArchives));
     setSaveMessage("Submission withdrawn. It is hidden from your working archive and excluded from grading, but retained in the protected audit history.");
     if (session && supabaseUrl && supabaseKey) fetch(`${supabaseUrl}/rest/v1/${archive.runId ? "forecast_runs" : "forecasts"}?id=eq.${archive.runId ?? archive.id}`, {
       method: "PATCH", headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" }, body: JSON.stringify({ status: "withdrawn" }),
