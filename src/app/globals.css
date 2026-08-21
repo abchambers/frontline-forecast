@@ -30,6 +30,15 @@ h1,h2,p { margin:0; } h1 { font-size:2rem; font-weight:600; letter-spacing:-.02e
 .day-outlook-cards em { font-family:var(--font-mono), ui-monospace, monospace; font-size:.8rem; font-style:normal; font-weight:700; }
 .day-outlook-cards small { color:var(--muted); font-size:.7rem; }
 .day-outlook-cards .add-day { align-items:center; color:var(--muted); display:flex; font-size:1.3rem; justify-content:center; }
+.day-outlook-cards .day-outlook-card { background:var(--surface); border:1px solid var(--line); border-radius:10px; display:grid; overflow:hidden; padding:0; }
+.day-outlook-cards .day-outlook-card:hover { border-color:var(--accent); }
+.day-outlook-cards .day-outlook-card.active { background:var(--blue-soft); border-color:var(--blue); }
+.day-outlook-cards .day-outlook-card .day-card-select { background:transparent; border:0; display:grid; gap:4px; padding:10px 8px 6px; text-align:center; width:100%; }
+.day-outlook-cards .day-card-footer { align-items:center; border-top:1px solid var(--line); display:flex; gap:4px; justify-content:space-between; padding:4px 7px; }
+.day-outlook-cards .day-card-footer label { align-items:center; color:var(--muted); display:flex; font-size:.62rem; gap:3px; }
+.day-outlook-cards .day-card-footer input[type="checkbox"] { height:11px; margin:0; width:11px; }
+.day-outlook-cards .day-card-footer button { background:transparent; border:0; color:var(--accent); cursor:pointer; font-size:.62rem; font-weight:800; padding:2px 3px; }
+.day-outlook-cards .day-card-footer button:disabled { color:var(--muted); cursor:default; }
 .record-icon-row { align-items:center; display:flex; gap:5px; }
 .record-icon-row .forecast-condition-icon { height:18px; width:18px; }.outlook-cards span,.outlook-cards small { color:var(--muted); font-size:.74rem; line-height:1.25; }.outlook-cards em { font-size:.9rem; font-style:normal; font-weight:700; }
 .radar-card,.quick-data,.data-desk,.workspace-card { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:18px; }.workspace-card { box-shadow:0 10px 28px rgba(24,34,47,.045); }

@@ -96,7 +96,7 @@ type ReferencePreview =
   | { kind: "metrics"; items: { label: string; value: string }[] };
 type ReferenceItem = { id: string; label: string; detail: string; preview?: ReferencePreview };
 type PeriodDraft = { highLow: string; conditions: string; rainChance: string; timing: string; wind: string; confidence: string; hazards: string; reasoning: string; references: ReferenceItem[]; iconCondition: string };
-type ForecastDayDraft = { date: string; day: PeriodDraft; night: PeriodDraft };
+type ForecastDayDraft = { date: string; day: PeriodDraft; night: PeriodDraft; ready: boolean };
 type ForecastRunDraft = { id: string; days: ForecastDayDraft[]; initialHorizonDays: number };
 type CloudRunRow = { id: string; user_id: string; parent_run_id?: string | null; scenario_id?: string | null; assignment_id?: string | null; created_at: string; status: string; location_name?: string | null; forecast_periods: { id: string; valid_date: string; period: "day" | "night"; forecast_data: PeriodDraft; evidence_snapshot: SavedForecast["evidence"]; forecast_verifications?: { observed_data: ActualPeriod; score_data: { automaticScore?: number | null } }[] }[] };
 type ActualPeriod = ForecastPeriodActual;
@@ -296,7 +296,7 @@ function IconPicker({ value, onChange, style }: { value: string; onChange: (next
   return <div className="icon-picker" role="radiogroup" aria-label="Choose an icon">{iconConditionKeys.map((key) => <button type="button" key={key} role="radio" aria-checked={value === key} className={value === key ? "active" : ""} title={iconConditionLabels[key]} onClick={() => onChange(key)}><img className="forecast-condition-icon" src={`/weather-icons/${style}/${key}.svg`} alt={iconConditionLabels[key]} /></button>)}</div>;
 }
 
-function createForecastDay(date: string): ForecastDayDraft { return { date, day: emptyPeriod("day"), night: emptyPeriod("night") }; }
+function createForecastDay(date: string): ForecastDayDraft { return { date, day: emptyPeriod("day"), night: emptyPeriod("night"), ready: false }; }
 
 const conditionOptions = [
   ["clear", "Clear"], ["mostly-sunny", "Mostly sunny"], ["partly-cloudy", "Partly cloudy"], ["mostly-cloudy", "Mostly cloudy"], ["cloudy", "Cloudy"], ["haze", "Haze or smoke"],
@@ -2529,21 +2529,26 @@ export default function Home() {
     }
   }
 
-  async function saveForecast(event: React.FormEvent<HTMLFormElement>) {
+  function handleForecastFormSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (isSubmitting) return;
+    const readyDays = forecastRun.days.filter((day) => day.ready);
+    submitForecastDays(readyDays.length ? readyDays : forecastRun.days);
+  }
+
+  async function submitForecastDays(daysToSubmit: ForecastDayDraft[]) {
+    if (isSubmitting || !daysToSubmit.length) return;
     if (!session || !supabaseUrl || !supabaseKey) {
       setSaveMessage("Sign in before submitting so this forecast can be archived safely.");
       return;
     }
-    if (selectedClassroomAssignment && assignmentDates(selectedClassroomAssignment).some((date) => !forecastRun.days.some((day) => day.date === date))) {
+    if (selectedClassroomAssignment && assignmentDates(selectedClassroomAssignment).some((date) => !daysToSubmit.some((day) => day.date === date))) {
       setSaveMessage(`This worksheet must include every target date for “${selectedClassroomAssignment.title}.” Open the assignment again to add the missing days.`);
       return;
     }
     setIsSubmitting(true);
     setSubmissionToken("");
     const savedAt = new Date().toISOString();
-    const nextArchives = forecastRun.days.map((day) => {
+    const nextArchives = daysToSubmit.map((day) => {
       return {
       id: crypto.randomUUID(), locationId: selectedLocation.id, locationName: selectedLocation.name, savedAt, label: archiveTitle({ savedAt }), targetDate: day.date,
       status: revisionParentRunId ? "revised" as const : "submitted" as const, versionNumber: 1, parentRunId: revisionParentRunId, authorId: session.user.id,
@@ -2557,7 +2562,7 @@ export default function Home() {
     } satisfies SavedForecast;
     });
     try {
-      const cloudRecord = await saveForecastRunToCloud(savedAt);
+      const cloudRecord = await saveForecastRunToCloud(savedAt, daysToSubmit);
       let instructorExamplePublished = false;
       if (publishInstructorForecast && selectedClassroomAssignmentId) {
         try {
@@ -2582,14 +2587,24 @@ export default function Home() {
       const detail = `${cloudArchives.length}-day forecast submitted${instructorExamplePublished ? " · instructor example published" : ""} · archive token ${cloudRecord.runId.slice(0, 8).toUpperCase()}`;
       setSaveMessage(`${detail}.`);
       setSubmissionToken(detail);
-      // A submitted forecast is immutable in the archive. Start a clean
-      // worksheet for the same target date so a deliberate re-submission is a
-      // new version rather than an accidental copy of stale values.
-      const nextTargetDate = forecastRun.days[selectedForecastDay]?.date ?? nextForecastDate();
-      const freshRun = createNewForecastRun();
-      freshRun.days[0] = { ...freshRun.days[0], date: nextTargetDate };
-      setForecastRun(freshRun);
-      setSelectedForecastDay(0);
+      // A submitted forecast is immutable in the archive. Days not included in
+      // this submission (e.g. a single day posted from its card, or days never
+      // marked Ready) stay in the draft untouched. If everything was just
+      // submitted, start a clean worksheet for the same target date so a
+      // deliberate re-submission is a new version rather than a stale copy.
+      const submittedDates = new Set(daysToSubmit.map((day) => day.date));
+      const previouslySelectedDate = forecastRun.days[selectedForecastDay]?.date;
+      const remainingDays = forecastRun.days.filter((day) => !submittedDates.has(day.date));
+      if (remainingDays.length) {
+        setForecastRun((run) => ({ ...run, days: remainingDays }));
+        const nextIndex = remainingDays.findIndex((day) => day.date === previouslySelectedDate);
+        setSelectedForecastDay(nextIndex >= 0 ? nextIndex : 0);
+      } else {
+        const freshRun = createNewForecastRun();
+        freshRun.days[0] = { ...freshRun.days[0], date: previouslySelectedDate ?? nextForecastDate() };
+        setForecastRun(freshRun);
+        setSelectedForecastDay(0);
+      }
       setPublishInstructorForecast(false);
       setRevisionParentRunId(null);
       setActiveScenarioId(null);
@@ -2600,12 +2615,12 @@ export default function Home() {
     }
   }
 
-  async function saveForecastRunToCloud(submittedAt: string) {
+  async function saveForecastRunToCloud(submittedAt: string, daysToSubmit: ForecastDayDraft[]) {
     if (!session || !supabaseUrl || !supabaseKey) throw new Error("Sign in is required to save this forecast.");
     const headers = { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json", Prefer: "return=representation" };
     const runResponse = await fetch(`${supabaseUrl}/rest/v1/forecast_runs`, {
       method: "POST", headers,
-      body: JSON.stringify({ user_id: session.user.id, location_name: selectedLocation.name, latitude: selectedLocation.latitude, longitude: selectedLocation.longitude, organization_id: activeWorkspace?.organizationId ?? null, classroom_id: activeWorkspace?.classroomId ?? null, assignment_id: selectedClassroomAssignmentId || null, parent_run_id: revisionParentRunId, scenario_id: activeScenarioId, publication_scope: "private", initial_horizon_days: forecastRun.days.length, status: revisionParentRunId ? "revised" : "submitted", submitted_at: submittedAt }),
+      body: JSON.stringify({ user_id: session.user.id, location_name: selectedLocation.name, latitude: selectedLocation.latitude, longitude: selectedLocation.longitude, organization_id: activeWorkspace?.organizationId ?? null, classroom_id: activeWorkspace?.classroomId ?? null, assignment_id: selectedClassroomAssignmentId || null, parent_run_id: revisionParentRunId, scenario_id: activeScenarioId, publication_scope: "private", initial_horizon_days: daysToSubmit.length, status: revisionParentRunId ? "revised" : "submitted", submitted_at: submittedAt }),
     });
     const runRows = await runResponse.json().catch(() => []);
     if (!runResponse.ok || !runRows[0]?.id) throw new Error("Forecast run storage is not ready. Confirm the forecast-runs SQL migration was run.");
@@ -2614,14 +2629,14 @@ export default function Home() {
       forecast: liveWeather?.forecast ? `${liveWeather.forecast.period}: ${liveWeather.forecast.shortForecast}; ${liveWeather.forecast.precipitationChance ?? 0}% precipitation chance` : "No NWS forecast available when saved",
       alerts: liveWeather?.alerts.length ? liveWeather.alerts.map((alert) => alert.event).join(", ") : liveWeather?.alertsAvailable === false ? "NWS alert feed unavailable when saved" : "No active NWS alerts when saved",
     };
-    const periods = forecastRun.days.flatMap((day) => ([
+    const periods = daysToSubmit.flatMap((day) => ([
       { run_id: runRows[0].id, valid_date: day.date, period: "day", forecast_data: day.day, evidence_snapshot: evidence },
       { run_id: runRows[0].id, valid_date: day.date, period: "night", forecast_data: day.night, evidence_snapshot: evidence },
     ]));
     const periodResponse = await fetch(`${supabaseUrl}/rest/v1/forecast_periods`, { method: "POST", headers, body: JSON.stringify(periods) });
     const periodRows = await periodResponse.json().catch(() => []);
     if (!periodResponse.ok) throw new Error("Forecast run was created, but its day/night periods could not be saved.");
-    const periodIdsByDate = Object.fromEntries(forecastRun.days.map((day) => {
+    const periodIdsByDate = Object.fromEntries(daysToSubmit.map((day) => {
       const dayPeriod = periodRows.find((period: { valid_date: string; period: string }) => period.valid_date === day.date && period.period === "day");
       const nightPeriod = periodRows.find((period: { valid_date: string; period: string }) => period.valid_date === day.date && period.period === "night");
       if (!dayPeriod?.id || !nightPeriod?.id) throw new Error("Forecast was saved, but its archive links were incomplete. Refresh before collecting actuals.");
@@ -2635,7 +2650,7 @@ export default function Home() {
     const archiveLocation = locationForArchive(archive);
     setLocationId(archiveLocation.id);
     setRevisionParentRunId(archive.runId ?? null);
-    setForecastRun({ id: crypto.randomUUID(), initialHorizonDays: 1, days: [{ date: targetDate, day: { ...emptyPeriod("day"), highLow: archive.day.high, conditions: archive.day.conditions, rainChance: archive.day.rainChance, timing: archive.day.timing, hazards: archive.day.hazards, reasoning: archive.day.reasoning ?? "", references: savedReferences(archive.day.references) }, night: { ...emptyPeriod("night"), highLow: archive.night.low, conditions: archive.night.conditions, rainChance: archive.night.rainChance, timing: archive.night.timing, hazards: archive.night.hazards, reasoning: archive.night.reasoning ?? "", references: savedReferences(archive.night.references) } }] });
+    setForecastRun({ id: crypto.randomUUID(), initialHorizonDays: 1, days: [{ date: targetDate, ready: false, day: { ...emptyPeriod("day"), highLow: archive.day.high, conditions: archive.day.conditions, rainChance: archive.day.rainChance, timing: archive.day.timing, hazards: archive.day.hazards, reasoning: archive.day.reasoning ?? "", references: savedReferences(archive.day.references) }, night: { ...emptyPeriod("night"), highLow: archive.night.low, conditions: archive.night.conditions, rainChance: archive.night.rainChance, timing: archive.night.timing, hazards: archive.night.hazards, reasoning: archive.night.reasoning ?? "", references: savedReferences(archive.night.references) } }] });
     setSelectedForecastDay(0); setArchiveMenuId(null); setSaveMessage(`Revision draft opened for ${targetDate} at ${archiveLocation.name}. Submit creates a new, auditable version.`); setActiveSection("forecast");
   }
 
@@ -3220,10 +3235,10 @@ export default function Home() {
         <div className="section-heading forecast-title"><div><h2>Forecast workspace</h2><p>Each tab is one dated Day/Night forecast.</p></div><div className="horizon-actions"><button type="button" onClick={() => { setRevisionParentRunId(null); setForecastRun(createNewForecastRun(3)); setSelectedForecastDay(0); }}>New 3-day</button><button type="button" onClick={() => { setRevisionParentRunId(null); setForecastRun(createNewForecastRun(7)); setSelectedForecastDay(0); }}>New 7-day</button></div></div>
         {activeWorkspace?.kind === "classroom" && showForecastAssignmentContext && selectedClassroomAssignment && <div className="assignment-linker assignment-context"><div><strong>{selectedClassroomAssignment.title}</strong><small>{assignmentDates(selectedClassroomAssignment).map(forecastTargetTitle).join(" · ")}{selectedClassroomAssignment.due_at ? ` · due ${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(selectedClassroomAssignment.due_at))}` : ""}</small>{selectedClassroomAssignment.instructions && <em>{selectedClassroomAssignment.instructions}</em>}</div>{canManageActiveClassroom && <label className="assignment-instructor-toggle"><input type="checkbox" checked={publishInstructorForecast} onChange={(event) => setPublishInstructorForecast(event.target.checked)} /> <span><strong>Share as instructor example</strong><small>Visible to this class after submission.</small></span></label>}</div>}
         {activeScenarioId && <div className="assignment-linker assignment-context scenario-context"><div><strong>{activeScenario?.title ?? "Historical scenario"}</strong><small>This date has already happened — submitting grades it immediately.</small>{activeScenario?.summary && <em>{activeScenario.summary}</em>}{activeScenario && (activeScenario.reference_notes || activeScenario.reference_links.length > 0) && <details className="scenario-reference-details"><summary>Reference data</summary>{activeScenario.reference_notes && <p>{activeScenario.reference_notes}</p>}{activeScenario.reference_links.length > 0 && <ul>{activeScenario.reference_links.map((link) => <li key={link.label}>{link.label}{link.detail ? ` — ${link.detail}` : ""}{link.url && <> · <a href={link.url} target="_blank" rel="noreferrer">Open</a></>}</li>)}</ul>}</details>}</div><button type="button" onClick={() => setActiveScenarioId(null)}>Clear scenario</button></div>}
-        <div className="day-outlook-cards" role="tablist" aria-label="Forecast days">{forecastRun.days.map((day, index) => <button type="button" key={`${day.date}-${index}`} className={index === selectedForecastDay ? "active" : ""} onClick={() => setSelectedForecastDay(index)} onContextMenu={(event) => { event.preventDefault(); setTabMenuIndex(index); setTabMenuPosition({ left: event.clientX, top: event.clientY }); setTabMenuMessage(""); }}><span className="dow">{new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(new Date(`${day.date}T12:00:00`))}</span><img src={`/weather-icons/${weatherIconStyle}/${periodIconCondition(day.day)}.svg`} alt="" /><em>{displayForecastTemperature(day.day.highLow)} / {displayForecastTemperature(day.night.highLow)}</em><small>{day.day.rainChance ? `${displayForecastChance(day.day.rainChance)} PoP` : "No PoP yet"}</small></button>)}<button className="add-day" type="button" aria-label="Add next forecast day" onClick={() => setForecastRun((run) => ({ ...run, days: [...run.days, createForecastDay(addDays(new Date(`${run.days.at(-1)?.date}T12:00:00`), 1))] }))}>+</button></div>
+        <div className="day-outlook-cards" role="tablist" aria-label="Forecast days">{forecastRun.days.map((day, index) => <div key={`${day.date}-${index}`} className={`day-outlook-card${index === selectedForecastDay ? " active" : ""}`}><button type="button" className="day-card-select" onClick={() => setSelectedForecastDay(index)} onContextMenu={(event) => { event.preventDefault(); setTabMenuIndex(index); setTabMenuPosition({ left: event.clientX, top: event.clientY }); setTabMenuMessage(""); }}><span className="dow">{new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(new Date(`${day.date}T12:00:00`))}</span><img src={`/weather-icons/${weatherIconStyle}/${periodIconCondition(day.day)}.svg`} alt="" /><em>{displayForecastTemperature(day.day.highLow)} / {displayForecastTemperature(day.night.highLow)}</em><small>{day.day.rainChance ? `${displayForecastChance(day.day.rainChance)} PoP` : "No PoP yet"}</small></button><div className="day-card-footer"><label><input type="checkbox" checked={day.ready} onChange={(event) => { const checked = event.target.checked; setForecastRun((run) => ({ ...run, days: run.days.map((candidate, candidateIndex) => candidateIndex === index ? { ...candidate, ready: checked } : candidate) })); }} /> Ready</label><button type="button" disabled={isSubmitting} onClick={() => submitForecastDays([day])}>Post</button></div></div>)}<button className="add-day" type="button" aria-label="Add next forecast day" onClick={() => setForecastRun((run) => ({ ...run, days: [...run.days, createForecastDay(addDays(new Date(`${run.days.at(-1)?.date}T12:00:00`), 1))] }))}>+</button></div>
         <input type="hidden" name="target-date" form="forecast-form" value={selectedDay.date} />
         {tabMenuIndex !== null && <div className="tab-menu" style={{ left: tabMenuPosition.left, top: tabMenuPosition.top }}><strong>{new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric" }).format(new Date(`${forecastRun.days[tabMenuIndex].date}T12:00:00`))}</strong><label>Change date<input type="date" value={forecastRun.days[tabMenuIndex].date} onChange={(event) => { const nextDate = event.target.value; if (forecastRun.days.some((day, index) => index !== tabMenuIndex && day.date === nextDate)) { setTabMenuMessage("That date already has a forecast tab."); return; } setForecastRun((run) => ({ ...run, days: run.days.map((day, index) => index === tabMenuIndex ? { ...day, date: nextDate } : day) })); setTabMenuMessage(""); }} /></label><div><button type="button" onClick={() => setTabMenuIndex(null)}>Done</button><button type="button" disabled={forecastRun.days.length === 1} onClick={() => { setForecastRun((run) => ({ ...run, days: run.days.filter((_, index) => index !== tabMenuIndex) })); setSelectedForecastDay((current) => Math.max(0, Math.min(current, forecastRun.days.length - 2))); setTabMenuIndex(null); }}>Remove day</button></div>{tabMenuMessage && <small>{tabMenuMessage}</small>}</div>}
-        <form id="forecast-form" onSubmit={saveForecast} onKeyDown={advanceForecastEntry}><div className="forecast-period-columns">
+        <form id="forecast-form" onSubmit={handleForecastFormSubmit} onKeyDown={advanceForecastEntry}><div className="forecast-period-columns">
           <fieldset className="forecast-period"><legend>{new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric" }).format(new Date(`${selectedDay.date}T12:00:00`))} day <small>7 AM–7 PM</small></legend><div className="forecast-fields">
             <label>High temperature<span className="unit-input" style={unitInputStyle(temperatureInputValue(selectedDay.day.highLow), 2)}><input inputMode="decimal" placeholder="72" value={temperatureInputValue(selectedDay.day.highLow)} onChange={(event) => updatePeriod("day", "highLow", temperatureInputValue(event.target.value))} onBlur={() => formatPeriodField("day", "highLow")} /><i aria-hidden="true">°</i></span></label>
             <label>Conditions<select value={selectedDay.day.conditions} onChange={(event) => updatePeriod("day", "conditions", event.target.value)}><option value="">Choose conditions</option>{conditionOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
@@ -3249,7 +3264,7 @@ export default function Home() {
             <label className="wide-field">Night reasoning<textarea value={selectedDay.night.reasoning} onChange={(event) => updatePeriod("night", "reasoning", event.target.value)} /></label>
           </div></fieldset></div>
           {submissionToken && <div className="submission-token" role="status"><span>✓</span><div><strong>Forecast archived</strong><small>{submissionToken}</small></div><button type="button" aria-label="Dismiss submission confirmation" onClick={() => setSubmissionToken("")}>×</button></div>}
-          <div className="form-actions"><span>{saveMessage || "Draft is saved automatically in this browser. Submitting archives each dated tab as an immutable record."}</span><button type="submit" disabled={isSubmitting}>{isSubmitting ? "Submitting forecast…" : "Submit forecast run"}</button></div>
+          <div className="form-actions"><span>{saveMessage || (forecastRun.days.some((day) => day.ready) ? "Draft is saved automatically in this browser. Mark a day Ready to include it, or post it alone from its card." : "Draft is saved automatically in this browser. Submitting archives every tab as an immutable record.")}</span><button type="submit" disabled={isSubmitting}>{isSubmitting ? "Submitting forecast…" : forecastRun.days.some((day) => day.ready) ? `Submit ${forecastRun.days.filter((day) => day.ready).length} ready day${forecastRun.days.filter((day) => day.ready).length === 1 ? "" : "s"}` : "Submit forecast run"}</button></div>
         </form>
       </section>}
 
