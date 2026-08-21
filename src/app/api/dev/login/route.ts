@@ -91,11 +91,15 @@ async function provisionAndMintSession(): Promise<
     userId = createdData.id;
   }
 
-  // Own profile: owner role unlocks Control's full admin view too.
+  // display_name only: a DB trigger deliberately blocks role changes unless
+  // the acting user is already an owner/admin (a real security guard, not a
+  // bug -- an automated service-role request doesn't satisfy it, and it
+  // shouldn't). This test account stays whatever role a fresh signup gets;
+  // Control/admin-only views need a real owner account to verify, not this one.
   await fetch(`${supabaseUrl}/rest/v1/profiles?id=eq.${userId}`, {
     method: "PATCH",
     headers: adminHeaders,
-    body: JSON.stringify({ role: "owner", display_name: "Dev Test (Claude)" }),
+    body: JSON.stringify({ display_name: "Dev Test (Claude)" }),
   }).catch(() => null);
 
   // Test organization ("school").
@@ -127,6 +131,21 @@ async function provisionAndMintSession(): Promise<
     }
   }
 
+  // A classroom insert is rejected by a DB trigger unless its school already
+  // has an active class allocation -- give the test org one so classroom
+  // creation below actually succeeds instead of failing silently.
+  if (orgId) {
+    const entitlementLookup = await fetch(`${supabaseUrl}/rest/v1/organization_entitlements?organization_id=eq.${orgId}&select=id`, { headers: adminHeaders });
+    const entitlementRows = entitlementLookup.ok ? await entitlementLookup.json().catch(() => []) : [];
+    if (!entitlementRows[0]) {
+      await fetch(`${supabaseUrl}/rest/v1/organization_entitlements`, {
+        method: "POST",
+        headers: adminHeaders,
+        body: JSON.stringify({ organization_id: orgId, class_limit: 5, class_seat_limit: 35, status: "active" }),
+      }).catch(() => null);
+    }
+  }
+
   // Test classroom, with the dev user as instructor.
   let classroomId: string | null = null;
   if (orgId) {
@@ -142,6 +161,7 @@ async function provisionAndMintSession(): Promise<
         body: JSON.stringify({ organization_id: orgId, name: DEV_CLASS_NAME, term: "Test", created_by: userId }),
       });
       const classRows = await classCreate.json().catch(() => []);
+      if (!classCreate.ok) console.error("[dev/login] classroom creation failed:", classRows);
       classroomId = classCreate.ok ? classRows[0]?.id ?? null : null;
     }
   }
