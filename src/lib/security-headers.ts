@@ -1,5 +1,10 @@
 type Header = { key: string; value: string };
 
+// upgrade-insecure-requests tells the browser to force every sub-resource on
+// the page onto HTTPS, no matter what scheme was actually requested -- right
+// for production (real TLS), but it silently breaks `next dev` over plain
+// HTTP: the page itself loads, then every CSS/JS/API request it makes gets
+// upgraded to HTTPS and fails outright since there's no local certificate.
 const contentSecurityPolicy = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-inline' https://unpkg.com",
@@ -11,7 +16,7 @@ const contentSecurityPolicy = [
   "base-uri 'self'",
   "form-action 'self'",
   "frame-ancestors 'none'",
-  "upgrade-insecure-requests",
+  ...(process.env.NODE_ENV === "development" ? [] : ["upgrade-insecure-requests"]),
 ].join("; ");
 
 export function securityHeaders(): Header[] {
