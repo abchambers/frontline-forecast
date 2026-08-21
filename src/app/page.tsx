@@ -237,11 +237,18 @@ function nextForecastDate() {
 }
 
 function initialsFor(displayName: string | null | undefined, email: string | null | undefined) {
+  const firstLetter = (word: string) => word.match(/[\p{L}\p{N}]/u)?.[0] ?? "";
   const name = (displayName ?? "").trim();
   if (name) {
     const parts = name.split(/\s+/).filter(Boolean);
-    if (parts.length >= 2) return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
-    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    if (parts.length >= 2) {
+      const initials = `${firstLetter(parts[0])}${firstLetter(parts[parts.length - 1])}`.toUpperCase();
+      if (initials.length === 2) return initials;
+    }
+    if (parts.length >= 1) {
+      const letters = parts.flatMap((part) => part.match(/[\p{L}\p{N}]/gu) ?? []).slice(0, 2).join("");
+      if (letters) return letters.toUpperCase();
+    }
   }
   const local = (email ?? "").split("@")[0];
   return local ? local.slice(0, 2).toUpperCase() : "?";

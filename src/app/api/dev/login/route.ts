@@ -99,7 +99,7 @@ async function provisionAndMintSession(): Promise<
   await fetch(`${supabaseUrl}/rest/v1/profiles?id=eq.${userId}`, {
     method: "PATCH",
     headers: adminHeaders,
-    body: JSON.stringify({ display_name: "Dev Test (Claude)" }),
+    body: JSON.stringify({ display_name: "Dev Test" }),
   }).catch(() => null);
 
   // Test organization ("school").
