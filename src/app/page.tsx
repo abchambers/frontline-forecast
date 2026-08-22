@@ -1456,7 +1456,6 @@ export default function Home() {
   const switchWorkspace = (workspace: WorkspaceContext) => {
     setActiveWorkspaceKey(workspace.key);
     setWorkspaceMenuOpen(false);
-    setWorkspaceContextStatus(`${workspaceDeskLabel(workspace)} is now active.`);
     if (workspace.kind === "classroom") {
       setClassroomHubTab("outlook");
       setActiveSection("classroom");
@@ -3408,8 +3407,8 @@ export default function Home() {
       {activeSection === "classroom" && session && activeWorkspace?.kind === "classroom" && <section className="workspace-card classroom-workspace">
         <div className="section-heading"><div><p className="eyebrow">Classroom desk</p><h2>{workspaceDeskLabel(activeWorkspace)}</h2><p>{activeWorkspace.active === false ? "Your access to this class has ended. Assignments and class tools are no longer available, but your past forecasts and grades are still yours to review under Verify." : canManageActiveClassroom ? "Plan assignments, assess submissions, and follow class progress in one private space." : "Find assignments, build a forecast, and learn from private feedback."}</p></div><span>{activeWorkspace.active === false ? "access ended" : activeWorkspace.role ?? "member"}</span></div>
         <nav className="classroom-hub-tabs" aria-label="Classroom sections">
-          <button type="button" className={classroomHubTab === "assignments" ? "active" : ""} onClick={() => setClassroomHubTab("assignments")}>Practice</button>
           <button type="button" className={classroomHubTab === "outlook" ? "active" : ""} onClick={() => setClassroomHubTab("outlook")}>Class forecast</button>
+          <button type="button" className={classroomHubTab === "assignments" ? "active" : ""} onClick={() => setClassroomHubTab("assignments")}>Practice</button>
           <button type="button" className={classroomHubTab === "progress" ? "active" : ""} onClick={() => setClassroomHubTab("progress")}>{canManageActiveClassroom ? "Class progress" : "Progress"}</button>
           <button type="button" className={classroomHubTab === "leaderboard" ? "active" : ""} onClick={() => setClassroomHubTab("leaderboard")}>Leaderboard</button>
           {canManageActiveClassroom && <button type="button" className={classroomHubTab === "roster" ? "active" : ""} onClick={() => setClassroomHubTab("roster")}>Roster</button>}
