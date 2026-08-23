@@ -1142,7 +1142,7 @@ function emptyOfficialClassForecast() : ClassForecastSnapshot {
   </section>;
 } */
 
-function ClassroomAssignmentStudio({ assignments, submissions, roster, selectedAssignmentId, canManage, canOpenForecast, onCreate, onSelectAssignment, onOpenForecast, message }: { assignments: ClassroomAssignment[]; submissions: ClassroomAssignmentSubmission[]; roster: AcademicRosterMember[]; selectedAssignmentId: string; canManage: boolean; canOpenForecast: boolean; onCreate: (fields: ClassroomAssignmentFields) => void; onSelectAssignment: (assignment: ClassroomAssignment) => void; onOpenForecast: () => void; message: string }) {
+function ClassroomAssignmentStudio({ assignments, submissions, roster, selectedAssignmentId, dismissedAssignmentId, canManage, canOpenForecast, onCreate, onSelectAssignment, onDismissAssignment, onOpenForecast, message }: { assignments: ClassroomAssignment[]; submissions: ClassroomAssignmentSubmission[]; roster: AcademicRosterMember[]; selectedAssignmentId: string; dismissedAssignmentId: string | null; canManage: boolean; canOpenForecast: boolean; onCreate: (fields: ClassroomAssignmentFields) => void; onSelectAssignment: (assignment: ClassroomAssignment) => void; onDismissAssignment: (assignmentId: string) => void; onOpenForecast: () => void; message: string }) {
   const [composerOpen, setComposerOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [startDate, setStartDate] = useState(nextForecastDate());
@@ -1150,7 +1150,6 @@ function ClassroomAssignmentStudio({ assignments, submissions, roster, selectedA
   const [dueAt, setDueAt] = useState("");
   const [instructions, setInstructions] = useState("");
   const [status, setStatus] = useState<ClassroomAssignment["status"]>("open");
-  const [dismissedId, setDismissedId] = useState<string | null>(null);
   const targetDates = Array.from({ length: dayCount }, (_, index) => addDays(new Date(`${startDate}T12:00:00`), index));
   const studentName = (userId: string) => roster.find((member) => member.userId === userId)?.label ?? "Student";
   const latestSubmissionsFor = (assignmentId: string) => {
@@ -1162,10 +1161,10 @@ function ClassroomAssignmentStudio({ assignments, submissions, roster, selectedA
     <header className="section-heading"><div><p className="eyebrow">Practice</p><h2>Practice assignments</h2></div>{canManage && <button type="button" onClick={() => setComposerOpen((open) => !open)}>{composerOpen ? "Cancel" : "+ New assignment"}</button>}</header>
     {canManage && composerOpen && <form className="assignment-composer" onSubmit={(event) => { event.preventDefault(); if (!title.trim() || !targetDates.length) return; onCreate({ title: title.trim(), instructions: instructions.trim() || null, target_dates: targetDates, due_at: dueAt ? new Date(dueAt).toISOString() : null, status }); setTitle(""); setInstructions(""); setDueAt(""); setStartDate(nextForecastDate()); setDayCount(1); setComposerOpen(false); }}><div className="assignment-composer-fields"><label>Assignment name<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="e.g. Early-week convection" /></label><label>Start date<input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></label><label>Days<select value={dayCount} onChange={(event) => setDayCount(Number(event.target.value))}>{[1, 2, 3, 4, 5, 6, 7].map((count) => <option key={count} value={count}>{count}</option>)}</select></label><label>Due time<input type="datetime-local" value={dueAt} onChange={(event) => setDueAt(event.target.value)} /></label><label>Status<select value={status} onChange={(event) => setStatus(event.target.value as ClassroomAssignment["status"])}><option value="draft">Draft</option><option value="open">Open to students</option><option value="closed">Closed</option></select></label></div><label>Directions or grading focus<textarea value={instructions} onChange={(event) => setInstructions(event.target.value)} placeholder="What should students examine, explain, or practice?" /></label><button type="submit" disabled={!title.trim() || !targetDates.length}>Create assignment</button></form>}
     <section className="assignment-rail"><header><h3>All assignments</h3></header><div>{assignments.map((assignment) => {
-      const isOpen = assignment.id === selectedAssignmentId && dismissedId !== assignment.id;
+      const isOpen = assignment.id === selectedAssignmentId && dismissedAssignmentId !== assignment.id;
       const dates = assignmentDates(assignment);
       const latestSubmissions = isOpen ? latestSubmissionsFor(assignment.id) : [];
-      return <details key={assignment.id} open={isOpen} onToggle={(event) => { const nowOpen = (event.currentTarget as HTMLDetailsElement).open; if (nowOpen) { onSelectAssignment(assignment); setDismissedId(null); } else if (assignment.id === selectedAssignmentId) { setDismissedId(assignment.id); } }}>
+      return <details key={assignment.id} open={isOpen} onToggle={(event) => { const nowOpen = (event.currentTarget as HTMLDetailsElement).open; if (nowOpen) { onSelectAssignment(assignment); } else if (assignment.id === selectedAssignmentId) { onDismissAssignment(assignment.id); } }}>
         <summary><span><strong>{assignment.title}</strong><small>{dates.map(forecastTargetTitle).join(" · ")}</small></span><b>{assignment.status}</b></summary>
         <div className="assignment-focus">
           <header><div><p>{assignment.instructions || "No additional directions were added."}</p><small>{dates.map(forecastTargetTitle).join(" · ")}{assignment.due_at ? ` · due ${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(assignment.due_at))}` : ""}</small></div>{canOpenForecast && <button type="button" onClick={onOpenForecast}>{canManage ? "Build example" : "Start assignment"}</button>}</header>
@@ -1180,9 +1179,10 @@ function ClassroomAssignmentStudio({ assignments, submissions, roster, selectedA
   </section>;
 }
 
-function ClassroomAssignmentDesk(props: { assignments: ClassroomAssignment[]; submissions: ClassroomAssignmentSubmission[]; roster: AcademicRosterMember[]; selectedAssignmentId: string; canManage: boolean; canOpenForecast: boolean; onCreate: (fields: ClassroomAssignmentFields) => void; onSelectAssignment: (assignment: ClassroomAssignment) => void; onOpenForecast: () => void; onReviewStudent: (student: AcademicRosterMember) => void; message: string }) {
-  const assignment = props.assignments.find((item) => item.id === props.selectedAssignmentId);
-  return <><ClassroomAssignmentStudio assignments={props.assignments} submissions={props.submissions} roster={props.roster} selectedAssignmentId={props.selectedAssignmentId} canManage={props.canManage} canOpenForecast={props.canOpenForecast} onCreate={props.onCreate} onSelectAssignment={props.onSelectAssignment} onOpenForecast={props.onOpenForecast} message={props.message} />{props.canManage && <ClassroomInstructorOverview assignment={assignment ?? null} submissions={props.submissions} roster={props.roster} onReviewStudent={props.onReviewStudent} />}</>;
+function ClassroomAssignmentDesk(props: { assignments: ClassroomAssignment[]; submissions: ClassroomAssignmentSubmission[]; roster: AcademicRosterMember[]; selectedAssignmentId: string; dismissedAssignmentId: string | null; canManage: boolean; canOpenForecast: boolean; onCreate: (fields: ClassroomAssignmentFields) => void; onSelectAssignment: (assignment: ClassroomAssignment) => void; onDismissAssignment: (assignmentId: string) => void; onOpenForecast: () => void; onReviewStudent: (student: AcademicRosterMember) => void; message: string }) {
+  const isDismissed = props.dismissedAssignmentId === props.selectedAssignmentId;
+  const assignment = isDismissed ? undefined : props.assignments.find((item) => item.id === props.selectedAssignmentId);
+  return <><ClassroomAssignmentStudio assignments={props.assignments} submissions={props.submissions} roster={props.roster} selectedAssignmentId={props.selectedAssignmentId} dismissedAssignmentId={props.dismissedAssignmentId} canManage={props.canManage} canOpenForecast={props.canOpenForecast} onCreate={props.onCreate} onSelectAssignment={props.onSelectAssignment} onDismissAssignment={props.onDismissAssignment} onOpenForecast={props.onOpenForecast} message={props.message} />{props.canManage && assignment && <ClassroomInstructorOverview assignment={assignment} submissions={props.submissions} roster={props.roster} onReviewStudent={props.onReviewStudent} />}</>;
 }
 
 // deprecated: graded blind, with no automatic score visible. Superseded by ClassroomInstructorOverview + ClassroomReviewPanel. Kept for reference.
@@ -1403,6 +1403,7 @@ export default function Home() {
   const [assignmentSubmissions, setAssignmentSubmissions] = useState<ClassroomAssignmentSubmission[]>([]);
   const [assignmentSubmissionRefreshToken, setAssignmentSubmissionRefreshToken] = useState(0);
   const [selectedClassroomAssignmentId, setSelectedClassroomAssignmentId] = useState("");
+  const [dismissedClassroomAssignmentId, setDismissedClassroomAssignmentId] = useState<string | null>(null);
   const [classroomHubTab, setClassroomHubTab] = useState<ClassroomHubTab>(() => {
     if (typeof window === "undefined") return "assignments";
     const tab = new URLSearchParams(window.location.search).get("tab");
@@ -1469,7 +1470,13 @@ export default function Home() {
 
   const selectClassroomAssignment = (assignment: ClassroomAssignment) => {
     setSelectedClassroomAssignmentId(assignment.id);
+    setDismissedClassroomAssignmentId(null);
     setAssignmentMessage(`Selected “${assignment.title}”. Review the dates and directions, then choose ${canManageActiveClassroom ? "Build example" : "Start assignment"} when ready.`);
+  };
+
+  const dismissClassroomAssignment = (assignmentId: string) => {
+    setDismissedClassroomAssignmentId(assignmentId);
+    setAssignmentMessage("");
   };
 
   const switchWorkspace = (workspace: WorkspaceContext) => {
@@ -3471,7 +3478,7 @@ export default function Home() {
           <button type="button" className={classroomHubTab === "leaderboard" ? "active" : ""} onClick={() => setClassroomHubTab("leaderboard")}>Leaderboard</button>
           {canManageActiveClassroom && <button type="button" className={classroomHubTab === "roster" ? "active" : ""} onClick={() => setClassroomHubTab("roster")}>Roster</button>}
         </nav>
-        {classroomHubTab === "assignments" && (reviewTarget && reviewTarget.classroomId === activeWorkspace.classroomId ? <><ClassroomReviewPanel target={reviewTarget} runs={visibleReviewRuns} selectedRun={selectedReviewRun} notes={reviewNotes} comment={reviewComment} manualScore={reviewManualScore} message={reviewMessage} onSelectRun={setSelectedReviewRunId} onCommentChange={setReviewComment} onManualScoreChange={setReviewManualScore} onSave={saveForecastReview} onClose={() => { setReviewTarget(null); setReviewRuns([]); setReviewNotes({}); }} />{selectedReviewRun && <InstructorRubricCard rubric={reviewRubric} onRubricChange={setReviewRubric} notes={reviewNotes[selectedReviewRun.id] ?? []} onSave={() => saveForecastReview(selectedReviewRun.id)} />}</> : <ClassroomAssignmentDesk assignments={classroomAssignments} submissions={assignmentSubmissions} roster={academicRoster} selectedAssignmentId={selectedClassroomAssignmentId} canManage={canManageActiveClassroom} canOpenForecast={showForecastAssignmentContext} onCreate={createClassroomAssignment} onSelectAssignment={selectClassroomAssignment} onOpenForecast={() => openClassroomAssignment(selectedClassroomAssignment!)} onReviewStudent={(student) => setReviewTarget({ userId: student.userId, label: student.label, organizationId: activeWorkspace.organizationId!, classroomId: activeWorkspace.classroomId, assignmentId: selectedClassroomAssignmentId })} message={assignmentMessage} />)}
+        {classroomHubTab === "assignments" && (reviewTarget && reviewTarget.classroomId === activeWorkspace.classroomId ? <><ClassroomReviewPanel target={reviewTarget} runs={visibleReviewRuns} selectedRun={selectedReviewRun} notes={reviewNotes} comment={reviewComment} manualScore={reviewManualScore} message={reviewMessage} onSelectRun={setSelectedReviewRunId} onCommentChange={setReviewComment} onManualScoreChange={setReviewManualScore} onSave={saveForecastReview} onClose={() => { setReviewTarget(null); setReviewRuns([]); setReviewNotes({}); }} />{selectedReviewRun && <InstructorRubricCard rubric={reviewRubric} onRubricChange={setReviewRubric} notes={reviewNotes[selectedReviewRun.id] ?? []} onSave={() => saveForecastReview(selectedReviewRun.id)} />}</> : <ClassroomAssignmentDesk assignments={classroomAssignments} submissions={assignmentSubmissions} roster={academicRoster} selectedAssignmentId={selectedClassroomAssignmentId} dismissedAssignmentId={dismissedClassroomAssignmentId} canManage={canManageActiveClassroom} canOpenForecast={showForecastAssignmentContext} onCreate={createClassroomAssignment} onSelectAssignment={selectClassroomAssignment} onDismissAssignment={dismissClassroomAssignment} onOpenForecast={() => openClassroomAssignment(selectedClassroomAssignment!)} onReviewStudent={(student) => setReviewTarget({ userId: student.userId, label: student.label, organizationId: activeWorkspace.organizationId!, classroomId: activeWorkspace.classroomId, assignmentId: selectedClassroomAssignmentId })} message={assignmentMessage} />)}
         {classroomHubTab === "outlook" && <ClassroomLiveForecast archives={archives} roster={academicRoster} canManage={canManageActiveClassroom} publicGuidance={outlook} message={assignmentMessage} />}
         {classroomHubTab === "progress" && <ClassroomProgress assignments={classroomAssignments} submissions={assignmentSubmissions} roster={academicRoster} canManage={canManageActiveClassroom} currentUserId={session.user.id} />}
         {classroomHubTab === "leaderboard" && <ClassroomLeaderboard assignments={classroomAssignments} submissions={assignmentSubmissions} roster={academicRoster} currentUserId={session.user.id} />}
