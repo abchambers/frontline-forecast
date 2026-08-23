@@ -22,7 +22,7 @@ type PublicNavigationItem = { id: string; label: string; target: "weather" | "ra
 type WorkspaceNavigationItem = { id: "weather" | "radar" | "about" | "forecast" | "verify" | "control"; label: string; access: "public" | "member" | "staff" | "owner"; enabled: boolean };
 type HomepageContent = { title: string; description: string; primaryAction: string; secondaryAction: string; outlookTitle: string; outlookCaption: string; radarTitle: string; radarCaption: string; referenceTitle: string; referenceCaption: string; showOutlook: boolean; showRadar: boolean; showReferences: boolean };
 type AboutContent = { eyebrow: string; title: string; description: string; principles: { title: string; body: string }[] };
-type ClassroomHubTab = "assignments" | "outlook" | "progress" | "leaderboard" | "roster";
+type ClassroomHubTab = "assignments" | "outlook" | "progress" | "roster";
 type ClassroomRosterMember = { userId: string; label: string; email: string | null; status: "active" | "invited" | "suspended"; enrolledAt: string };
 type LiveWeather = {
   location: string;
@@ -961,43 +961,35 @@ function ClassroomProgress({ assignments, submissions, roster, canManage, curren
   return <section className="classroom-progress"><header><p className="eyebrow">Class progress</p><h3>Submission status</h3></header><div className="classroom-progress-summary"><article><span>Students</span><strong>{students.length}</strong><small>enrolled in this class</small></article><article><span>Assignments</span><strong>{assignments.length}</strong><small>available for review</small></article></div><div className="class-progress-roster">{students.map((student) => { const completed = assignments.filter((assignment) => Boolean(latestFor(assignment.id, student.userId))); return <details key={student.userId}><summary><span><strong>{student.label}</strong><small>{student.email ?? "Student account"}</small></span><b>{completed.length}/{assignments.length} submitted</b></summary><div>{assignments.map((assignment) => { const submission = latestFor(assignment.id, student.userId); return <article key={assignment.id}><header><strong>{assignment.title}</strong><small>{assignmentDates(assignment).map(forecastTargetTitle).join(" · ")}</small></header>{submission ? <div className="assignment-submission-days">{assignmentDates(assignment).map((date) => <ForecastDayMiniCard key={date} date={date} periods={submission.forecast_periods} />)}</div> : <p className="empty">No submission yet.</p>}</article>; })}</div></details>; })}{!students.length && <p className="empty">Add students from Control before creating class work.</p>}</div></section>;
 }
 
-function ClassroomLeaderboard({ assignments, submissions, roster, currentUserId }: { assignments: ClassroomAssignment[]; submissions: ClassroomAssignmentSubmission[]; roster: AcademicRosterMember[]; currentUserId?: string }) {
-  const students = roster.filter((member) => member.role === "student");
-  const latestFor = (assignmentId: string, userId: string) => submissions.filter((submission) => submission.assignment_id === assignmentId && submission.user_id === userId && submission.status !== "withdrawn").sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
-  const rows = students.map((student) => {
-    const scores: number[] = [];
-    let submittedCount = 0;
-    assignments.forEach((assignment) => {
-      const submission = latestFor(assignment.id, student.userId);
-      if (submission) submittedCount += 1;
-      const periods = Array.isArray(submission?.forecast_periods) ? submission.forecast_periods : [];
-      periods.forEach((period) => (Array.isArray(period.forecast_verifications) ? period.forecast_verifications : []).forEach((verification) => {
-        const score = verification.score_data?.automaticScore;
-        if (typeof score === "number") scores.push(score);
-      }));
-    });
-    const averageScore = scores.length ? Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length) : null;
-    return { student, averageScore, scoredPeriods: scores.length, submittedCount };
-  });
-  const ranked = rows.filter((row): row is typeof row & { averageScore: number } => row.averageScore !== null).sort((a, b) => b.averageScore - a.averageScore);
-  const unranked = rows.filter((row) => row.averageScore === null);
-  const medal = (rank: number) => (rank === 0 ? "🥇" : rank === 1 ? "🥈" : rank === 2 ? "🥉" : `#${rank + 1}`);
-  return <section className="classroom-leaderboard"><header><p className="eyebrow">Leaderboard</p><h3>Forecast accuracy ranking</h3><p>Ranked by average automatic accuracy score across every scored forecast period this class has submitted.</p></header>
-    {ranked.length ? <ol className="leaderboard-list">{ranked.map((row, index) => <li key={row.student.userId} className={row.student.userId === currentUserId ? "leaderboard-me" : ""}><span className="leaderboard-rank">{medal(index)}</span><span className="leaderboard-name"><strong>{row.student.label}</strong><small>{row.submittedCount}/{assignments.length} submitted · {row.scoredPeriods} period{row.scoredPeriods === 1 ? "" : "s"} scored</small></span><span className="leaderboard-score">{row.averageScore}%</span></li>)}</ol> : <p className="empty">No scored forecasts yet — rankings appear once actuals verify submitted periods.</p>}
-    {unranked.length > 0 && <div className="leaderboard-pending"><strong>Awaiting first score</strong><div>{unranked.map((row) => <span key={row.student.userId}>{row.student.label}</span>)}</div></div>}
-  </section>;
-}
-
-function ClassroomRosterPanel({ roster, message, onRevoke, onRestore }: { roster: ClassroomRosterMember[]; message: string; onRevoke: (userId: string) => void; onRestore: (userId: string) => void }) {
+function ClassroomRosterPanel({ roster, assignments, submissions, message, onRevoke, onRestore, onInvite }: { roster: ClassroomRosterMember[]; assignments: ClassroomAssignment[]; submissions: ClassroomAssignmentSubmission[]; message: string; onRevoke: (userId: string) => void; onRestore: (userId: string) => void; onInvite: (email: string) => Promise<void> }) {
   const [menu, setMenu] = useState<{ userId: string; left: number; top: number } | null>(null);
-  const active = roster.filter((member) => member.status === "active");
-  const revoked = roster.filter((member) => member.status === "suspended");
+  const [query, setQuery] = useState("");
+  const [openStudentId, setOpenStudentId] = useState<string | null>(null);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const matches = (member: ClassroomRosterMember) => {
+    const term = query.trim().toLowerCase();
+    if (!term) return true;
+    return member.label.toLowerCase().includes(term) || (member.email ?? "").toLowerCase().includes(term);
+  };
+  const active = roster.filter((member) => member.status === "active" && matches(member));
+  const revoked = roster.filter((member) => member.status === "suspended" && matches(member));
   const openMenu = (userId: string) => (event: ReactMouseEvent) => { event.preventDefault(); setMenu({ userId, left: event.clientX, top: event.clientY }); };
   const menuMember = menu ? roster.find((member) => member.userId === menu.userId) : null;
-  return <section className="classroom-roster"><header><p className="eyebrow">Roster</p><h3>Enrolled students</h3><p>Review each semester and revoke access for students who&apos;ve graduated, dropped, or moved on. Revoking keeps their past forecasts and grades on record — it only stops new work. Right-click a student for actions.</p></header>
-    <div className="classroom-roster-list">{active.map((member) => <article key={member.userId} onContextMenu={openMenu(member.userId)}><span><strong>{member.label}</strong><small>{member.email ?? "No email on file"} · enrolled {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(new Date(member.enrolledAt))}</small></span><button type="button" className="danger" onClick={() => onRevoke(member.userId)}>Revoke access</button></article>)}{!active.length && !message && <p className="empty">No active students.</p>}</div>
-    {revoked.length > 0 && <details className="history-fold"><summary>Revoked · {revoked.length}</summary><div className="classroom-roster-list">{revoked.map((member) => <article key={member.userId} onContextMenu={openMenu(member.userId)}><span><strong>{member.label}</strong><small>{member.email ?? "No email on file"}</small></span><button type="button" onClick={() => onRestore(member.userId)}>Restore access</button></article>)}</div></details>}
-    {menu && menuMember && <div className="tab-menu" style={{ left: menu.left, top: menu.top }}><strong>{menuMember.label}</strong><div>{menuMember.status === "active" ? <button type="button" onClick={() => { onRevoke(menuMember.userId); setMenu(null); }}>Revoke access</button> : <button type="button" onClick={() => { onRestore(menuMember.userId); setMenu(null); }}>Restore access</button>}<button type="button" onClick={() => setMenu(null)}>Close</button></div></div>}
+  const openStudent = roster.find((member) => member.userId === openStudentId) ?? null;
+  const latestFor = (assignmentId: string, userId: string) => submissions.filter((submission) => submission.assignment_id === assignmentId && submission.user_id === userId && submission.status !== "withdrawn").sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+  return <section className="classroom-roster"><header><p className="eyebrow">Roster</p><h3>Enrolled students</h3><p>Click a student to review their grades, submissions, and access. Right-click for quick actions.</p></header>
+    <div className="roster-toolbar"><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search students by name or email" aria-label="Search students" />
+      <form onSubmit={async (event) => { event.preventDefault(); if (!inviteEmail.trim()) return; setInviteBusy(true); await onInvite(inviteEmail.trim()); setInviteBusy(false); setInviteEmail(""); }}><input type="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} placeholder="Invite by email" /><button type="submit" disabled={!inviteEmail.trim() || inviteBusy}>{inviteBusy ? "Inviting…" : "Invite student"}</button></form>
+    </div>
+    <div className="classroom-roster-list">{active.map((member) => <article key={member.userId} onClick={() => setOpenStudentId(member.userId)} onContextMenu={openMenu(member.userId)}><span><strong>{member.label}</strong><small>{member.email ?? "No email on file"} · enrolled {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(new Date(member.enrolledAt))}</small></span><b>View</b></article>)}{!active.length && !message && <p className="empty">{query ? "No students match that search." : "No active students."}</p>}</div>
+    {revoked.length > 0 && <details className="history-fold"><summary>Revoked · {revoked.length}</summary><div className="classroom-roster-list">{revoked.map((member) => <article key={member.userId} onClick={() => setOpenStudentId(member.userId)} onContextMenu={openMenu(member.userId)}><span><strong>{member.label}</strong><small>{member.email ?? "No email on file"}</small></span><b>View</b></article>)}</div></details>}
+    {menu && menuMember && <div className="tab-menu" style={{ left: menu.left, top: menu.top }}><strong>{menuMember.label}</strong><div><button type="button" onClick={() => { setOpenStudentId(menuMember.userId); setMenu(null); }}>View student</button><button type="button" onClick={() => setMenu(null)}>Close</button></div>{menuMember.status === "active" ? <button type="button" onClick={() => { onRevoke(menuMember.userId); setMenu(null); }}>Revoke access</button> : <button type="button" onClick={() => { onRestore(menuMember.userId); setMenu(null); }}>Restore access</button>}</div>}
+    {openStudent && <div className="student-detail-backdrop" onClick={() => setOpenStudentId(null)}><section className="student-detail" onClick={(event) => event.stopPropagation()}>
+      <header><div><p className="eyebrow">Student</p><h3>{openStudent.label}</h3><p>{openStudent.email ?? "No email on file"} · enrolled {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(new Date(openStudent.enrolledAt))}</p></div><button type="button" onClick={() => setOpenStudentId(null)}>Close</button></header>
+      <div className="student-detail-assignments">{assignments.filter((assignment) => assignment.status !== "archived").map((assignment) => { const submission = latestFor(assignment.id, openStudent.userId); const scores = submission ? submission.forecast_periods.flatMap((period) => (period.forecast_verifications ?? []).flatMap((verification) => typeof verification.score_data?.automaticScore === "number" ? [verification.score_data.automaticScore] : [])) : []; const averageScore = scores.length ? Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length) : null; return <article key={assignment.id}><span><strong>{assignment.title}</strong><small>{assignmentDates(assignment).map(forecastTargetTitle).join(" · ")}</small></span><b className={submission ? "status-ready" : "status-pending"}>{submission ? (averageScore !== null ? `${averageScore}%` : "Submitted") : "Not submitted"}</b></article>; })}{!assignments.filter((assignment) => assignment.status !== "archived").length && <p className="empty">No assignments have been created yet.</p>}</div>
+      <div className="student-detail-actions">{openStudent.status === "active" ? <button type="button" className="danger" onClick={() => onRevoke(openStudent.userId)}>Revoke access</button> : <button type="button" onClick={() => onRestore(openStudent.userId)}>Restore access</button>}</div>
+    </section></div>}
     {message && <p className="control-message" role="status">{message}</p>}
   </section>;
 }
@@ -1443,7 +1435,7 @@ export default function Home() {
   const [classroomHubTab, setClassroomHubTab] = useState<ClassroomHubTab>(() => {
     if (typeof window === "undefined") return "assignments";
     const tab = new URLSearchParams(window.location.search).get("tab");
-    return tab === "outlook" || tab === "assignments" || tab === "progress" || tab === "leaderboard" || tab === "roster" ? tab : "outlook";
+    return tab === "outlook" || tab === "assignments" || tab === "progress" || tab === "roster" ? tab : "outlook";
   });
   const [publishInstructorForecast, setPublishInstructorForecast] = useState(false);
   const [revisionParentRunId, setRevisionParentRunId] = useState<string | null>(null);
@@ -2108,6 +2100,30 @@ export default function Home() {
     }
     setClassroomRoster((roster) => roster.map((member) => member.userId === userId ? { ...member, status } : member));
     setClassroomRosterMessage(status === "suspended" ? "Access revoked. Their past forecasts and grades stay on record." : "Access restored.");
+  }
+
+  async function inviteClassroomStudent(email: string) {
+    if (!session || !supabaseUrl || !supabaseKey || !canManageActiveClassroom || activeWorkspace?.kind !== "classroom") return;
+    setClassroomRosterMessage("Sending invite…");
+    const inviteResponse = await fetch("/api/classroom/invite-student", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` }, body: JSON.stringify({ email }) });
+    const inviteBody = await inviteResponse.json().catch(() => null) as { userId?: string; invited?: boolean; message?: string } | null;
+    if (!inviteResponse.ok || !inviteBody?.userId) { setClassroomRosterMessage(inviteBody?.message || "The invite could not be sent."); return; }
+    if (classroomRoster.some((member) => member.userId === inviteBody.userId)) { setClassroomRosterMessage("That student is already on this roster."); return; }
+    // A classroom membership requires active school-level access first (the
+    // same rule a class-code redemption satisfies for itself) -- mirror that
+    // here rather than letting the classroom insert fail on a missing
+    // organization_memberships row.
+    if (activeWorkspace.organizationId) {
+      await fetch(`${supabaseUrl}/rest/v1/organization_memberships?on_conflict=organization_id,user_id`, { method: "POST", headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ organization_id: activeWorkspace.organizationId, user_id: inviteBody.userId, role: "student", status: "active" }) });
+    }
+    const membershipResponse = await fetch(`${supabaseUrl}/rest/v1/classroom_memberships?on_conflict=classroom_id,user_id`, { method: "POST", headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ classroom_id: activeWorkspace.classroomId, user_id: inviteBody.userId, role: "student", status: "active" }) });
+    if (!membershipResponse.ok) {
+      const body = await membershipResponse.json().catch(() => null) as { message?: string } | null;
+      setClassroomRosterMessage(body?.message || "The student could not be enrolled. Check your class capacity.");
+      return;
+    }
+    setClassroomRoster((roster) => [...roster, { userId: inviteBody.userId!, label: email, email, status: "active", enrolledAt: new Date().toISOString() }]);
+    setClassroomRosterMessage(inviteBody.invited ? "Invite sent. They will appear here as soon as they sign in." : "Student added to the class.");
   }
 
   useEffect(() => {
@@ -3582,14 +3598,12 @@ export default function Home() {
           <button type="button" className={classroomHubTab === "outlook" ? "active" : ""} onClick={() => setClassroomHubTab("outlook")}>Class forecast</button>
           <button type="button" className={classroomHubTab === "assignments" ? "active" : ""} onClick={() => setClassroomHubTab("assignments")}>Practice</button>
           <button type="button" className={classroomHubTab === "progress" ? "active" : ""} onClick={() => setClassroomHubTab("progress")}>{canManageActiveClassroom ? "Class progress" : "Progress"}</button>
-          <button type="button" className={classroomHubTab === "leaderboard" ? "active" : ""} onClick={() => setClassroomHubTab("leaderboard")}>Leaderboard</button>
           {canManageActiveClassroom && <button type="button" className={classroomHubTab === "roster" ? "active" : ""} onClick={() => setClassroomHubTab("roster")}>Roster</button>}
         </nav>
         {classroomHubTab === "assignments" && (reviewTarget && reviewTarget.classroomId === activeWorkspace.classroomId ? <><ClassroomReviewPanel target={reviewTarget} runs={visibleReviewRuns} selectedRun={selectedReviewRun} notes={reviewNotes} comment={reviewComment} manualScore={reviewManualScore} message={reviewMessage} onSelectRun={setSelectedReviewRunId} onCommentChange={setReviewComment} onManualScoreChange={setReviewManualScore} onSave={saveForecastReview} onClose={() => { setReviewTarget(null); setReviewRuns([]); setReviewNotes({}); }} />{selectedReviewRun && <InstructorRubricCard rubric={reviewRubric} onRubricChange={setReviewRubric} notes={reviewNotes[selectedReviewRun.id] ?? []} onSave={() => saveForecastReview(selectedReviewRun.id)} />}</> : <ClassroomAssignmentDesk assignments={classroomAssignments} submissions={assignmentSubmissions} roster={academicRoster} selectedAssignmentId={selectedClassroomAssignmentId} dismissedAssignmentId={dismissedClassroomAssignmentId} canManage={canManageActiveClassroom} canOpenForecast={showForecastAssignmentContext} onCreate={createClassroomAssignment} onSelectAssignment={selectClassroomAssignment} onDismissAssignment={dismissClassroomAssignment} onUpdateAssignment={updateClassroomAssignment} onOpenForecast={() => openClassroomAssignment(selectedClassroomAssignment!)} onReviewStudent={(student) => setReviewTarget({ userId: student.userId, label: student.label, organizationId: activeWorkspace.organizationId!, classroomId: activeWorkspace.classroomId, assignmentId: selectedClassroomAssignmentId })} message={assignmentMessage} />)}
         {classroomHubTab === "outlook" && <ClassroomLiveForecast archives={archives} roster={academicRoster} canManage={canManageActiveClassroom} publicGuidance={outlook} message={assignmentMessage} />}
         {classroomHubTab === "progress" && <ClassroomProgress assignments={classroomAssignments} submissions={assignmentSubmissions} roster={academicRoster} canManage={canManageActiveClassroom} currentUserId={session.user.id} />}
-        {classroomHubTab === "leaderboard" && <ClassroomLeaderboard assignments={classroomAssignments} submissions={assignmentSubmissions} roster={academicRoster} currentUserId={session.user.id} />}
-        {classroomHubTab === "roster" && canManageActiveClassroom && <ClassroomRosterPanel roster={classroomRoster} message={classroomRosterMessage} onRevoke={(userId) => setClassroomMemberStatus(userId, "suspended")} onRestore={(userId) => setClassroomMemberStatus(userId, "active")} />}
+        {classroomHubTab === "roster" && canManageActiveClassroom && <ClassroomRosterPanel roster={classroomRoster} assignments={classroomAssignments} submissions={assignmentSubmissions} message={classroomRosterMessage} onRevoke={(userId) => setClassroomMemberStatus(userId, "suspended")} onRestore={(userId) => setClassroomMemberStatus(userId, "active")} onInvite={inviteClassroomStudent} />}
       </section>}
       {activeSection === "control" && session && <section className="workspace-card control-panel plan-card"><header><p className="eyebrow">Account</p><h3>Your plan</h3><p>Model data, ensembles, and simulated reflectivity are part of Personal+. Live observations, radar, and the forecast workspace are on every plan.</p></header><div className="plan-status"><b className={hasSchoolMembership || personalTier === "paid" ? "status-ready" : "status-pending"}>{hasSchoolMembership ? "Included via school" : personalTier === "paid" ? "Personal+" : "Free"}</b>{hasSchoolMembership ? <span>Your school or class workspace already includes Personal+ features — no request needed.</span> : personalTier === "paid" ? <span>You have Personal+ access on this account.</span> : <span>Pricing is still being finalized while Frontline Forecast is pre-launch. Request access below and we will follow up by email.</span>}</div>{!hasSchoolMembership && personalTier !== "paid" && (pendingTierRequest ? <p className="control-message" role="status">Request pending review since {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(pendingTierRequest.created_at))}. Approved yet? <button type="button" className="login-menu-link" onClick={() => setProfileRefreshToken((value) => value + 1)}>Check again</button></p> : <form onSubmit={(event) => { event.preventDefault(); submitTierRequest(); }} className="settings-grid"><label>Note (optional)<textarea value={tierNote} onChange={(event) => setTierNote(event.target.value)} placeholder="Anything we should know?" rows={2} /></label><div className="settings-actions"><button type="submit" disabled={tierRequestBusy}>{tierRequestBusy ? "Sending…" : "Request Personal+ access"}</button></div></form>)}<div className="settings-actions"><button type="button" onClick={() => setJoinPanelOpen(true)}>Have a school or class code?</button></div>{tierRequestMessage && <p className="control-message" role="status">{tierRequestMessage}</p>}</section>}
       {activeSection === "control" && session && hasControlAccess && <section className="workspace-card control-panel"><header><p className="eyebrow">Account</p><h3>Tier requests</h3><p>Approve or deny Personal+ access until billing is wired up.</p></header><div className="access-roster-list">{adminTierRequests.map((request) => <div key={request.id}><span><strong>{request.profiles?.display_name || request.profiles?.email || request.user_id}</strong><small>{request.note || "No note"} · {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(request.created_at))}</small></span><button type="button" onClick={() => resolveTierRequest(request.id, true)}>Approve</button><button type="button" onClick={() => resolveTierRequest(request.id, false)}>Deny</button></div>)}</div>{!adminTierRequests.length && <p className="empty">No pending tier requests.</p>}{adminTierMessage && <p className="control-message" role="status">{adminTierMessage}</p>}</section>}
