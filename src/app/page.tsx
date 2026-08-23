@@ -2141,19 +2141,37 @@ export default function Home() {
     const organizationRequest = isOwner
       ? fetch(`${supabaseUrl}/rest/v1/organizations?select=id,name,kind&order=name.asc`, { headers })
       : fetch(`${supabaseUrl}/rest/v1/organization_memberships?select=organization_id,role,organizations(id,name,kind)&user_id=eq.${session.user.id}&status=eq.active`, { headers });
-    const classroomRequest = isOwner
-      ? fetch(`${supabaseUrl}/rest/v1/classrooms?select=id,name,term,organization_id,organizations(name)&order=name.asc`, { headers })
-      : fetch(`${supabaseUrl}/rest/v1/classroom_memberships?select=classroom_id,role,status,classrooms(id,name,term,organization_id,organizations(name))&user_id=eq.${session.user.id}`, { headers });
-    Promise.all([organizationRequest, classroomRequest]).then(async ([organizationResponse, classroomResponse]) => {
-      if (!organizationResponse.ok || !classroomResponse.ok) throw new Error("Your workspace list could not be loaded.");
+    organizationRequest.then(async (organizationResponse) => {
+      if (!organizationResponse.ok) throw new Error("Your workspace list could not be loaded.");
       const organizationRows = await organizationResponse.json() as (OrganizationRow | OrganizationMembershipRow)[];
+      // A school coordinator (org role owner/admin) manages every classroom in
+      // their school, not just ones they personally belong to — fetch those
+      // separately from the personal classroom_memberships list and merge, so
+      // e.g. a school owner who never joined a class as an instructor still
+      // sees and can manage all of that school's classes.
+      const coordinatorOrgIds = isOwner ? [] : [...new Set(organizationRows.flatMap((row) => "role" in row && row.organization_id && (row.role === "owner" || row.role === "admin") ? [row.organization_id] : []))];
+      const classroomRequest = isOwner
+        ? fetch(`${supabaseUrl}/rest/v1/classrooms?select=id,name,term,organization_id,organizations(name)&order=name.asc`, { headers })
+        : fetch(`${supabaseUrl}/rest/v1/classroom_memberships?select=classroom_id,role,status,classrooms(id,name,term,organization_id,organizations(name))&user_id=eq.${session.user.id}`, { headers });
+      const coordinatedClassroomRequest = coordinatorOrgIds.length
+        ? fetch(`${supabaseUrl}/rest/v1/classrooms?select=id,name,term,organization_id,organizations(name)&organization_id=in.(${coordinatorOrgIds.join(",")})&order=name.asc`, { headers })
+        : null;
+      const [classroomResponse, coordinatedClassroomResponse] = await Promise.all([classroomRequest, coordinatedClassroomRequest ?? Promise.resolve(null)]);
+      if (!classroomResponse.ok || (coordinatedClassroomResponse && !coordinatedClassroomResponse.ok)) throw new Error("Your workspace list could not be loaded.");
       const classroomRows = await classroomResponse.json() as (ClassroomRow | ClassroomMembershipRow)[];
+      const coordinatedClassroomRows = coordinatedClassroomResponse ? await coordinatedClassroomResponse.json() as ClassroomRow[] : [];
+      const coordinatorRoleByOrg = new Map(organizationRows.flatMap((row) => "role" in row && row.organization_id ? [[row.organization_id, row.role] as const] : []));
+      const membershipClassroomIds = new Set(classroomRows.flatMap((row) => { const classroom = "classrooms" in row ? row.classrooms : row; return classroom ? [classroom.id] : []; }));
+      const coordinatedOnlyRows: ClassroomMembershipRow[] = coordinatedClassroomRows
+        .filter((classroom) => !membershipClassroomIds.has(classroom.id))
+        .map((classroom) => ({ classroom_id: classroom.id, role: coordinatorRoleByOrg.get(classroom.organization_id) ?? "admin", status: "active", classrooms: classroom }));
+      const allClassroomRows = [...classroomRows, ...coordinatedOnlyRows];
       const organizations = organizationRows.flatMap((row) => {
         const organization = "organizations" in row ? row.organizations : row;
         if (!organization) return [];
         return [{ key: `organization:${organization.id}`, kind: "organization" as const, organizationId: organization.id, label: organization.name, detail: `${organization.kind} workspace`, role: "role" in row ? row.role : undefined }];
       });
-      const classrooms = classroomRows.flatMap((row) => {
+      const classrooms = allClassroomRows.flatMap((row) => {
         const classroom = "classrooms" in row ? row.classrooms : row;
         if (!classroom) return [];
         // A membership can be invited (not yet joined — don't show it as a desk),
@@ -2164,7 +2182,7 @@ export default function Home() {
         const active = status !== "suspended";
         return [{ key: `classroom:${classroom.id}`, kind: "classroom" as const, classroomId: classroom.id, organizationId: classroom.organization_id, label: classroom.name, detail: `${classroom.organizations?.name ?? "School"}${classroom.term ? ` · ${classroom.term}` : ""}${active ? "" : " · access ended"}`, role: "role" in row ? row.role : undefined, active }];
       });
-      const classroomOrganizations = classroomRows.flatMap((row) => {
+      const classroomOrganizations = allClassroomRows.flatMap((row) => {
         const classroom = "classrooms" in row ? row.classrooms : row;
         if (!classroom?.organizations?.name || organizations.some((organization) => organization.organizationId === classroom.organization_id)) return [];
         return [{ key: `organization:${classroom.organization_id}`, kind: "organization" as const, organizationId: classroom.organization_id, label: classroom.organizations.name, detail: "school workspace", role: "role" in row ? row.role : "student" }];
