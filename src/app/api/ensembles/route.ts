@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { weatherDeskLocation } from "@/lib/locations";
+import { resolveWeatherDeskLocation } from "@/lib/locations";
 import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 type EnsembleResponse = { hourly?: Record<string, Array<string | number | null>> };
@@ -27,7 +27,7 @@ function distribution(values: number[]) {
 export async function GET(request: Request) {
   const limit = checkRateLimit(request, "ensembles", 30, 60_000);
   if (limit.limited) return rateLimitResponse(limit.retryAfterSeconds);
-  const location = weatherDeskLocation(new URL(request.url).searchParams.get("location"));
+  const location = resolveWeatherDeskLocation(new URL(request.url).searchParams);
   const parameters = new URLSearchParams({
     latitude: String(location.latitude), longitude: String(location.longitude), timezone: location.timezone,
     temperature_unit: "fahrenheit",

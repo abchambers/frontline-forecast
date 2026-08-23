@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { weatherDeskLocation } from "@/lib/locations";
+import { resolveWeatherDeskLocation } from "@/lib/locations";
 import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 const LEVELS = [1000, 975, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200, 150, 100, 70, 50, 30];
 const MODELS = {
@@ -34,7 +34,7 @@ export async function GET(request: Request) {
   const search = new URL(request.url).searchParams;
   const requested = search.get("model") ?? "hrrr";
   const model = MODELS[requested as keyof typeof MODELS] ?? MODELS.hrrr;
-  const location = weatherDeskLocation(search.get("location"));
+  const location = resolveWeatherDeskLocation(search);
   const runOffset = Math.max(0, Math.min(24, Number.parseInt(search.get("runOffset") ?? "0", 10) || 0));
   const fields = LEVELS.flatMap((level) => [
     `temperature_${level}hPa`, `relative_humidity_${level}hPa`, `wind_speed_${level}hPa`,

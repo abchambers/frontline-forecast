@@ -31,6 +31,7 @@ export async function GET(request: Request) {
 
   const params = new URL(request.url).searchParams;
   const stationId = params.get("stationId")?.trim().toUpperCase();
+  const query = params.get("q")?.trim();
   let latitude = Number(params.get("lat"));
   let longitude = Number(params.get("lon"));
 
@@ -44,10 +45,26 @@ export async function GET(request: Request) {
       const station = await nws<{ geometry: { coordinates: [number, number] } | null }>(`https://api.weather.gov/stations/${stationId}`);
       if (!station.geometry) throw new Error(`${stationId} has no known coordinates.`);
       [longitude, latitude] = station.geometry.coordinates;
+    } else if (query) {
+      // Free-text city/state/ZIP search. Open-Meteo's geocoder is free, keyless, and ranks by
+      // population -- good enough to take the top match rather than building a disambiguation UI.
+      if (query.length < 2 || query.length > 100) {
+        return NextResponse.json({ error: "Enter a city, state, or ZIP code." }, { status: 400 });
+      }
+      const geoResponse = await fetch(
+        `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=1&country=US&language=en&format=json`,
+        { cache: "no-store" },
+      );
+      if (!geoResponse.ok) throw new Error("Location search is temporarily unavailable.");
+      const geoData = await geoResponse.json() as { results?: { latitude: number; longitude: number }[] };
+      const match = geoData.results?.[0];
+      if (!match) return NextResponse.json({ error: `No U.S. location found for "${query}". Try a city, state, or ZIP code.` }, { status: 404 });
+      latitude = match.latitude;
+      longitude = match.longitude;
     }
 
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) {
-      return NextResponse.json({ error: "A valid station ID or lat/lon pair is required." }, { status: 400 });
+      return NextResponse.json({ error: "A valid station ID, location search, or lat/lon pair is required." }, { status: 400 });
     }
 
     const point = await nws<{ properties: PointProperties }>(

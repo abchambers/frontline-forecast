@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { weatherDeskLocation } from "@/lib/locations";
+import { resolveWeatherDeskLocation } from "@/lib/locations";
 import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 function candidates() {
@@ -21,7 +21,7 @@ function stamp(date: Date) {
 export async function GET(request: Request) {
   const limit = checkRateLimit(request, "sounding", 30, 60_000);
   if (limit.limited) return rateLimitResponse(limit.retryAfterSeconds);
-  const location = weatherDeskLocation(new URL(request.url).searchParams.get("location"));
+  const location = resolveWeatherDeskLocation(new URL(request.url).searchParams);
   for (const candidate of candidates()) {
     const cycle = stamp(candidate);
     const url = `https://www.spc.noaa.gov/exper/soundings/${cycle}_OBS/${location.upperAirStation}.txt`;

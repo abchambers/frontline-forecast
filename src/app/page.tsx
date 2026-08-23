@@ -1285,6 +1285,7 @@ export default function Home() {
   const [locationId, setLocationId] = useState(defaultWeatherDeskLocation.id);
   const [customLocation, setCustomLocation] = useState<WeatherDeskLocation | null>(null);
   const [customStationStatus, setCustomStationStatus] = useState("");
+  const [locationSearchText, setLocationSearchText] = useState("");
   const [radarStations, setRadarStations] = useState<{ id: string; name: string; latitude: number; longitude: number }[] | null>(null);
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [defaultLocationId, setDefaultLocationId] = useState(defaultWeatherDeskLocation.id);
@@ -1455,6 +1456,12 @@ export default function Home() {
   const [revisionParentRunId, setRevisionParentRunId] = useState<string | null>(null);
   const [assignmentMessage, setAssignmentMessage] = useState("");
   const selectedLocation = customLocation ?? weatherDeskLocation(locationId);
+  // Every weather-data route needs this same location descriptor; a custom (searched or
+  // map-picked) location is already fully resolved client-side, so its fields ride along
+  // directly instead of each route re-deriving them from a preset id it wouldn't recognize.
+  const locationQuery = customLocation
+    ? `lat=${customLocation.latitude}&lon=${customLocation.longitude}&tz=${encodeURIComponent(customLocation.timezone)}&station=${encodeURIComponent(customLocation.observationStation)}&upperAir=${encodeURIComponent(customLocation.upperAirStation)}&radar=${encodeURIComponent(customLocation.radarSite)}&id=${encodeURIComponent(customLocation.id)}&name=${encodeURIComponent(customLocation.name)}`
+    : `location=${encodeURIComponent(locationId)}`;
   const liveDataStatus = weatherError
     ? { label: "Not synced", tone: "attention" }
     : weatherLoading || !liveWeather
@@ -1660,6 +1667,15 @@ export default function Home() {
     await resolveCustomLocation(`lat=${station.latitude}&lon=${station.longitude}`, `custom-radar-${station.id.toLowerCase()}`);
   }
 
+  async function searchLocation(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const query = locationSearchText.trim();
+    if (!query) return;
+    const slug = query.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || Date.now().toString();
+    await resolveCustomLocation(`q=${encodeURIComponent(query)}`, `custom-search-${slug}`);
+    setLocationSearchText("");
+  }
+
   async function resolveCustomLocation(query: string, id: string) {
     setCustomStationStatus("Looking up location…");
     try {
@@ -1715,7 +1731,7 @@ export default function Home() {
   useEffect(() => {
     let isActive = true;
     setWeatherLoading(true);
-    const loadWeather = () => fetch(`/api/weather?location=${encodeURIComponent(locationId)}`, { cache: "no-store" })
+    const loadWeather = () => fetch(`/api/weather?${locationQuery}`, { cache: "no-store" })
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "Unable to load live data");
@@ -1737,7 +1753,7 @@ export default function Home() {
       isActive = false;
       window.clearInterval(refreshId);
     };
-  }, [locationId]);
+  }, [locationQuery]);
 
   useEffect(() => {
     if (activeSection !== "radar" && activeSection !== "dashboard") return;
@@ -2334,7 +2350,7 @@ export default function Home() {
 
   useEffect(() => {
     if (activeSection !== "dashboard" || dataPanel !== "sounding") return;
-    fetch(`/api/sounding?location=${encodeURIComponent(locationId)}`)
+    fetch(`/api/sounding?${locationQuery}`)
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "Sounding data unavailable");
@@ -2342,11 +2358,11 @@ export default function Home() {
         setSoundingStatus("");
       })
       .catch((error: Error) => setSoundingStatus(error.message));
-  }, [activeSection, dataPanel, locationId]);
+  }, [activeSection, dataPanel, locationQuery]);
 
   useEffect(() => {
     if (activeSection !== "dashboard" || dataPanel !== "nbm") return;
-    fetch(`/api/nbm?location=${encodeURIComponent(locationId)}`)
+    fetch(`/api/nbm?${locationQuery}`)
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "NBM data unavailable");
@@ -2354,11 +2370,11 @@ export default function Home() {
         setNbmStatus("");
       })
       .catch((error: Error) => setNbmStatus(error.message));
-  }, [activeSection, dataPanel, locationId]);
+  }, [activeSection, dataPanel, locationQuery]);
 
   useEffect(() => {
     if (activeSection !== "dashboard" || dataPanel !== "afd") return;
-    fetch(`/api/afd?location=${encodeURIComponent(locationId)}`)
+    fetch(`/api/afd?${locationQuery}`)
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "Forecast discussion unavailable");
@@ -2366,7 +2382,7 @@ export default function Home() {
         setAfdStatus("");
       })
       .catch((error: Error) => setAfdStatus(error.message));
-  }, [activeSection, dataPanel, locationId, selectedLocation.timezone]);
+  }, [activeSection, dataPanel, locationQuery, selectedLocation.timezone]);
 
   useEffect(() => {
     if (activeSection !== "dashboard" || dataPanel !== "mcd") return;
@@ -2383,7 +2399,7 @@ export default function Home() {
   useEffect(() => {
     if (activeSection !== "dashboard" || dataPanel !== "models" || !hasModelAccess) return;
     setOpenMeteoStatus("Loading Open-Meteo guidance…");
-    fetch(`/api/open-meteo?model=${openMeteoModel}&location=${encodeURIComponent(locationId)}`)
+    fetch(`/api/open-meteo?model=${openMeteoModel}&${locationQuery}`)
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "Open-Meteo guidance is unavailable");
@@ -2391,7 +2407,7 @@ export default function Home() {
         setOpenMeteoStatus("");
       })
       .catch((error: Error) => setOpenMeteoStatus(error.message));
-  }, [activeSection, dataPanel, openMeteoModel, locationId, hasModelAccess]);
+  }, [activeSection, dataPanel, openMeteoModel, locationQuery, hasModelAccess]);
 
   useEffect(() => {
     if (activeSection !== "dashboard" || dataPanel !== "models" || openMeteoView !== "compare" || !hasModelAccess) return;
@@ -2399,7 +2415,7 @@ export default function Home() {
     let active = true;
     setComparisonStatus("Loading model comparison…");
     Promise.all(models.map(async (model) => {
-      const response = await fetch(`/api/open-meteo?model=${model}&location=${encodeURIComponent(locationId)}`);
+      const response = await fetch(`/api/open-meteo?model=${model}&${locationQuery}`);
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || `Unable to load ${model}`);
       return [model, data as OpenMeteoGuidance] as const;
@@ -2411,13 +2427,13 @@ export default function Home() {
       })
       .catch((error: Error) => active && setComparisonStatus(error.message));
     return () => { active = false; };
-  }, [activeSection, dataPanel, openMeteoView, comparisonLeftModel, comparisonRightModel, locationId, hasModelAccess]);
+  }, [activeSection, dataPanel, openMeteoView, comparisonLeftModel, comparisonRightModel, locationQuery, hasModelAccess]);
 
   useEffect(() => {
     if (activeSection !== "dashboard" || dataPanel !== "ensembles" || !hasModelAccess) return;
     let active = true;
     setEnsembleStatus("Loading GFS ensemble guidance…");
-    fetch(`/api/ensembles?location=${encodeURIComponent(locationId)}`)
+    fetch(`/api/ensembles?${locationQuery}`)
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "Ensemble guidance is unavailable");
@@ -2428,14 +2444,14 @@ export default function Home() {
       })
       .catch((error: Error) => active && setEnsembleStatus(error.message));
     return () => { active = false; };
-  }, [activeSection, dataPanel, locationId, hasModelAccess]);
+  }, [activeSection, dataPanel, locationQuery, hasModelAccess]);
 
   useEffect(() => {
     if (activeSection !== "dashboard" || dataPanel !== "model-sounding" || !hasModelAccess) return;
     let active = true;
     setModelSounding(null);
     setModelSoundingStatus("Loading model sounding…");
-    fetch(`/api/model-sounding?model=${soundingModel}&runOffset=${soundingRunOffset}&location=${encodeURIComponent(locationId)}`)
+    fetch(`/api/model-sounding?model=${soundingModel}&runOffset=${soundingRunOffset}&${locationQuery}`)
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "Model sounding is unavailable");
@@ -2450,7 +2466,7 @@ export default function Home() {
       })
       .catch((error: Error) => active && setModelSoundingStatus(error.message));
     return () => { active = false; };
-  }, [activeSection, dataPanel, soundingModel, soundingRunOffset, locationId, hasModelAccess]);
+  }, [activeSection, dataPanel, soundingModel, soundingRunOffset, locationQuery, hasModelAccess]);
 
   useEffect(() => {
     if (!session) { setArchives([]); setSelectedArchiveId(null); return; }
@@ -3425,7 +3441,7 @@ export default function Home() {
         <div className="brand-lockup brand-lockup-wordmark"><span className="theme-brand-lockup"><img className="brand-lockup-light" src="/brand/frontline-forecast-lockup-light.png" alt="Frontline Forecast" /><img className="brand-lockup-dark" src="/brand/frontline-forecast-lockup-dark.png" alt="Frontline Forecast" /></span>{session && activeSchoolBranding && <div className="school-brand-lockup" aria-label={`${activeSchoolBranding.school_name || activeWorkspace.label} school workspace`}><span aria-hidden="true">×</span>{supabaseUrl && activeSchoolLogoPath && <img src={schoolLogoUrl(supabaseUrl, activeSchoolLogoPath)} alt={activeSchoolBranding.logo_alt || `${activeSchoolBranding.school_name || activeWorkspace.label} logo`} />}<strong>{activeSchoolBranding.school_name || activeWorkspace.label}</strong></div>}</div>
         <div className="header-meta">
         <div className="header-meta-row">
-          <div className="location-menu-wrap"><button type="button" className="location-trigger" aria-expanded={locationMenuOpen} onClick={() => setLocationMenuOpen((open) => !open)}><span>Location</span><strong>{selectedLocation.name}</strong><i aria-hidden="true">⌄</i></button>{locationMenuOpen && <div className="location-menu"><strong>Workspace location</strong><small>Radar, observations, model guidance, and new forecasts update together.</small><div>{weatherDeskLocations.map((location) => <button type="button" key={location.id} className={!customLocation && location.id === locationId ? "active" : ""} onClick={() => { setCustomLocation(null); setLocationId(location.id); setLocationMenuOpen(false); }}><strong>{location.name}</strong><span>{location.observationStation} observation · K{location.upperAirStation} upper air</span></button>)}{customLocation && <div className="location-menu-custom-active"><strong>{customLocation.name}</strong><span>{customLocation.observationStation} observation · {customLocation.upperAirStation} upper air</span></div>}</div><div className="location-custom-station"><small>Not on the list? Open radar controls and tap "Show radar stations" to pick any of the 159 NEXRAD sites directly on the map.</small>{customStationStatus && <span className="location-custom-status">{customStationStatus}</span>}{customLocation && <button type="button" className="location-custom-clear" onClick={() => { setCustomLocation(null); setCustomStationStatus(""); }}>Back to preset locations</button>}</div></div>}</div>
+          <div className="location-menu-wrap"><button type="button" className="location-trigger" aria-expanded={locationMenuOpen} onClick={() => setLocationMenuOpen((open) => !open)}><span>Location</span><strong>{selectedLocation.name}</strong><i aria-hidden="true">⌄</i></button>{locationMenuOpen && <div className="location-menu"><strong>Workspace location</strong><div className="location-custom-station"><form onSubmit={searchLocation}><input type="text" value={locationSearchText} onChange={(event) => setLocationSearchText(event.target.value)} placeholder="City, state, or ZIP" aria-label="Search for a location" /><button type="submit" disabled={!locationSearchText.trim()}>Find</button></form>{customStationStatus && <span className="location-custom-status">{customStationStatus}</span>}</div><div>{weatherDeskLocations.map((location) => <button type="button" key={location.id} className={!customLocation && location.id === locationId ? "active" : ""} onClick={() => { setCustomLocation(null); setLocationId(location.id); setLocationMenuOpen(false); }}><strong>{location.name}</strong><span>{location.observationStation} observation · K{location.upperAirStation} upper air</span></button>)}{customLocation && <div className="location-menu-custom-active"><strong>{customLocation.name}</strong><span>{customLocation.observationStation} observation · {customLocation.upperAirStation} upper air</span><button type="button" className="location-custom-clear" onClick={() => { setCustomLocation(null); setCustomStationStatus(""); }}>Back to preset locations</button></div>}</div></div>}</div>
           {session ? <div className="avatar-menu-wrap">
             <button type="button" className="avatar-trigger" aria-expanded={workspaceMenuOpen} aria-label="Account menu" onClick={() => setWorkspaceMenuOpen((open) => !open)}><span className="avatar-circle">{initialsFor(myDisplayName, session.user.email)}</span></button>
             {workspaceMenuOpen && <div className="avatar-menu">

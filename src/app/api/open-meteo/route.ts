@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { weatherDeskLocation } from "@/lib/locations";
+import { resolveWeatherDeskLocation } from "@/lib/locations";
 import { canonicalModelPoint, round } from "@/lib/weather-data";
 import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 const MODELS = {
@@ -32,7 +32,7 @@ export async function GET(request: Request) {
   if (limit.limited) return rateLimitResponse(limit.retryAfterSeconds);
   const search = new URL(request.url).searchParams;
   const requestedModel = search.get("model") ?? "best_match";
-  const location = weatherDeskLocation(search.get("location"));
+  const location = resolveWeatherDeskLocation(search);
   const model = MODELS[requestedModel as keyof typeof MODELS] ?? MODELS.best_match;
   const parameters = new URLSearchParams({
     latitude: String(location.latitude),

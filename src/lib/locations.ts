@@ -21,3 +21,25 @@ export const defaultWeatherDeskLocation = weatherDeskLocations[0];
 export function weatherDeskLocation(id: string | null | undefined) {
   return weatherDeskLocations.find((location) => location.id === id) ?? defaultWeatherDeskLocation;
 }
+
+// Every weather-data API route needs the same location shape, whether the client is on one of
+// the 4 curated presets or a custom location resolved via /api/location-lookup (search or a map
+// station pick). Custom locations arrive as raw lat/lon plus the other fields already resolved
+// client-side, so no route needs to re-derive them.
+export function resolveWeatherDeskLocation(params: URLSearchParams): WeatherDeskLocation {
+  const latitude = Number(params.get("lat"));
+  const longitude = Number(params.get("lon"));
+  if (Number.isFinite(latitude) && Number.isFinite(longitude) && Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180) {
+    return {
+      id: params.get("id") || "custom",
+      name: params.get("name") || "Custom location",
+      latitude,
+      longitude,
+      timezone: params.get("tz") || "America/New_York",
+      observationStation: (params.get("station") || "").toUpperCase(),
+      upperAirStation: (params.get("upperAir") || "").toUpperCase(),
+      radarSite: (params.get("radar") || "").toUpperCase(),
+    };
+  }
+  return weatherDeskLocation(params.get("location"));
+}

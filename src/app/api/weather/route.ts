@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { weatherDeskLocation } from "@/lib/locations";
+import { resolveWeatherDeskLocation } from "@/lib/locations";
 import { canonicalObservation, celsiusToFahrenheit, metersPerSecondToMph, windDirectionLabel } from "@/lib/weather-data";
 import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
@@ -57,7 +57,7 @@ export async function GET(request: Request) {
   const limit = checkRateLimit(request, "weather", 60, 60_000);
   if (limit.limited) return rateLimitResponse(limit.retryAfterSeconds);
   try {
-    const selectedLocation = weatherDeskLocation(new URL(request.url).searchParams.get("location"));
+    const selectedLocation = resolveWeatherDeskLocation(new URL(request.url).searchParams);
     const point = await nws<NwsFeature<PointProperties>>(
       `https://api.weather.gov/points/${selectedLocation.latitude},${selectedLocation.longitude}`,
     );

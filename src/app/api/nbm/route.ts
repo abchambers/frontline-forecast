@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { weatherDeskLocation } from "@/lib/locations";
+import { resolveWeatherDeskLocation } from "@/lib/locations";
 import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 function cycleCandidates() {
@@ -28,7 +28,7 @@ function stationBulletin(text: string, station: string) {
 export async function GET(request: Request) {
   const limit = checkRateLimit(request, "nbm", 30, 60_000);
   if (limit.limited) return rateLimitResponse(limit.retryAfterSeconds);
-  const location = weatherDeskLocation(new URL(request.url).searchParams.get("location"));
+  const location = resolveWeatherDeskLocation(new URL(request.url).searchParams);
   const station = location.observationStation;
   for (const candidate of cycleCandidates()) {
     const { datePart, hour } = formatRun(candidate);

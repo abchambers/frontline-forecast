@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { weatherDeskLocation } from "@/lib/locations";
+import { resolveWeatherDeskLocation } from "@/lib/locations";
 import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 type ProductListing = { "@graph": Array<{ id: string; issuanceTime: string }> };
@@ -8,7 +8,7 @@ type ProductText = { productText: string; issuanceTime: string; issuingOffice: s
 export async function GET(request: Request) {
   const limit = checkRateLimit(request, "afd", 30, 60_000);
   if (limit.limited) return rateLimitResponse(limit.retryAfterSeconds);
-  const location = weatherDeskLocation(new URL(request.url).searchParams.get("location"));
+  const location = resolveWeatherDeskLocation(new URL(request.url).searchParams);
   // The upper-air station id doubles as the NWS forecast office (WFO) identifier for these
   // locations — e.g. Peachtree City GA's office and its co-located sounding site are both "FFC".
   const wfo = location.upperAirStation;
