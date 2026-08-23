@@ -32,8 +32,13 @@ export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
   const stationId = params.get("stationId")?.trim().toUpperCase();
   const query = params.get("q")?.trim();
-  let latitude = Number(params.get("lat"));
-  let longitude = Number(params.get("lon"));
+  // Number(null) is 0, not NaN -- only parse when both params are actually present, so a bare
+  // call with none of stationId/q/lat/lon falls through to the "required" error below instead of
+  // silently resolving as a valid point at 0,0.
+  const latParam = params.get("lat");
+  const lonParam = params.get("lon");
+  let latitude = latParam !== null && latParam !== "" ? Number(latParam) : NaN;
+  let longitude = lonParam !== null && lonParam !== "" ? Number(lonParam) : NaN;
 
   try {
     // A typed station ID (e.g. KDFW) resolves to coordinates first; either path converges on the

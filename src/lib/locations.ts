@@ -27,8 +27,13 @@ export function weatherDeskLocation(id: string | null | undefined) {
 // station pick). Custom locations arrive as raw lat/lon plus the other fields already resolved
 // client-side, so no route needs to re-derive them.
 export function resolveWeatherDeskLocation(params: URLSearchParams): WeatherDeskLocation {
-  const latitude = Number(params.get("lat"));
-  const longitude = Number(params.get("lon"));
+  // Number(null) is 0, not NaN -- a request with no lat/lon params at all (the normal preset
+  // path) must not silently resolve as a "custom" location at 0,0. Only parse when both params
+  // are actually present.
+  const latParam = params.get("lat");
+  const lonParam = params.get("lon");
+  const latitude = latParam !== null && latParam !== "" ? Number(latParam) : NaN;
+  const longitude = lonParam !== null && lonParam !== "" ? Number(lonParam) : NaN;
   if (Number.isFinite(latitude) && Number.isFinite(longitude) && Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180) {
     return {
       id: params.get("id") || "custom",
