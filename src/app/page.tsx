@@ -1794,6 +1794,33 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    // The access token issued at sign-in (or on the mount-time refresh above) expires after
+    // Supabase's default 1 hour. Every fetch in this file sends session.access_token directly
+    // rather than going through the Supabase SDK, so nothing else refreshes it — a tab left open
+    // past that hour starts silently 401ing on every lazily-fetched request (e.g. Verify's
+    // Scenarios tab), which reads as missing data rather than an expired session. Proactively
+    // refresh well inside that window so a long-lived tab keeps working.
+    if (!session?.refresh_token || !supabaseUrl || !supabaseKey) return;
+    const intervalId = window.setInterval(() => {
+      fetch(`${supabaseUrl}/auth/v1/token?grant_type=refresh_token`, { method: "POST", headers: { apikey: supabaseKey, "Content-Type": "application/json" }, body: JSON.stringify({ refresh_token: session.refresh_token }) })
+        .then(async (response) => {
+          const data = await response.json();
+          if (!response.ok || !data.access_token) throw new Error("Session expired");
+          const refreshed = { access_token: data.access_token, refresh_token: data.refresh_token ?? session.refresh_token, user: data.user ?? session.user } as WeatherDeskSession;
+          if (rememberMe) window.localStorage.setItem(sessionStorageKey, JSON.stringify(refreshed)); else window.sessionStorage.setItem(sessionStorageKey, JSON.stringify(refreshed));
+          setSession(refreshed);
+        })
+        .catch(() => {
+          window.localStorage.removeItem(sessionStorageKey);
+          window.sessionStorage.removeItem(sessionStorageKey);
+          setSession(null);
+          setAuthMessage("Your session expired. Sign in again to continue.");
+        });
+    }, 45 * 60 * 1000);
+    return () => window.clearInterval(intervalId);
+  }, [session, rememberMe]);
+
+  useEffect(() => {
     if (!supabaseUrl || !supabaseKey) return;
     const confirmation = new URLSearchParams(window.location.hash.slice(1));
     const accessToken = confirmation.get("access_token");
