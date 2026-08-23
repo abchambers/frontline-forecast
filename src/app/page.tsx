@@ -28,7 +28,7 @@ type LiveWeather = {
   location: string;
   observation: { station: string; stationName: string; observedAt: string; description: string; temperatureF: number | null; temperatureSource: "observation" | "forecast estimate"; dewpointF: number | null; windMph: number | null; windDirection: string | null };
   forecast: { period: string; temperature: number; temperatureUnit: string; shortForecast: string; detailedForecast: string; precipitationChance: number | null } | null;
-  forecastPeriods: { name: string; startTime: string; temperature: number; temperatureUnit: string; shortForecast: string; precipitationChance: number | null; icon: string | null }[];
+  forecastPeriods: { name: string; startTime: string; temperature: number; temperatureUnit: string; shortForecast: string; precipitationChance: number | null; icon: string | null; windSpeed: string | null; windDirection: string | null }[];
   alerts: { event: string; headline: string | null; severity: string; expires: string | null; effective: string | null; description: string | null; instruction: string | null; areaDesc: string | null; senderName: string | null }[];
   alertsAvailable: boolean;
   fetchedAt: string;
@@ -82,8 +82,8 @@ type SavedForecast = {
   targetDate: string;
   status: "draft" | "submitted" | "revised" | "verified" | "withdrawn";
   versionNumber: number;
-  day: { high: string; conditions: string; rainChance: string; timing: string; hazards: string; reasoning?: string; references?: ReferenceItem[]; iconCondition?: string };
-  night: { low: string; conditions: string; rainChance: string; timing: string; hazards: string; reasoning?: string; references?: ReferenceItem[]; iconCondition?: string };
+  day: { high: string; conditions: string; rainChance: string; timing: string; hazards: string; wind?: string; reasoning?: string; references?: ReferenceItem[]; iconCondition?: string };
+  night: { low: string; conditions: string; rainChance: string; timing: string; hazards: string; wind?: string; reasoning?: string; references?: ReferenceItem[]; iconCondition?: string };
   evidence: { observation: string; forecast: string; alerts: string };
 };
 type WeatherDeskSession = { access_token: string; refresh_token?: string; user: { id: string; email?: string } };
@@ -119,8 +119,8 @@ type ClassroomJoinCode = { id: string; classroom_id: string; label: string | nul
 type ReviewTarget = { userId: string; label: string; organizationId: string; classroomId?: string; assignmentId?: string };
 type AcademicRosterMember = ReviewTarget & { role: string; email: string | null; personType: Profile["person_type"] };
 type InstructorForecastSnapshot = { saved_at: string; location_name: string; days: ForecastDayDraft[] };
-type ClassForecastDay = { date: string; submitted_count: number; day: { high_f: number | null; pop: number | null; conditions: string[] }; night: { low_f: number | null; pop: number | null; conditions: string[] } };
-type ClassForecastSnapshot = { generated_at: string; target_date: string; submitted_count: number; total_students: number; day: { high_f: number | null; pop: number | null; conditions: string[] }; night: { low_f: number | null; pop: number | null; conditions: string[] }; days?: ClassForecastDay[] };
+type ClassForecastDay = { date: string; submitted_count: number; day: { high_f: number | null; pop: number | null; conditions: string[]; wind: string[] }; night: { low_f: number | null; pop: number | null; conditions: string[]; wind: string[] } };
+type ClassForecastSnapshot = { generated_at: string; target_date: string; submitted_count: number; total_students: number; day: { high_f: number | null; pop: number | null; conditions: string[]; wind: string[] }; night: { low_f: number | null; pop: number | null; conditions: string[]; wind: string[] }; days?: ClassForecastDay[] };
 type ClassroomOfficialForecast = { classroom_id: string; forecast: ClassForecastSnapshot; updated_by: string; updated_at: string; published_at: string | null };
 type ClassroomAssignment = { id: string; classroom_id: string; title: string; instructions: string | null; target_date: string; target_dates?: string[]; scenario_id?: string | null; scenario?: { title: string; summary: string | null; reference_notes: string | null; reference_links: ScenarioReferenceLink[] } | null; due_at: string | null; status: "draft" | "open" | "closed" | "archived"; instructor_forecast: InstructorForecastSnapshot | null; instructor_forecast_updated_at: string | null; class_forecast: ClassForecastSnapshot | null; class_forecast_updated_at: string | null; class_forecast_published_at: string | null; created_at: string };
 type ClassroomAssignmentSubmission = { id: string; user_id: string; created_at: string; status: string; assignment_id: string; forecast_periods: { valid_date: string; period: "day" | "night"; forecast_data: PeriodDraft; forecast_verifications: { score_data: { automaticScore?: number | null } | null }[] }[]; forecast_reviews?: ForecastReview[] };
@@ -769,8 +769,8 @@ function archiveRecordsFromRun(run: CloudRunRow): SavedForecast[] {
     const status: SavedForecast["status"] = ["draft", "submitted", "revised", "verified", "withdrawn"].includes(run.status) ? run.status as SavedForecast["status"] : "submitted";
     return {
       id: `${run.id}:${targetDate}`, runId: run.id, parentRunId: run.parent_run_id ?? null, authorId: run.user_id, assignmentId: run.assignment_id ?? null, scenarioId: run.scenario_id ?? null, periodIds: { day: day?.id, night: night?.id }, locationId: runLocation.id, locationName: run.location_name ?? runLocation.name, savedAt: run.created_at, label: archiveTitle({ savedAt: run.created_at }), targetDate, status, versionNumber: 1,
-      day: { high: dayData.highLow, conditions: dayData.conditions, rainChance: dayData.rainChance, timing: dayData.timing, hazards: dayData.hazards, reasoning: dayData.reasoning, references: savedReferences(dayData.references), iconCondition: dayData.iconCondition },
-      night: { low: nightData.highLow, conditions: nightData.conditions, rainChance: nightData.rainChance, timing: nightData.timing, hazards: nightData.hazards, reasoning: nightData.reasoning, references: savedReferences(nightData.references), iconCondition: nightData.iconCondition },
+      day: { high: dayData.highLow, conditions: dayData.conditions, rainChance: dayData.rainChance, timing: dayData.timing, hazards: dayData.hazards, wind: dayData.wind, reasoning: dayData.reasoning, references: savedReferences(dayData.references), iconCondition: dayData.iconCondition },
+      night: { low: nightData.highLow, conditions: nightData.conditions, rainChance: nightData.rainChance, timing: nightData.timing, hazards: nightData.hazards, wind: nightData.wind, reasoning: nightData.reasoning, references: savedReferences(nightData.references), iconCondition: nightData.iconCondition },
       evidence: day?.evidence_snapshot ?? night?.evidence_snapshot ?? { observation: "No observation snapshot", forecast: "No NWS snapshot", alerts: "No alert snapshot" },
     };
   });
@@ -852,11 +852,12 @@ function buildClassForecastSnapshot(assignment: ClassroomAssignment, submissions
   submissions.filter((submission) => submission.assignment_id === assignment.id && submission.status !== "withdrawn" && studentIds.has(submission.user_id)).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).forEach((submission) => { if (!latestByStudent.has(submission.user_id)) latestByStudent.set(submission.user_id, submission); });
   const latest = [...latestByStudent.values()];
   const commonConditions = (periods: PeriodDraft[]) => [...new Set(periods.map((period) => conditionLabel(period.conditions)).filter(Boolean))].slice(0, 3);
+  const commonWind = (periods: PeriodDraft[]) => [...new Set(periods.map((period) => period.wind.trim()).filter(Boolean))].slice(0, 3);
   const summaryForDate = (date: string): ClassForecastDay => {
     const periodData = (period: "day" | "night") => latest.map((submission) => submission.forecast_periods.find((entry) => entry.period === period && entry.valid_date === date)?.forecast_data).filter((data): data is PeriodDraft => Boolean(data));
     const day = periodData("day");
     const night = periodData("night");
-    return { date, submitted_count: latest.filter((submission) => submission.forecast_periods.some((entry) => entry.valid_date === date)).length, day: { high_f: averageForecastValue(day.map((period) => period.highLow)), pop: averageForecastValue(day.map((period) => period.rainChance)), conditions: commonConditions(day) }, night: { low_f: averageForecastValue(night.map((period) => period.highLow)), pop: averageForecastValue(night.map((period) => period.rainChance)), conditions: commonConditions(night) } };
+    return { date, submitted_count: latest.filter((submission) => submission.forecast_periods.some((entry) => entry.valid_date === date)).length, day: { high_f: averageForecastValue(day.map((period) => period.highLow)), pop: averageForecastValue(day.map((period) => period.rainChance)), conditions: commonConditions(day), wind: commonWind(day) }, night: { low_f: averageForecastValue(night.map((period) => period.highLow)), pop: averageForecastValue(night.map((period) => period.rainChance)), conditions: commonConditions(night), wind: commonWind(night) } };
   };
   const days = assignmentDates(assignment).map(summaryForDate);
   const primary = days[0] ?? summaryForDate(assignment.target_date);
@@ -870,16 +871,17 @@ function buildLiveClassForecastSnapshot(archives: SavedForecast[], activeDates: 
   relevant.forEach((archive) => { const key = `${archive.authorId}:${archive.targetDate}`; const existing = latestByStudentDate.get(key); if (!existing || new Date(archive.savedAt).getTime() > new Date(existing.savedAt).getTime()) latestByStudentDate.set(key, archive); });
   const latest = [...latestByStudentDate.values()];
   const commonConditions = (records: SavedForecast[], period: "day" | "night") => [...new Set(records.map((record) => conditionLabel(record[period].conditions)).filter(Boolean))].slice(0, 3);
+  const commonWind = (records: SavedForecast[], period: "day" | "night") => [...new Set(records.map((record) => (record[period].wind ?? "").trim()).filter(Boolean))].slice(0, 3);
   const summaryForDate = (date: string): ClassForecastDay => {
     const onDate = latest.filter((record) => record.targetDate === date);
-    return { date, submitted_count: onDate.length, day: { high_f: averageForecastValue(onDate.map((record) => record.day.high)), pop: averageForecastValue(onDate.map((record) => record.day.rainChance)), conditions: commonConditions(onDate, "day") }, night: { low_f: averageForecastValue(onDate.map((record) => record.night.low)), pop: averageForecastValue(onDate.map((record) => record.night.rainChance)), conditions: commonConditions(onDate, "night") } };
+    return { date, submitted_count: onDate.length, day: { high_f: averageForecastValue(onDate.map((record) => record.day.high)), pop: averageForecastValue(onDate.map((record) => record.day.rainChance)), conditions: commonConditions(onDate, "day"), wind: commonWind(onDate, "day") }, night: { low_f: averageForecastValue(onDate.map((record) => record.night.low)), pop: averageForecastValue(onDate.map((record) => record.night.rainChance)), conditions: commonConditions(onDate, "night"), wind: commonWind(onDate, "night") } };
   };
   const days = [...activeDates].sort().map(summaryForDate);
   const primary = days[0];
-  return { generated_at: new Date().toISOString(), target_date: primary?.date ?? "", submitted_count: latest.length, total_students: studentIds.size, day: primary?.day ?? { high_f: null, pop: null, conditions: [] }, night: primary?.night ?? { low_f: null, pop: null, conditions: [] }, days };
+  return { generated_at: new Date().toISOString(), target_date: primary?.date ?? "", submitted_count: latest.length, total_students: studentIds.size, day: primary?.day ?? { high_f: null, pop: null, conditions: [], wind: [] }, night: primary?.night ?? { low_f: null, pop: null, conditions: [], wind: [] }, days };
 }
 
-function ClassroomLiveForecast({ archives, roster, canManage, publicGuidance, message }: { archives: SavedForecast[]; roster: AcademicRosterMember[]; canManage: boolean; publicGuidance: { date: string; label: string; high: number | null; low: number | null; shortForecast: string; precipitationChance: number | null }[]; message: string }) {
+function ClassroomLiveForecast({ archives, roster, canManage, publicGuidance, message }: { archives: SavedForecast[]; roster: AcademicRosterMember[]; canManage: boolean; publicGuidance: { date: string; label: string; high: number | null; low: number | null; shortForecast: string; precipitationChance: number | null; wind: string | null }[]; message: string }) {
   const students = roster.filter((member) => member.role === "student");
   const activeDates = Array.from({ length: 7 }, (_, index) => addDays(new Date(), index));
   const snapshot = buildLiveClassForecastSnapshot(archives, activeDates, roster);
@@ -898,7 +900,7 @@ function ClassroomLiveForecast({ archives, roster, canManage, publicGuidance, me
     <header className="section-heading"><div><p className="eyebrow">Class forecast</p><h2>Live class outlook</h2><p>Today through the next six days. Built automatically from every student's latest forecast — a resubmission always replaces that student's number here, and instructors can still see what was submitted and when.</p></div></header>
     <section className="outlook-strip class-outlook-strip" aria-label="Class seven-day outlook"><div className="outlook-heading"><div><h2>Class outlook</h2><p>Live from student submissions</p></div><span>Class</span></div><div className="outlook-cards">{days.map((day) => <button type="button" key={day.date} className={day.date === selectedDay?.date ? "active" : ""} onClick={() => setSelectedDate(day.date)}><strong>{new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: "America/New_York" }).format(new Date(`${day.date}T12:00:00`))}</strong><b aria-hidden="true"><WeatherIcon description={day.day.conditions[0] || day.night.conditions[0] || "Forecast"} style="traditional" /></b><span>{day.day.conditions[0] || day.night.conditions[0] || "No forecasts yet"}</span><em>{day.day.high_f ?? "—"}° / {day.night.low_f ?? "—"}°</em><small>{day.submitted_count}/{students.length || "—"} submitted</small></button>)}</div></section>
     <section className="outlook-strip class-outlook-strip" aria-label="Local seven-day guidance"><div className="outlook-heading"><div><h2>Local 7-day guidance</h2><p>Current Frontline Forecast guidance for the same location</p></div><span>Local</span></div><div className="outlook-cards">{days.map((day) => { const guidance = publicGuidance.find((item) => item.date === day.date); return <button type="button" key={day.date} className={day.date === selectedDay?.date ? "active" : ""} onClick={() => setSelectedDate(day.date)}><strong>{new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: "America/New_York" }).format(new Date(`${day.date}T12:00:00`))}</strong><b aria-hidden="true"><WeatherIcon description={guidance?.shortForecast ?? "Forecast"} style="traditional" /></b><span>{guidance?.shortForecast ?? "Guidance unavailable"}</span><em>{guidance?.high ?? "—"}° / {guidance?.low ?? "—"}°</em><small>{guidance?.precipitationChance ?? "—"}% PoP</small></button>; })}</div></section>
-    {selectedDay && <section className="class-outlook-detail"><header><div><p className="eyebrow">Selected day</p><h3>{forecastTargetTitle(selectedDay.date)}</h3><p>{selectedDay.submitted_count} of {students.length || "—"} students represented.</p></div></header><div className="class-outlook-compare"><fieldset><legend>Class forecast</legend><div className="class-outlook-readout"><strong>{selectedDay.day.conditions[0] || selectedDay.night.conditions[0] || "No forecasts yet"}</strong><b>{selectedDay.day.high_f ?? "—"}° / {selectedDay.night.low_f ?? "—"}°</b><span>Day {selectedDay.day.pop ?? "—"}% · Night {selectedDay.night.pop ?? "—"}%</span></div></fieldset><fieldset><legend>Local guidance</legend><div className="class-outlook-readout"><strong>{selectedGuidance?.shortForecast ?? "Guidance unavailable"}</strong><b>{selectedGuidance?.high ?? "—"}° / {selectedGuidance?.low ?? "—"}°</b><span>{selectedGuidance?.precipitationChance ?? "—"}% PoP</span></div></fieldset></div>{canManage && <div className="class-participation-list"><strong>Participation</strong><div>{contributorsForDate(selectedDay.date).map(({ student, latest }) => <article key={student.userId}><span>{student.label}</span>{latest ? <em>V{latest.versionNumber} · {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(latest.savedAt))}</em> : <em className="not-submitted">Not submitted</em>}</article>)}</div></div>}</section>}
+    {selectedDay && <section className="class-outlook-detail"><header><div><p className="eyebrow">Selected day</p><h3>{forecastTargetTitle(selectedDay.date)}</h3><p>{selectedDay.submitted_count} of {students.length || "—"} students represented.</p></div></header><div className="class-outlook-compare"><fieldset><legend>Class forecast</legend><div className="class-outlook-readout"><strong>{selectedDay.day.conditions[0] || selectedDay.night.conditions[0] || "No forecasts yet"}</strong><b>{selectedDay.day.high_f ?? "—"}° / {selectedDay.night.low_f ?? "—"}°</b><span>Day {selectedDay.day.pop ?? "—"}% · Night {selectedDay.night.pop ?? "—"}%</span>{(selectedDay.day.wind.length > 0 || selectedDay.night.wind.length > 0) && <small>Wind: {[...selectedDay.day.wind, ...selectedDay.night.wind].filter((value, index, all) => all.indexOf(value) === index).join(" · ")}</small>}</div></fieldset><fieldset><legend>Local guidance</legend><div className="class-outlook-readout"><strong>{selectedGuidance?.shortForecast ?? "Guidance unavailable"}</strong><b>{selectedGuidance?.high ?? "—"}° / {selectedGuidance?.low ?? "—"}°</b><span>{selectedGuidance?.precipitationChance ?? "—"}% PoP</span>{selectedGuidance?.wind && <small>Wind: {selectedGuidance.wind}</small>}</div></fieldset></div>{canManage && <div className="class-participation-list"><strong>Participation</strong><div>{contributorsForDate(selectedDay.date).map(({ student, latest }) => <article key={student.userId}><span>{student.label}</span>{latest ? <em>V{latest.versionNumber} · {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(latest.savedAt))}</em> : <em className="not-submitted">Not submitted</em>}</article>)}</div></div>}</section>}
     {message && <p className="control-message" role="status">{message}</p>}
   </section>;
 }
@@ -1062,12 +1064,6 @@ function ForecastDayMiniCard({ date, periods }: { date: string; periods: Classro
   const published = Boolean(assignment.class_forecast_published_at);
   return <section className="class-forecast-outlook"><header><div><p className="eyebrow">Class outlook</p><h3>{assignment.title}</h3><p>{snapshot.submitted_count}/{snapshot.total_students || "—"} students represented in this class forecast.</p></div>{canManage && <div><button type="button" onClick={onSave}>Save class outlook</button><button type="button" onClick={onPublish}>{published ? "Update class outlook" : "Publish to class"}</button></div>}</header><div className="class-outlook-cards">{days.map((day) => <article key={day.date}><strong>{new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "America/New_York" }).format(new Date(`${day.date}T12:00:00`))}</strong><b>{day.day.conditions[0] || day.night.conditions[0] || "Forecast"}</b><em>{day.day.high_f ?? "—"}° / {day.night.low_f ?? "—"}°</em><small>Day {day.day.pop ?? "—"}% · Night {day.night.pop ?? "—"}%</small><span>{[...day.day.conditions, ...day.night.conditions].filter(Boolean).slice(0, 2).join(" · ") || "Awaiting submissions"}</span></article>)}</div>{published && <small className="class-outlook-status">Published for this class · never sent to the public Frontline Forecast.</small>}</section>;
 } */
-
-function emptyOfficialClassForecast() : ClassForecastSnapshot {
-  const start = nextForecastDate();
-  const days = Array.from({ length: 7 }, (_, index) => ({ date: addDays(new Date(`${start}T12:00:00`), index), submitted_count: 0, day: { high_f: null, pop: null, conditions: [] }, night: { low_f: null, pop: null, conditions: [] } }));
-  return { generated_at: new Date().toISOString(), target_date: start, submitted_count: 0, total_students: 0, day: days[0].day, night: days[0].night, days };
-}
 
 // deprecated: superseded by ClassForecastHubV2; its applyConsensusDay/"generate from guidance" idea
 // was ported into V2 (the "Generate from local guidance" button). Kept for reference.
@@ -2515,16 +2511,17 @@ export default function Home() {
   const selectedPracticeDayDraft = practiceRun?.days[selectedPracticeDay] ?? practiceRun?.days[0] ?? null;
   const archiveMenu = archives.find((archive) => archive.id === archiveMenuId) ?? null;
   const pendingArchiveRemoval = archives.find((archive) => archive.id === pendingArchiveRemovalId) ?? null;
-  const outlook = liveWeather?.forecastPeriods.reduce<{ date: string; label: string; high: number | null; low: number | null; shortForecast: string; precipitationChance: number | null }[]>((days, period) => {
+  const outlook = liveWeather?.forecastPeriods.reduce<{ date: string; label: string; high: number | null; low: number | null; shortForecast: string; precipitationChance: number | null; wind: string | null }[]>((days, period) => {
     const date = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(period.startTime));
     const existing = days.find((day) => day.date === date);
     const label = new Intl.DateTimeFormat("en-US", { weekday: "short" , timeZone: "America/New_York" }).format(new Date(period.startTime));
+    const wind = period.windSpeed ? `${period.windDirection ?? ""} ${period.windSpeed}`.trim() : null;
     if (existing) {
       existing.high = existing.high === null ? period.temperature : Math.max(existing.high, period.temperature);
       existing.low = existing.low === null ? period.temperature : Math.min(existing.low, period.temperature);
       existing.precipitationChance = Math.max(existing.precipitationChance ?? 0, period.precipitationChance ?? 0);
     } else if (days.length < 7) {
-      days.push({ date, label, high: period.temperature, low: period.temperature, shortForecast: period.shortForecast, precipitationChance: period.precipitationChance });
+      days.push({ date, label, high: period.temperature, low: period.temperature, shortForecast: period.shortForecast, precipitationChance: period.precipitationChance, wind });
     }
     return days;
   }, []) ?? [];

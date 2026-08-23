@@ -32,6 +32,8 @@ type ForecastPeriod = {
   detailedForecast: string;
   icon?: string | null;
   probabilityOfPrecipitation: { value: number | null };
+  windSpeed?: string | null;
+  windDirection?: string | null;
 };
 
 type AlertProperties = { event: string; headline: string | null; severity?: string | null; expires?: string | null; effective?: string | null; description?: string | null; instruction?: string | null; areaDesc?: string | null; senderName?: string | null };
@@ -148,6 +150,8 @@ export async function GET(request: Request) {
           shortForecast: period.shortForecast,
           precipitationChance: period.probabilityOfPrecipitation.value,
           icon: period.icon ?? null,
+          windSpeed: period.windSpeed ?? null,
+          windDirection: period.windDirection ?? null,
         })),
         alerts: alerts.features.slice(0, 10).map(({ properties }) => ({
           event: properties.event,
