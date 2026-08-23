@@ -453,6 +453,8 @@
 .classroom-roster-list article small { color:var(--muted); font-size:.72rem; }
 .classroom-roster-list article button { background:var(--surface); border:1px solid var(--line); border-radius:7px; flex:0 0 auto; font-size:.78rem; font-weight:700; padding:7px 10px; }
 .classroom-roster-list article button.danger { background:var(--surface); border-color:#d48a85; color:#a63d36; }
+.school-class-directory .classroom-roster-list article,.assignment-rail .classroom-roster-list article { display:flex; }
+.school-class-directory .classroom-roster-list article button,.assignment-rail .classroom-roster-list article button { display:inline-flex; grid-template-columns:none; width:auto; }
 .classroom-roster .history-fold { border-top:1px solid var(--line); margin-top:14px; padding-top:14px; }
 .classroom-roster .history-fold summary { color:var(--muted); cursor:pointer; font-size:.78rem; font-weight:700; margin-bottom:8px; }
 .classroom-leaderboard > header h3 { font-size:1rem; margin:0; }
