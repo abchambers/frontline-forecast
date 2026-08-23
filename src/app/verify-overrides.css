@@ -14,9 +14,14 @@
 .verification-grid > div > .verification-table { background:var(--soft); border:1px solid var(--line); border-radius:12px; margin:0; overflow:hidden; }
 .verification-grid > div > .verification-table:first-of-type { grid-column:1; }
 .verification-grid > div > .verification-table:last-of-type { grid-column:2; }
-.verification-grid > div > .verification-table::before { color:var(--muted); display:block; font-size:.72rem; font-weight:800; letter-spacing:.05em; padding:12px 12px 0; text-transform:uppercase; }
+.verification-grid > div > .verification-table::before { color:var(--muted); display:block; font-size:.7rem; font-weight:800; letter-spacing:.05em; padding:9px 10px 0; text-transform:uppercase; }
 .verification-grid > div > .verification-table:first-of-type::before { content:"Day · 7 AM–7 PM"; }
 .verification-grid > div > .verification-table:last-of-type::before { content:"Night · 7 PM–7 AM"; }
+/* Tightened from the base table's 10px/8.8rem: the day/night pair repeats
+   the same 4 metric rows twice side by side, and most cells are short
+   values or a placeholder -- the extra padding was pure visual weight. */
+.verification-grid > div > .verification-table th,.verification-grid > div > .verification-table td { font-size:.79rem; padding:6px 10px; }
+.verification-grid > div > .verification-table th { font-size:.68rem; }
 
 .verification-grid .history {
   display: none;
