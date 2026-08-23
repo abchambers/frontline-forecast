@@ -141,7 +141,7 @@ async function provisionAndMintSession(): Promise<
       await fetch(`${supabaseUrl}/rest/v1/organization_entitlements`, {
         method: "POST",
         headers: adminHeaders,
-        body: JSON.stringify({ organization_id: orgId, class_limit: 5, class_seat_limit: 35, status: "active" }),
+        body: JSON.stringify({ organization_id: orgId, seat_limit: 35, status: "active" }),
       }).catch(() => null);
     }
   }
