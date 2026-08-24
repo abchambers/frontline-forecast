@@ -127,6 +127,16 @@ type ClassroomAssignmentSubmission = { id: string; user_id: string; created_at: 
 type ReviewRun = { id: string; user_id: string; created_at: string; status: string; location_name: string | null; assignment_id: string | null; forecast_periods: { id: string; valid_date: string; period: "day" | "night"; forecast_data: PeriodDraft; forecast_verifications: { score_data: { automaticScore?: number | null } | null }[] }[] };
 type ReviewRubric = { accuracy?: number | null; reasoning?: number | null; communication?: number | null };
 type ForecastReview = { id: string; run_id: string; reviewer_id: string; comment: string | null; manual_score: number | null; rubric_scores?: ReviewRubric | null; created_at: string };
+// Assignments are deliberately independent of forecast_runs/forecast_reviews
+// -- their own reference material, their own lightweight per-day guess
+// submission, their own review table. See supabase/migrations/20260823030000.
+type AssignmentReferenceKind = "link" | "observation" | "model";
+type AssignmentReferenceItem = { id: string; assignment_id: string; classroom_id: string; kind: AssignmentReferenceKind; label: string; url: string | null; detail: Record<string, unknown> | null; created_by: string; created_at: string };
+type AssignmentDayResponse = { tempLow: string; tempHigh: string; condition: string; confidence: string; notes: string };
+type AssignmentSubmission = { id: string; assignment_id: string; classroom_id: string; student_id: string; responses: Record<string, AssignmentDayResponse>; status: "draft" | "submitted"; submitted_at: string | null; created_at: string; updated_at: string };
+type AssignmentReview = { id: string; submission_id: string; reviewer_id: string; comment: string | null; manual_score: number | null; created_at: string; updated_at: string };
+type AppNotification = { id: string; user_id: string; kind: string; payload: { assignment_id?: string; classroom_id?: string; title?: string }; read_at: string | null; created_at: string };
+const emptyAssignmentDayResponse: AssignmentDayResponse = { tempLow: "", tempHigh: "", condition: "", confidence: "", notes: "" };
 // "auto" is the smart default: in-house NEXRAD first (live and, once the worker's retained-frame
 // buffer covers it, past frames too), falling back to the IEM mosaic only when in-house data isn't
 // available. "iem" is a deliberate override — like tuning to a specific channel — that skips the
@@ -970,16 +980,16 @@ function ClassroomCodeManager({ classroomId, codes, onCreate, onRetire, codeResu
   return <section className="classroom-today"><header><div><p className="eyebrow">My work</p><h3>{assignment?.title ?? "No active assignment"}</h3><p>{assignment ? `${assignmentDates(assignment).map(forecastTargetTitle).join(" · ")}${assignment.due_at ? ` · due ${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(assignment.due_at))}` : ""}` : "No assignment needs attention right now."}</p></div>{canOpenForecast && <button type="button" onClick={onOpenForecast}>{canManage ? "Build example" : "Start assignment"}</button>}</header>{assignment?.scenario && <div className="assignment-linker scenario-context"><div><strong>Historical scenario</strong><small>This date has already happened — it's a real past event, not a hypothetical.</small>{assignment.scenario.summary && <em>{assignment.scenario.summary}</em>}{(assignment.scenario.reference_notes || assignment.scenario.reference_links.length > 0) && <details className="scenario-reference-details"><summary>Reference data</summary>{assignment.scenario.reference_notes && <p>{assignment.scenario.reference_notes}</p>}{assignment.scenario.reference_links.length > 0 && <ul>{assignment.scenario.reference_links.map((link) => <li key={link.label}>{link.label}{link.detail ? ` — ${link.detail}` : ""}{link.url && <> · <a href={link.url} target="_blank" rel="noreferrer">Open</a></>}</li>)}</ul>}</details>}</div></div>}{assignment && <div className="classroom-today-grid"><article><span>Instructor example</span><strong>{assignment.instructor_forecast ? "Available" : "Not posted"}</strong><small>{assignment.instructor_forecast ? "Open Assignments to review it." : "A shared class reference when posted."}</small></article><article><span>{canManage ? "Submissions" : "Your work"}</span><strong>{canManage ? `${submittedCount}/${studentCount || "—"}` : submittedCount ? "Submitted" : "To do"}</strong><small>{canManage ? "latest student forecasts" : submittedCount ? "This assignment is complete." : "Start the linked forecast when ready."}</small></article></div>}</section>;
 } */
 
-function ClassroomProgress({ assignments, submissions, roster, canManage, currentUserId }: { assignments: ClassroomAssignment[]; submissions: ClassroomAssignmentSubmission[]; roster: AcademicRosterMember[]; canManage: boolean; currentUserId?: string }) {
+function ClassroomProgress({ assignments, submissions, roster, canManage, currentUserId }: { assignments: ClassroomAssignment[]; submissions: AssignmentSubmission[]; roster: AcademicRosterMember[]; canManage: boolean; currentUserId?: string }) {
   const students = roster.filter((member) => member.role === "student");
-  const latestFor = (assignmentId: string, userId: string) => submissions.filter((submission) => submission.assignment_id === assignmentId && submission.user_id === userId && submission.status !== "withdrawn").sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+  const submissionFor = (assignmentId: string, userId: string) => submissions.find((submission) => submission.assignment_id === assignmentId && submission.student_id === userId);
   if (!canManage) {
-    return <section className="classroom-progress"><header><p className="eyebrow">My progress</p><h3>Your class work</h3><p>Assignments and instructor feedback are private to you and your teaching team.</p></header><div className="classroom-progress-grid">{assignments.map((assignment) => <article key={assignment.id}><span>{assignment.title}</span><strong>{latestFor(assignment.id, currentUserId ?? "") ? "Submitted" : "Not submitted"}</strong><small>{assignmentDates(assignment).map(forecastTargetTitle).join(" · ")}</small></article>)}{!assignments.length && <p className="empty">No assignments are open for this class.</p>}</div></section>;
+    return <section className="classroom-progress"><header><p className="eyebrow">My progress</p><h3>Your class work</h3><p>Assignments and instructor feedback are private to you and your teaching team.</p></header><div className="classroom-progress-grid">{assignments.map((assignment) => { const submission = submissionFor(assignment.id, currentUserId ?? ""); return <article key={assignment.id}><span>{assignment.title}</span><strong>{submission?.status === "submitted" ? "Submitted" : submission ? "Draft saved" : "Not started"}</strong><small>{assignmentDates(assignment).map(forecastTargetTitle).join(" · ")}</small></article>; })}{!assignments.length && <p className="empty">No assignments are open for this class.</p>}</div></section>;
   }
-  return <section className="classroom-progress"><header><p className="eyebrow">Class progress</p><h3>Submission status</h3></header><div className="classroom-progress-summary"><article><span>Students</span><strong>{students.length}</strong><small>enrolled in this class</small></article><article><span>Assignments</span><strong>{assignments.length}</strong><small>available for review</small></article></div><div className="class-progress-roster">{students.map((student) => { const completed = assignments.filter((assignment) => Boolean(latestFor(assignment.id, student.userId))); return <details key={student.userId}><summary><span><strong>{student.label}</strong><small>{student.email ?? "Student account"}</small></span><b>{completed.length}/{assignments.length} submitted</b></summary><div>{assignments.map((assignment) => { const submission = latestFor(assignment.id, student.userId); return <article key={assignment.id}><header><strong>{assignment.title}</strong><small>{assignmentDates(assignment).map(forecastTargetTitle).join(" · ")}</small></header>{submission ? <div className="assignment-submission-days">{assignmentDates(assignment).map((date) => <ForecastDayMiniCard key={date} date={date} periods={submission.forecast_periods} />)}</div> : <p className="empty">No submission yet.</p>}</article>; })}</div></details>; })}{!students.length && <p className="empty">Add students from Control before creating class work.</p>}</div></section>;
+  return <section className="classroom-progress"><header><p className="eyebrow">Class progress</p><h3>Submission status</h3></header><div className="classroom-progress-summary"><article><span>Students</span><strong>{students.length}</strong><small>enrolled in this class</small></article><article><span>Assignments</span><strong>{assignments.length}</strong><small>available for review</small></article></div><div className="class-progress-roster">{students.map((student) => { const completed = assignments.filter((assignment) => submissionFor(assignment.id, student.userId)?.status === "submitted"); return <details key={student.userId}><summary><span><strong>{student.label}</strong><small>{student.email ?? "Student account"}</small></span><b>{completed.length}/{assignments.length} submitted</b></summary><div>{assignments.map((assignment) => { const submission = submissionFor(assignment.id, student.userId); return <article key={assignment.id}><header><strong>{assignment.title}</strong><small>{assignmentDates(assignment).map(forecastTargetTitle).join(" · ")}</small></header>{submission ? <div className="assignment-submission-days">{assignmentDates(assignment).map((date) => <AssignmentDayMiniCard key={date} date={date} response={submission.responses[date]} />)}</div> : <p className="empty">No submission yet.</p>}</article>; })}</div></details>; })}{!students.length && <p className="empty">Add students from Control before creating class work.</p>}</div></section>;
 }
 
-function ClassroomRosterPanel({ roster, assignments, submissions, message, onRevoke, onRestore, onInvite }: { roster: ClassroomRosterMember[]; assignments: ClassroomAssignment[]; submissions: ClassroomAssignmentSubmission[]; message: string; onRevoke: (userId: string) => void; onRestore: (userId: string) => void; onInvite: (email: string) => Promise<void> }) {
+function ClassroomRosterPanel({ roster, assignments, submissions, reviews, message, onRevoke, onRestore, onInvite }: { roster: ClassroomRosterMember[]; assignments: ClassroomAssignment[]; submissions: AssignmentSubmission[]; reviews: AssignmentReview[]; message: string; onRevoke: (userId: string) => void; onRestore: (userId: string) => void; onInvite: (email: string) => Promise<void> }) {
   const [menu, setMenu] = useState<{ userId: string; left: number; top: number } | null>(null);
   const [query, setQuery] = useState("");
   const [openStudentId, setOpenStudentId] = useState<string | null>(null);
@@ -996,7 +1006,7 @@ function ClassroomRosterPanel({ roster, assignments, submissions, message, onRev
   const openMenu = (userId: string) => (event: ReactMouseEvent) => { event.preventDefault(); setMenu({ userId, left: event.clientX, top: event.clientY }); };
   const menuMember = menu ? roster.find((member) => member.userId === menu.userId) : null;
   const openStudent = roster.find((member) => member.userId === openStudentId) ?? null;
-  const latestFor = (assignmentId: string, userId: string) => submissions.filter((submission) => submission.assignment_id === assignmentId && submission.user_id === userId && submission.status !== "withdrawn").sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+  const submissionFor = (assignmentId: string, userId: string) => submissions.find((submission) => submission.assignment_id === assignmentId && submission.student_id === userId);
   return <section className="classroom-roster"><header><p className="eyebrow">Roster</p><h3>Enrolled students</h3></header>
     <div className="roster-toolbar"><form className="roster-search" onSubmit={(event) => event.preventDefault()}><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search students by name or email" aria-label="Search students" /><button type="submit">Search</button></form>
       <div className="roster-invite"><button type="button" onClick={() => setInviteOpen((open) => !open)}>Invite student</button>{inviteOpen && <form className="roster-invite-menu" onSubmit={async (event) => { event.preventDefault(); if (!inviteEmail.trim()) return; setInviteBusy(true); await onInvite(inviteEmail.trim()); setInviteBusy(false); setInviteEmail(""); setInviteOpen(false); }}><label>Invite by email<input type="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} placeholder="student@school.edu" autoFocus /></label><div><button type="submit" disabled={!inviteEmail.trim() || inviteBusy}>{inviteBusy ? "Inviting…" : "Send invite"}</button><button type="button" onClick={() => setInviteOpen(false)}>Cancel</button></div></form>}</div>
@@ -1006,29 +1016,25 @@ function ClassroomRosterPanel({ roster, assignments, submissions, message, onRev
     {menu && menuMember && <div className="tab-menu" style={{ left: menu.left, top: menu.top }}><strong>{menuMember.label}</strong><div><button type="button" onClick={() => { setOpenStudentId(menuMember.userId); setMenu(null); }}>View student</button><button type="button" onClick={() => setMenu(null)}>Close</button></div>{menuMember.status === "active" ? <button type="button" onClick={() => { onRevoke(menuMember.userId); setMenu(null); }}>Revoke access</button> : <button type="button" onClick={() => { onRestore(menuMember.userId); setMenu(null); }}>Restore access</button>}</div>}
     {openStudent && <div className="student-detail-backdrop" onClick={() => setOpenStudentId(null)}><section className="student-detail" onClick={(event) => event.stopPropagation()}>
       <header><div><p className="eyebrow">Student</p><h3>{openStudent.label}</h3><p>{openStudent.email ?? "No email on file"} · enrolled {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(new Date(openStudent.enrolledAt))}</p></div><button type="button" onClick={() => setOpenStudentId(null)}>Close</button></header>
-      <div className="student-detail-assignments">{assignments.filter((assignment) => assignment.status !== "archived").map((assignment) => { const submission = latestFor(assignment.id, openStudent.userId); const scores = submission ? submission.forecast_periods.flatMap((period) => (period.forecast_verifications ?? []).flatMap((verification) => typeof verification.score_data?.automaticScore === "number" ? [verification.score_data.automaticScore] : [])) : []; const averageScore = scores.length ? Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length) : null; return <article key={assignment.id}><span><strong>{assignment.title}</strong><small>{assignmentDates(assignment).map(forecastTargetTitle).join(" · ")}</small></span><b className={submission ? "status-ready" : "status-pending"}>{submission ? (averageScore !== null ? `${averageScore}%` : "Submitted") : "Not submitted"}</b></article>; })}{!assignments.filter((assignment) => assignment.status !== "archived").length && <p className="empty">No assignments have been created yet.</p>}</div>
+      <div className="student-detail-assignments">{assignments.filter((assignment) => assignment.status !== "archived").map((assignment) => { const submission = submissionFor(assignment.id, openStudent.userId); const review = submission ? reviews.find((row) => row.submission_id === submission.id) : undefined; const status = submission?.status === "submitted" ? (review?.manual_score != null ? `${review.manual_score}%` : "Submitted") : submission ? "Draft saved" : "Not submitted"; return <article key={assignment.id}><span><strong>{assignment.title}</strong><small>{assignmentDates(assignment).map(forecastTargetTitle).join(" · ")}</small></span><b className={submission?.status === "submitted" ? "status-ready" : "status-pending"}>{status}</b></article>; })}{!assignments.filter((assignment) => assignment.status !== "archived").length && <p className="empty">No assignments have been created yet.</p>}</div>
       <div className="student-detail-actions">{openStudent.status === "active" ? <button type="button" className="danger" onClick={() => onRevoke(openStudent.userId)}>Revoke access</button> : <button type="button" onClick={() => onRestore(openStudent.userId)}>Restore access</button>}</div>
     </section></div>}
     {message && <p className="control-message" role="status">{message}</p>}
   </section>;
 }
 
-function ClassroomInstructorOverview({ assignment, submissions, roster, onReviewStudent }: { assignment: ClassroomAssignment | null; submissions: ClassroomAssignmentSubmission[]; roster: AcademicRosterMember[]; onReviewStudent: (student: AcademicRosterMember) => void }) {
+function ClassroomInstructorOverview({ assignment, submissions, reviews, roster, reviewOpenId, reviewComment, reviewScore, reviewMessage, onOpenReview, onReviewCommentChange, onReviewScoreChange, onSaveReview }: { assignment: ClassroomAssignment | null; submissions: AssignmentSubmission[]; reviews: AssignmentReview[]; roster: AcademicRosterMember[]; reviewOpenId: string | null; reviewComment: string; reviewScore: string; reviewMessage: string; onOpenReview: (submissionId: string | null) => void; onReviewCommentChange: (value: string) => void; onReviewScoreChange: (value: string) => void; onSaveReview: (submissionId: string) => void }) {
   const students = roster.filter((member) => member.role === "student");
-  const latestByStudent = new Map<string, ClassroomAssignmentSubmission>();
-  submissions.filter((submission) => submission.assignment_id === assignment?.id && submission.status !== "withdrawn").sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).forEach((submission) => { if (!latestByStudent.has(submission.user_id)) latestByStudent.set(submission.user_id, submission); });
+  const submissionFor = (userId: string) => assignment ? submissions.find((submission) => submission.assignment_id === assignment.id && submission.student_id === userId) : undefined;
+  const reviewsFor = (submissionId: string) => reviews.filter((review) => review.submission_id === submissionId).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   const rows = students.map((student) => {
-    const submission = latestByStudent.get(student.userId);
-    const periods = Array.isArray(submission?.forecast_periods) ? submission.forecast_periods : [];
-    const scores = periods.flatMap((period) => (Array.isArray(period.forecast_verifications) ? period.forecast_verifications : []).map((verification) => verification.score_data?.automaticScore)).filter((score): score is number => typeof score === "number");
-    const reviews = Array.isArray(submission?.forecast_reviews) ? submission.forecast_reviews : [];
-    return { student, submission, automaticScore: scores.length ? Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length) : null, reviewed: reviews.length > 0, feedback: reviews.find((review) => review.comment)?.comment ?? null };
+    const submission = submissionFor(student.userId);
+    const submissionReviews = submission ? reviewsFor(submission.id) : [];
+    return { student, submission, latestReview: submissionReviews[0] ?? null, allReviews: submissionReviews };
   });
-  const submitted = rows.filter((row) => row.submission).length;
-  const scored = rows.filter((row) => row.automaticScore !== null);
-  const averageScore = scored.length ? Math.round(scored.reduce((sum, row) => sum + (row.automaticScore ?? 0), 0) / scored.length) : null;
-  const feedbackCount = rows.filter((row) => row.reviewed).length;
-  return <section className="classroom-instructor-overview"><header><div><p className="eyebrow">Instructor overview</p><h3>{assignment?.title ?? "No active assignment"}</h3><p>{assignment ? "A single teaching view for completion, automatic verification, and private feedback." : "Select or create an assignment to see the class workflow."}</p></div></header>{assignment && <><div className="instructor-overview-metrics"><article><span>Submitted</span><strong>{submitted}/{students.length || "—"}</strong><small>latest student forecast</small></article><article><span>Automatic score</span><strong>{averageScore === null ? "Pending" : `${averageScore}%`}</strong><small>{scored.length ? `${scored.length} scored student${scored.length === 1 ? "" : "s"}` : "periods still awaiting actuals"}</small></article><article><span>Feedback given</span><strong>{feedbackCount}/{submitted || "—"}</strong><small>reviewed submissions</small></article><article><span>Due status</span><strong>{assignment.due_at && new Date(assignment.due_at).getTime() < Date.now() ? "Closed" : assignment.status}</strong><small>{assignment.due_at ? new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(assignment.due_at)) : "No due time set"}</small></article></div><section className="instructor-roster-status"><header><div><p className="eyebrow">Student status</p><h4>Review queue</h4><p>Automatic scoring stays separate from your manual assessment. Use Review to add a score or written feedback.</p></div></header><div>{rows.map((row) => <article key={row.student.userId}><span><strong>{row.student.label}</strong><small>{row.submission ? `Submitted ${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(row.submission.created_at))}` : "No submission yet"}</small></span><span><b className={row.submission ? "status-ready" : "status-pending"}>{row.submission ? "Submitted" : "Missing"}</b><em>{row.automaticScore === null ? "Score pending" : `Auto ${row.automaticScore}%`}</em><small>{row.feedback ? "Feedback saved" : row.reviewed ? "Manual review saved" : "No feedback yet"}</small><button type="button" disabled={!row.submission} onClick={() => onReviewStudent(row.student)}>Review</button></span></article>)}{!students.length && <p className="empty">Add students in Settings before using this overview.</p>}</div></section><details className="assessment-guide"><summary>How scoring works</summary><div><article><strong>Automatic accuracy</strong><span>Observed highs/lows and weather signals drive the automatic score when periods finish.</span></article><article><strong>Forecast reasoning</strong><span>Use a comment to assess whether the attached evidence and reasoning support the forecast.</span></article><article><strong>Manual assessment</strong><span>Use Review to add an optional 0–100 score without overwriting automatic verification.</span></article></div></details></>}</section>;
+  const submitted = rows.filter((row) => row.submission?.status === "submitted").length;
+  const reviewedCount = rows.filter((row) => row.latestReview).length;
+  return <section className="classroom-instructor-overview"><header><div><p className="eyebrow">Instructor overview</p><h3>{assignment?.title ?? "No active assignment"}</h3><p>{assignment ? "Track completion and leave feedback for this assignment." : "Select or create an assignment to see the class workflow."}</p></div></header>{assignment && <><div className="instructor-overview-metrics"><article><span>Submitted</span><strong>{submitted}/{students.length || "—"}</strong><small>of enrolled students</small></article><article><span>Feedback given</span><strong>{reviewedCount}/{submitted || "—"}</strong><small>reviewed submissions</small></article><article><span>Due status</span><strong>{assignment.due_at && new Date(assignment.due_at).getTime() < Date.now() ? "Closed" : assignment.status}</strong><small>{assignment.due_at ? new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(assignment.due_at)) : "No due time set"}</small></article></div><section className="instructor-roster-status"><header><div><p className="eyebrow">Student status</p><h4>Review queue</h4><p>Leave a score or written feedback once a student has submitted.</p></div></header><div>{rows.map((row) => <article key={row.student.userId}><div className="review-row-summary"><span><strong>{row.student.label}</strong><small>{row.submission?.submitted_at ? `Submitted ${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(row.submission.submitted_at))}` : row.submission ? "Draft saved" : "No submission yet"}</small></span><span><b className={row.submission?.status === "submitted" ? "status-ready" : "status-pending"}>{row.submission?.status === "submitted" ? "Submitted" : row.submission ? "Draft" : "Missing"}</b><em>{row.latestReview?.manual_score != null ? `Score ${row.latestReview.manual_score}%` : row.latestReview ? "Feedback saved" : "No feedback yet"}</em><button type="button" disabled={row.submission?.status !== "submitted"} onClick={() => onOpenReview(reviewOpenId === row.submission?.id ? null : row.submission!.id)}>{reviewOpenId === row.submission?.id ? "Close" : "Review"}</button></span></div>{row.submission && reviewOpenId === row.submission.id && <div className="assignment-review-form"><div className="assignment-submission-days">{assignmentDates(assignment).map((date) => <AssignmentDayMiniCard key={date} date={date} response={row.submission!.responses[date]} />)}</div><label>Feedback<textarea value={reviewComment} onChange={(event) => onReviewCommentChange(event.target.value)} placeholder="Feedback private to this student and the teaching team…" /></label><label>Manual score (optional)<input inputMode="numeric" value={reviewScore} onChange={(event) => onReviewScoreChange(event.target.value)} placeholder="0–100" /></label><button type="button" onClick={() => onSaveReview(row.submission!.id)}>Save review</button>{reviewMessage && <p className="control-message" role="status">{reviewMessage}</p>}{row.allReviews.length > 0 && <div className="review-notes"><strong>Review history</strong>{row.allReviews.map((review) => <article key={review.id}><span>{review.manual_score === null ? "Comment" : `Score ${review.manual_score}%`}</span><p>{review.comment || "No written comment."}</p></article>)}</div>}</div>}</article>)}{!students.length && <p className="empty">Add students in Settings before using this overview.</p>}</div></section></>}</section>;
 }
 
 function ClassroomReviewPanel({ target, runs, selectedRun, notes, comment, manualScore, message, onSelectRun, onCommentChange, onManualScoreChange, onSave, onClose }: { target: ReviewTarget; runs: ReviewRun[]; selectedRun: ReviewRun | null; notes: Record<string, ForecastReview[]>; comment: string; manualScore: string; message: string; onSelectRun: (id: string) => void; onCommentChange: (value: string) => void; onManualScoreChange: (value: string) => void; onSave: (id: string) => void; onClose: () => void }) {
@@ -1062,13 +1068,11 @@ function InstructorRubricCard({ rubric, onRubricChange, notes, onSave }: { rubri
 
 type ClassroomAssignmentFields = Pick<ClassroomAssignment, "title" | "instructions" | "due_at" | "status"> & { target_dates: string[] };
 
-function ForecastDayMiniCard({ date, periods }: { date: string; periods: ClassroomAssignmentSubmission["forecast_periods"] }) {
-  const day = periods.find((period) => period.valid_date === date && period.period === "day")?.forecast_data;
-  const night = periods.find((period) => period.valid_date === date && period.period === "night")?.forecast_data;
+function AssignmentDayMiniCard({ date, response }: { date: string; response: AssignmentDayResponse | undefined }) {
+  const hasAnswer = Boolean(response && (response.tempLow || response.tempHigh || response.condition));
   return <article className="assignment-day-mini">
-    <header><strong>{forecastTargetTitle(date)}</strong><span>{day || night ? "Submitted" : "Not submitted"}</span></header>
-    <div><span>Day</span><b>H {displayForecastTemperature(day?.highLow ?? "")}</b><small>{conditionLabel(day?.conditions ?? "—")} · {displayForecastChance(day?.rainChance ?? "")}</small></div>
-    <div><span>Night</span><b>L {displayForecastTemperature(night?.highLow ?? "")}</b><small>{conditionLabel(night?.conditions ?? "—")} · {displayForecastChance(night?.rainChance ?? "")}</small></div>
+    <header><strong>{forecastTargetTitle(date)}</strong><span>{hasAnswer ? "Answered" : "Not answered"}</span></header>
+    {hasAnswer ? <div><b>{response!.tempLow || "—"}° / {response!.tempHigh || "—"}°</b><small>{response!.condition ? conditionLabel(response!.condition) : "No conditions set"}{response!.confidence ? ` · ${response!.confidence} confidence` : ""}</small>{response!.notes && <p>{response!.notes}</p>}</div> : <p className="empty">No response yet.</p>}
   </article>;
 }
 
@@ -1159,7 +1163,7 @@ function ForecastDayMiniCard({ date, periods }: { date: string; periods: Classro
   </section>;
 } */
 
-function ClassroomAssignmentStudio({ assignments, submissions, roster, selectedAssignmentId, dismissedAssignmentId, canManage, canOpenForecast, onCreate, onSelectAssignment, onDismissAssignment, onUpdateAssignment, onOpenForecast, message }: { assignments: ClassroomAssignment[]; submissions: ClassroomAssignmentSubmission[]; roster: AcademicRosterMember[]; selectedAssignmentId: string; dismissedAssignmentId: string | null; canManage: boolean; canOpenForecast: boolean; onCreate: (fields: ClassroomAssignmentFields) => void; onSelectAssignment: (assignment: ClassroomAssignment) => void; onDismissAssignment: (assignmentId: string) => void; onUpdateAssignment: (assignmentId: string, fields: Partial<Pick<ClassroomAssignment, "title" | "instructions" | "due_at" | "status">>) => void; onOpenForecast: () => void; message: string }) {
+function ClassroomAssignmentStudio({ assignments, submissions, references, reviews, roster, selectedAssignmentId, dismissedAssignmentId, canManage, myUserId, draftResponses, saving, referenceOptions, linkLabel, linkUrl, onCreate, onSelectAssignment, onDismissAssignment, onUpdateAssignment, onDraftChange, onSaveDraft, onAddReference, onRemoveReference, onLinkLabelChange, onLinkUrlChange, onAddLinkReference, message }: { assignments: ClassroomAssignment[]; submissions: AssignmentSubmission[]; references: AssignmentReferenceItem[]; reviews: AssignmentReview[]; roster: AcademicRosterMember[]; selectedAssignmentId: string; dismissedAssignmentId: string | null; canManage: boolean; myUserId?: string; draftResponses: Record<string, AssignmentDayResponse>; saving: boolean; referenceOptions: ReferenceItem[]; linkLabel: string; linkUrl: string; onCreate: (fields: ClassroomAssignmentFields) => void; onSelectAssignment: (assignment: ClassroomAssignment) => void; onDismissAssignment: (assignmentId: string) => void; onUpdateAssignment: (assignmentId: string, fields: Partial<Pick<ClassroomAssignment, "title" | "instructions" | "due_at" | "status">>) => void; onDraftChange: (date: string, field: keyof AssignmentDayResponse, value: string) => void; onSaveDraft: (assignment: ClassroomAssignment, submit: boolean) => void; onAddReference: (assignment: ClassroomAssignment, item: ReferenceItem) => void; onRemoveReference: (id: string) => void; onLinkLabelChange: (value: string) => void; onLinkUrlChange: (value: string) => void; onAddLinkReference: (assignment: ClassroomAssignment) => void; message: string }) {
   const [composerOpen, setComposerOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [startDate, setStartDate] = useState(nextForecastDate());
@@ -1174,12 +1178,7 @@ function ClassroomAssignmentStudio({ assignments, submissions, roster, selectedA
   const [editDueAt, setEditDueAt] = useState("");
   const [editStatus, setEditStatus] = useState<ClassroomAssignment["status"]>("open");
   const targetDates = Array.from({ length: dayCount }, (_, index) => addDays(new Date(`${startDate}T12:00:00`), index));
-  const studentName = (userId: string) => roster.find((member) => member.userId === userId)?.label ?? "Student";
-  const latestSubmissionsFor = (assignmentId: string) => {
-    const latestByStudent = new Map<string, ClassroomAssignmentSubmission>();
-    submissions.filter((submission) => submission.assignment_id === assignmentId && submission.status !== "withdrawn").sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).forEach((submission) => { if (!latestByStudent.has(submission.user_id)) latestByStudent.set(submission.user_id, submission); });
-    return [...latestByStudent.values()];
-  };
+  const submissionsFor = (assignmentId: string) => submissions.filter((submission) => submission.assignment_id === assignmentId);
   const toDatetimeLocalValue = (iso: string) => { const date = new Date(iso); return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
   const startEdit = (assignment: ClassroomAssignment) => {
     onSelectAssignment(assignment);
@@ -1190,21 +1189,30 @@ function ClassroomAssignmentStudio({ assignments, submissions, roster, selectedA
     setEditStatus(assignment.status);
     setAssignmentMenu(null);
   };
+  const renderReference = (reference: AssignmentReferenceItem) => {
+    if (reference.kind === "link") return <li key={reference.id}><strong>{reference.label}</strong>{reference.url && <> · <a href={reference.url} target="_blank" rel="noreferrer">Open</a></>}</li>;
+    const detailText = typeof reference.detail?.text === "string" ? reference.detail.text : "";
+    const preview = reference.detail?.preview as ReferencePreview | undefined;
+    return <li key={reference.id}><strong>{reference.label}</strong><ArchivedReferencePreview reference={{ id: reference.id, label: reference.label, detail: detailText, preview }} /></li>;
+  };
   const visibleAssignments = assignments.filter((assignment) => assignment.status !== "archived");
   const archivedAssignments = assignments.filter((assignment) => assignment.status === "archived");
   const renderAssignment = (assignment: ClassroomAssignment) => {
       const isOpen = assignment.id === selectedAssignmentId && dismissedAssignmentId !== assignment.id;
       const dates = assignmentDates(assignment);
-      const latestSubmissions = isOpen ? latestSubmissionsFor(assignment.id) : [];
+      const assignmentSubmissions = isOpen ? submissionsFor(assignment.id) : [];
+      const assignmentReferences = isOpen ? references.filter((reference) => reference.assignment_id === assignment.id) : [];
+      const mySubmission = isOpen && myUserId ? assignmentSubmissions.find((submission) => submission.student_id === myUserId) : undefined;
+      const myReview = mySubmission ? reviews.find((review) => review.submission_id === mySubmission.id) : undefined;
       const isEditing = isOpen && editingId === assignment.id;
       return <details key={assignment.id} open={isOpen} onToggle={(event) => { const nowOpen = (event.currentTarget as HTMLDetailsElement).open; if (nowOpen) { onSelectAssignment(assignment); } else if (assignment.id === selectedAssignmentId) { onDismissAssignment(assignment.id); if (editingId === assignment.id) setEditingId(null); } }}>
         <summary onContextMenu={canManage ? (event) => { event.preventDefault(); setAssignmentMenu({ id: assignment.id, left: event.clientX, top: event.clientY }); } : undefined}><span><strong>{assignment.title}</strong><small>{dates.map(forecastTargetTitle).join(" · ")}</small></span><b>{assignment.status}</b></summary>
         <div className="assignment-focus">
-          {isEditing ? <form className="assignment-composer" onSubmit={(event) => { event.preventDefault(); if (!editTitle.trim()) return; onUpdateAssignment(assignment.id, { title: editTitle.trim(), instructions: editInstructions.trim() || null, due_at: editDueAt ? new Date(editDueAt).toISOString() : null, status: editStatus }); setEditingId(null); }}><div className="assignment-composer-fields"><label>Assignment name<input value={editTitle} onChange={(event) => setEditTitle(event.target.value)} /></label><label>Due time<input type="datetime-local" value={editDueAt} onChange={(event) => setEditDueAt(event.target.value)} /></label><label>Status<select value={editStatus} onChange={(event) => setEditStatus(event.target.value as ClassroomAssignment["status"])}><option value="draft">Draft</option><option value="open">Open to students</option><option value="closed">Closed</option></select></label></div><label>Directions or grading focus<textarea value={editInstructions} onChange={(event) => setEditInstructions(event.target.value)} /></label><div className="settings-actions"><button type="submit" disabled={!editTitle.trim()}>Save changes</button><button type="button" onClick={() => setEditingId(null)}>Cancel</button></div></form> : <header><div><p>{assignment.instructions || "No additional directions were added."}</p><small>{dates.map(forecastTargetTitle).join(" · ")}{assignment.due_at ? ` · due ${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(assignment.due_at))}` : ""}</small></div>{canOpenForecast && <button type="button" onClick={onOpenForecast}>{canManage ? "Build example" : "Start assignment"}</button>}</header>}
+          {isEditing ? <form className="assignment-composer" onSubmit={(event) => { event.preventDefault(); if (!editTitle.trim()) return; onUpdateAssignment(assignment.id, { title: editTitle.trim(), instructions: editInstructions.trim() || null, due_at: editDueAt ? new Date(editDueAt).toISOString() : null, status: editStatus }); setEditingId(null); }}><div className="assignment-composer-fields"><label>Assignment name<input value={editTitle} onChange={(event) => setEditTitle(event.target.value)} /></label><label>Due time<input type="datetime-local" value={editDueAt} onChange={(event) => setEditDueAt(event.target.value)} /></label><label>Status<select value={editStatus} onChange={(event) => setEditStatus(event.target.value as ClassroomAssignment["status"])}><option value="draft">Draft</option><option value="open">Open to students</option><option value="closed">Closed</option></select></label></div><label>Directions or grading focus<textarea value={editInstructions} onChange={(event) => setEditInstructions(event.target.value)} /></label><div className="settings-actions"><button type="submit" disabled={!editTitle.trim()}>Save changes</button><button type="button" onClick={() => setEditingId(null)}>Cancel</button></div></form> : <header><div><p>{assignment.instructions || "No additional directions were added."}</p><small>{dates.map(forecastTargetTitle).join(" · ")}{assignment.due_at ? ` · due ${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(assignment.due_at))}` : ""}</small></div></header>}
           {assignment.scenario && <div className="assignment-linker scenario-context"><div><strong>Historical scenario</strong><small>This date has already happened — it's a real past event, not a hypothetical.</small>{assignment.scenario.summary && <em>{assignment.scenario.summary}</em>}{(assignment.scenario.reference_notes || assignment.scenario.reference_links.length > 0) && <details className="scenario-reference-details"><summary>Reference data</summary>{assignment.scenario.reference_notes && <p>{assignment.scenario.reference_notes}</p>}{assignment.scenario.reference_links.length > 0 && <ul>{assignment.scenario.reference_links.map((link) => <li key={link.label}>{link.label}{link.detail ? ` — ${link.detail}` : ""}{link.url && <> · <a href={link.url} target="_blank" rel="noreferrer">Open</a></>}</li>)}</ul>}</details>}</div></div>}
-          {assignment.instructor_forecast && <section className="assignment-example"><p className="eyebrow">Instructor example</p><div>{dates.map((date) => <ForecastDayMiniCard key={date} date={date} periods={assignment.instructor_forecast?.days.find((day) => day.date === date) ? [{ valid_date: date, period: "day", forecast_data: assignment.instructor_forecast!.days.find((day) => day.date === date)!.day, forecast_verifications: [] }, { valid_date: date, period: "night", forecast_data: assignment.instructor_forecast!.days.find((day) => day.date === date)!.night, forecast_verifications: [] }] : []} />)}</div></section>}
-          {canManage && <section className="assignment-submissions"><header><div><p className="eyebrow">Student work</p><h4>{latestSubmissions.length} submitted</h4><p>Open a student to see each assigned day as a compact forecast record before reviewing it.</p></div></header><div>{latestSubmissions.map((submission) => <details key={submission.id}><summary><span><strong>{studentName(submission.user_id)}</strong><small>Submitted {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(submission.created_at))}</small></span><b>{dates.filter((date) => submission.forecast_periods.some((period) => period.valid_date === date)).length}/{dates.length} days</b></summary><div className="assignment-submission-days">{dates.map((date) => <ForecastDayMiniCard key={date} date={date} periods={submission.forecast_periods} />)}</div></details>)}{!latestSubmissions.length && <p className="empty">No student submissions have been linked to this assignment yet.</p>}</div></section>}
-          {!canManage && <section className="assignment-student-note"><strong>Your work stays private.</strong><p>Start assignment opens its own practice worksheet, separate from your Forecast tab drafts. Your instructor can review your submission; other students cannot.</p></section>}
+          {isOpen && canManage && <section className="assignment-reference-editor"><p className="eyebrow">Reference material</p><p className="assignment-reference-hint">Attach observations, model snapshots, or links for students to review before they answer.</p><ReferencePicker options={referenceOptions} references={assignmentReferences.filter((reference) => reference.kind !== "link").map((reference) => ({ id: reference.id, label: reference.label, detail: typeof reference.detail?.text === "string" ? reference.detail.text : "" }))} onAdd={(item) => onAddReference(assignment, item)} onRemove={onRemoveReference} addedLabel="Attached to this assignment" /><form className="assignment-link-form" onSubmit={(event) => { event.preventDefault(); if (!linkLabel.trim() || !linkUrl.trim()) return; onAddLinkReference(assignment); }}><label>Link label<input value={linkLabel} onChange={(event) => onLinkLabelChange(event.target.value)} placeholder="e.g. SPC Day 1 Outlook" /></label><label>URL<input type="url" value={linkUrl} onChange={(event) => onLinkUrlChange(event.target.value)} placeholder="https://…" /></label><button type="submit" disabled={!linkLabel.trim() || !linkUrl.trim()}>Add link</button></form>{assignmentReferences.filter((reference) => reference.kind === "link").length > 0 && <ul className="assignment-link-list">{assignmentReferences.filter((reference) => reference.kind === "link").map((reference) => <li key={reference.id}><strong>{reference.label}</strong> · <a href={reference.url ?? "#"} target="_blank" rel="noreferrer">Open</a> <button type="button" onClick={() => onRemoveReference(reference.id)}>Remove</button></li>)}</ul>}</section>}
+          {isOpen && !canManage && assignmentReferences.length > 0 && <section className="assignment-reference-list"><p className="eyebrow">Reference material</p><ul>{assignmentReferences.map(renderReference)}</ul></section>}
+          {isOpen && !canManage && <section className="assignment-response-form"><p className="eyebrow">Your response</p>{mySubmission?.status === "submitted" && <p className="assignment-submitted-note">Submitted{mySubmission.submitted_at ? ` ${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(mySubmission.submitted_at))}` : ""}. You can still update your answer below.</p>}{dates.map((date) => { const response = draftResponses[date] ?? emptyAssignmentDayResponse; return <fieldset key={date} className="forecast-period"><legend>{forecastTargetTitle(date)}</legend><div className="forecast-fields"><label>Low<span className="unit-input" style={unitInputStyle(response.tempLow, 2)}><input inputMode="decimal" placeholder="61" value={response.tempLow} onChange={(event) => onDraftChange(date, "tempLow", event.target.value)} /><i aria-hidden="true">°</i></span></label><label>High<span className="unit-input" style={unitInputStyle(response.tempHigh, 2)}><input inputMode="decimal" placeholder="82" value={response.tempHigh} onChange={(event) => onDraftChange(date, "tempHigh", event.target.value)} /><i aria-hidden="true">°</i></span></label><label>Sky condition<select value={response.condition} onChange={(event) => onDraftChange(date, "condition", event.target.value)}><option value="">Choose conditions</option>{conditionOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>Confidence<select value={response.confidence} onChange={(event) => onDraftChange(date, "confidence", event.target.value)}><option value="">Choose confidence</option><option value="low">Low</option><option value="moderate">Moderate</option><option value="high">High</option></select></label><label className="wide-field">Notes<textarea rows={2} value={response.notes} onChange={(event) => onDraftChange(date, "notes", event.target.value)} placeholder="Reasoning, hazards, or anything worth noting" /></label></div></fieldset>; })}<div className="form-actions"><span>{message}</span><div><button type="button" onClick={() => onSaveDraft(assignment, false)} disabled={saving}>Save draft</button><button type="button" onClick={() => onSaveDraft(assignment, true)} disabled={saving}>{saving ? "Submitting…" : "Submit"}</button></div></div>{myReview && <div className="assignment-my-review"><strong>Instructor feedback</strong>{myReview.manual_score != null && <span>Score: {myReview.manual_score}%</span>}<p>{myReview.comment || "No written comment."}</p></div>}</section>}
         </div>
       </details>;
   };
@@ -1216,14 +1224,14 @@ function ClassroomAssignmentStudio({ assignments, submissions, roster, selectedA
       {canManage && archivedAssignments.length > 0 && <details className="history-fold"><summary>Archived · {archivedAssignments.length}</summary><div className="classroom-roster-list">{archivedAssignments.map((assignment) => <article key={assignment.id}><span><strong>{assignment.title}</strong><small>{assignmentDates(assignment).map(forecastTargetTitle).join(" · ")}</small></span><button type="button" onClick={() => onUpdateAssignment(assignment.id, { status: "draft" })}>Restore</button></article>)}</div></details>}
     </section>
     {assignmentMenu && menuAssignment && <div className="tab-menu" style={{ left: assignmentMenu.left, top: assignmentMenu.top }}><strong>{menuAssignment.title}</strong><div><button type="button" onClick={() => startEdit(menuAssignment)}>Edit assignment</button><button type="button" onClick={() => setAssignmentMenu(null)}>Close</button></div><small>Archiving hides it from the active list and from students, but keeps submission history.</small><button type="button" onClick={() => { onUpdateAssignment(menuAssignment.id, { status: "archived" }); setAssignmentMenu(null); }}>Archive assignment</button></div>}
-    {message && <p className="control-message" role="status">{message}</p>}
+    {!canManage && message && <p className="control-message" role="status">{message}</p>}
   </section>;
 }
 
-function ClassroomAssignmentDesk(props: { assignments: ClassroomAssignment[]; submissions: ClassroomAssignmentSubmission[]; roster: AcademicRosterMember[]; selectedAssignmentId: string; dismissedAssignmentId: string | null; canManage: boolean; canOpenForecast: boolean; onCreate: (fields: ClassroomAssignmentFields) => void; onSelectAssignment: (assignment: ClassroomAssignment) => void; onDismissAssignment: (assignmentId: string) => void; onUpdateAssignment: (assignmentId: string, fields: Partial<Pick<ClassroomAssignment, "title" | "instructions" | "due_at" | "status">>) => void; onOpenForecast: () => void; onReviewStudent: (student: AcademicRosterMember) => void; message: string }) {
+function ClassroomAssignmentDesk(props: { assignments: ClassroomAssignment[]; submissions: AssignmentSubmission[]; references: AssignmentReferenceItem[]; reviews: AssignmentReview[]; roster: AcademicRosterMember[]; selectedAssignmentId: string; dismissedAssignmentId: string | null; canManage: boolean; myUserId?: string; draftResponses: Record<string, AssignmentDayResponse>; saving: boolean; referenceOptions: ReferenceItem[]; linkLabel: string; linkUrl: string; onCreate: (fields: ClassroomAssignmentFields) => void; onSelectAssignment: (assignment: ClassroomAssignment) => void; onDismissAssignment: (assignmentId: string) => void; onUpdateAssignment: (assignmentId: string, fields: Partial<Pick<ClassroomAssignment, "title" | "instructions" | "due_at" | "status">>) => void; onDraftChange: (date: string, field: keyof AssignmentDayResponse, value: string) => void; onSaveDraft: (assignment: ClassroomAssignment, submit: boolean) => void; onAddReference: (assignment: ClassroomAssignment, item: ReferenceItem) => void; onRemoveReference: (id: string) => void; onLinkLabelChange: (value: string) => void; onLinkUrlChange: (value: string) => void; onAddLinkReference: (assignment: ClassroomAssignment) => void; reviewOpenId: string | null; reviewComment: string; reviewScore: string; reviewMessage: string; onOpenReview: (submissionId: string | null) => void; onReviewCommentChange: (value: string) => void; onReviewScoreChange: (value: string) => void; onSaveReview: (submissionId: string) => void; message: string }) {
   const isDismissed = props.dismissedAssignmentId === props.selectedAssignmentId;
   const assignment = isDismissed ? undefined : props.assignments.find((item) => item.id === props.selectedAssignmentId && item.status !== "archived");
-  return <><ClassroomAssignmentStudio assignments={props.assignments} submissions={props.submissions} roster={props.roster} selectedAssignmentId={props.selectedAssignmentId} dismissedAssignmentId={props.dismissedAssignmentId} canManage={props.canManage} canOpenForecast={props.canOpenForecast} onCreate={props.onCreate} onSelectAssignment={props.onSelectAssignment} onDismissAssignment={props.onDismissAssignment} onUpdateAssignment={props.onUpdateAssignment} onOpenForecast={props.onOpenForecast} message={props.message} />{props.canManage && assignment && <ClassroomInstructorOverview assignment={assignment} submissions={props.submissions} roster={props.roster} onReviewStudent={props.onReviewStudent} />}</>;
+  return <><ClassroomAssignmentStudio assignments={props.assignments} submissions={props.submissions} references={props.references} reviews={props.reviews} roster={props.roster} selectedAssignmentId={props.selectedAssignmentId} dismissedAssignmentId={props.dismissedAssignmentId} canManage={props.canManage} myUserId={props.myUserId} draftResponses={props.draftResponses} saving={props.saving} referenceOptions={props.referenceOptions} linkLabel={props.linkLabel} linkUrl={props.linkUrl} onCreate={props.onCreate} onSelectAssignment={props.onSelectAssignment} onDismissAssignment={props.onDismissAssignment} onUpdateAssignment={props.onUpdateAssignment} onDraftChange={props.onDraftChange} onSaveDraft={props.onSaveDraft} onAddReference={props.onAddReference} onRemoveReference={props.onRemoveReference} onLinkLabelChange={props.onLinkLabelChange} onLinkUrlChange={props.onLinkUrlChange} onAddLinkReference={props.onAddLinkReference} message={props.message} />{props.canManage && assignment && <ClassroomInstructorOverview assignment={assignment} submissions={props.submissions} reviews={props.reviews} roster={props.roster} reviewOpenId={props.reviewOpenId} reviewComment={props.reviewComment} reviewScore={props.reviewScore} reviewMessage={props.reviewMessage} onOpenReview={props.onOpenReview} onReviewCommentChange={props.onReviewCommentChange} onReviewScoreChange={props.onReviewScoreChange} onSaveReview={props.onSaveReview} />}</>;
 }
 
 // deprecated: graded blind, with no automatic score visible. Superseded by ClassroomInstructorOverview + ClassroomReviewPanel. Kept for reference.
@@ -1372,11 +1380,6 @@ export default function Home() {
   const [locationMenuOpen, setLocationMenuOpen] = useState(false);
   const [forecastRun, setForecastRun] = useState<ForecastRunDraft>(() => ({ id: crypto.randomUUID(), initialHorizonDays: 1, days: [createForecastDay(nextForecastDate())] }));
   const [selectedForecastDay, setSelectedForecastDay] = useState(0);
-  const [practiceRun, setPracticeRun] = useState<ForecastRunDraft | null>(null);
-  const [selectedPracticeDay, setSelectedPracticeDay] = useState(0);
-  const [practiceMessage, setPracticeMessage] = useState("");
-  const [practiceSubmitting, setPracticeSubmitting] = useState(false);
-  const [practiceSubmissionToken, setPracticeSubmissionToken] = useState("");
   const [tabMenuIndex, setTabMenuIndex] = useState<number | null>(null);
   const [tabMenuMessage, setTabMenuMessage] = useState("");
   const [tabMenuPosition, setTabMenuPosition] = useState({ left: 0, top: 0 });
@@ -1443,8 +1446,23 @@ export default function Home() {
   const [academicMessage, setAcademicMessage] = useState("");
   const [classroomAssignments, setClassroomAssignments] = useState<ClassroomAssignment[]>([]);
   const [classroomOfficialForecast, setClassroomOfficialForecast] = useState<ClassroomOfficialForecast | null>(null);
-  const [assignmentSubmissions, setAssignmentSubmissions] = useState<ClassroomAssignmentSubmission[]>([]);
+  // Assignments are deliberately independent of forecast_runs -- see
+  // supabase/migrations/20260823030000_assignment_content_and_notifications.sql.
+  const [assignmentSubmissions, setAssignmentSubmissions] = useState<AssignmentSubmission[]>([]);
   const [assignmentSubmissionRefreshToken, setAssignmentSubmissionRefreshToken] = useState(0);
+  const [assignmentReferences, setAssignmentReferences] = useState<AssignmentReferenceItem[]>([]);
+  const [assignmentReferenceRefreshToken, setAssignmentReferenceRefreshToken] = useState(0);
+  const [assignmentReviews, setAssignmentReviews] = useState<AssignmentReview[]>([]);
+  const [assignmentDraftResponses, setAssignmentDraftResponses] = useState<Record<string, AssignmentDayResponse>>({});
+  const [assignmentSaving, setAssignmentSaving] = useState(false);
+  const [assignmentLinkLabel, setAssignmentLinkLabel] = useState("");
+  const [assignmentLinkUrl, setAssignmentLinkUrl] = useState("");
+  const [assignmentReviewOpenId, setAssignmentReviewOpenId] = useState<string | null>(null);
+  const [assignmentReviewComment, setAssignmentReviewComment] = useState("");
+  const [assignmentReviewScore, setAssignmentReviewScore] = useState("");
+  const [assignmentReviewMessage, setAssignmentReviewMessage] = useState("");
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [selectedClassroomAssignmentId, setSelectedClassroomAssignmentId] = useState("");
   const [dismissedClassroomAssignmentId, setDismissedClassroomAssignmentId] = useState<string | null>(null);
   const [classroomHubTab, setClassroomHubTab] = useState<ClassroomHubTab>(() => {
@@ -1452,7 +1470,6 @@ export default function Home() {
     const tab = new URLSearchParams(window.location.search).get("tab");
     return tab === "outlook" || tab === "assignments" || tab === "progress" || tab === "roster" ? tab : "outlook";
   });
-  const [publishInstructorForecast, setPublishInstructorForecast] = useState(false);
   const [revisionParentRunId, setRevisionParentRunId] = useState<string | null>(null);
   const [assignmentMessage, setAssignmentMessage] = useState("");
   const selectedLocation = customLocation ?? weatherDeskLocation(locationId);
@@ -1494,33 +1511,21 @@ export default function Home() {
     if (target === "about") { window.history.pushState({}, "", "/?view=about"); setActiveSection("about"); window.scrollTo({ top: 0, behavior: "smooth" }); }
     if (target === "login" && !session) setLoginMenuOpen(true);
   };
-  const selectedClassroomAssignment = classroomAssignments.find((assignment) => assignment.id === selectedClassroomAssignmentId) ?? null;
   const activeScenario = scenarios.find((scenario) => scenario.id === activeScenarioId) ?? null;
-  const hasSubmittedSelectedAssignment = Boolean(session && selectedClassroomAssignment && assignmentSubmissions.some((submission) => submission.assignment_id === selectedClassroomAssignment.id && submission.user_id === session.user.id && submission.status !== "withdrawn"));
-  const showForecastAssignmentContext = Boolean(selectedClassroomAssignment?.status === "open" && (canManageActiveClassroom ? !selectedClassroomAssignment?.instructor_forecast : !hasSubmittedSelectedAssignment));
+  const myAssignmentSubmission = (assignmentId: string) => session ? assignmentSubmissions.find((submission) => submission.assignment_id === assignmentId && submission.student_id === session.user.id) ?? null : null;
+  const hasUnreadNotifications = notifications.some((notification) => !notification.read_at);
   const createNewForecastRun = (days = defaultForecastDays) => {
     const start = new Date(`${nextForecastDate()}T12:00:00`);
     return { id: crypto.randomUUID(), initialHorizonDays: days, days: Array.from({ length: days }, (_, offset) => createForecastDay(addDays(start, offset))) };
   };
-  const openClassroomAssignment = (assignment: ClassroomAssignment) => {
-    setSelectedClassroomAssignmentId(assignment.id);
-    setPublishInstructorForecast(canManageActiveClassroom);
-    const dates = assignmentDates(assignment);
-    setPracticeRun((current) => {
-      const alreadyOpen = current && dates.length === current.days.length && dates.every((date) => current.days.some((day) => day.date === date));
-      if (alreadyOpen) return current;
-      return { id: crypto.randomUUID(), initialHorizonDays: dates.length, days: dates.map((date) => createForecastDay(date)) };
-    });
-    setSelectedPracticeDay(0);
-    setPracticeMessage(`Opened “${assignment.title}” for ${dates.map(forecastTargetTitle).join(" · ")}.`);
-    setPracticeSubmissionToken("");
-    setActiveSection("practice");
-  };
-
   const selectClassroomAssignment = (assignment: ClassroomAssignment) => {
     setSelectedClassroomAssignmentId(assignment.id);
     setDismissedClassroomAssignmentId(null);
-    setAssignmentMessage(`Selected “${assignment.title}”. Review the dates and directions, then choose ${canManageActiveClassroom ? "Build example" : "Start assignment"} when ready.`);
+    const existing = myAssignmentSubmission(assignment.id);
+    const seeded: Record<string, AssignmentDayResponse> = {};
+    assignmentDates(assignment).forEach((date) => { seeded[date] = existing?.responses[date] ?? emptyAssignmentDayResponse; });
+    setAssignmentDraftResponses(seeded);
+    setAssignmentMessage("");
   };
 
   const dismissClassroomAssignment = (assignmentId: string) => {
@@ -2182,11 +2187,40 @@ export default function Home() {
 
   useEffect(() => {
     if (!session || !supabaseUrl || !supabaseKey || activeWorkspace?.kind !== "classroom" || !activeWorkspace.classroomId) { setAssignmentSubmissions([]); return; }
-    fetch(`${supabaseUrl}/rest/v1/forecast_runs?select=id,user_id,created_at,status,assignment_id,forecast_periods(valid_date,period,forecast_data,forecast_verifications(score_data)),forecast_reviews(id,run_id,reviewer_id,comment,manual_score,created_at)&classroom_id=eq.${activeWorkspace.classroomId}&status=neq.withdrawn&order=created_at.desc`, { headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` } })
-      .then((response) => response.ok ? response.json() : Promise.reject(new Error("Assignment submissions could not be loaded.")))
-      .then((submissions: ClassroomAssignmentSubmission[]) => setAssignmentSubmissions(submissions))
+    fetch(`${supabaseUrl}/rest/v1/assignment_submissions?select=id,assignment_id,classroom_id,student_id,responses,status,submitted_at,created_at,updated_at&classroom_id=eq.${activeWorkspace.classroomId}&order=updated_at.desc`, { headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` } })
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error("Assignment submissions could not be loaded. Apply the assignment content migration, then refresh.")))
+      .then((submissions: AssignmentSubmission[]) => setAssignmentSubmissions(submissions))
       .catch(() => setAssignmentSubmissions([]));
   }, [activeWorkspaceKey, assignmentSubmissionRefreshToken, session]);
+
+  useEffect(() => {
+    if (!session || !supabaseUrl || !supabaseKey || !selectedClassroomAssignmentId) { setAssignmentReferences([]); return; }
+    fetch(`${supabaseUrl}/rest/v1/assignment_references?select=id,assignment_id,classroom_id,kind,label,url,detail,created_by,created_at&assignment_id=eq.${selectedClassroomAssignmentId}&order=created_at.asc`, { headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` } })
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error("Reference material could not be loaded.")))
+      .then((references: AssignmentReferenceItem[]) => setAssignmentReferences(references))
+      .catch(() => setAssignmentReferences([]));
+  }, [selectedClassroomAssignmentId, assignmentReferenceRefreshToken, session]);
+
+  useEffect(() => {
+    if (!session || !supabaseUrl || !supabaseKey || !assignmentSubmissions.length) { setAssignmentReviews([]); return; }
+    const ids = assignmentSubmissions.map((submission) => submission.id).join(",");
+    fetch(`${supabaseUrl}/rest/v1/assignment_reviews?select=id,submission_id,reviewer_id,comment,manual_score,created_at,updated_at&submission_id=in.(${ids})&order=created_at.desc`, { headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` } })
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error("Assignment reviews could not be loaded.")))
+      .then((reviews: AssignmentReview[]) => setAssignmentReviews(reviews))
+      .catch(() => setAssignmentReviews([]));
+  }, [assignmentSubmissions, session]);
+
+  useEffect(() => {
+    if (!session || !supabaseUrl || !supabaseKey) { setNotifications([]); return; }
+    let isActive = true;
+    const loadNotifications = () => fetch(`${supabaseUrl}/rest/v1/notifications?select=id,user_id,kind,payload,read_at,created_at&order=created_at.desc&limit=20`, { headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` } })
+      .then((response) => response.ok ? response.json() : [])
+      .then((rows: AppNotification[]) => { if (isActive) setNotifications(rows); })
+      .catch(() => {});
+    loadNotifications();
+    const refreshId = window.setInterval(loadNotifications, 120_000);
+    return () => { isActive = false; window.clearInterval(refreshId); };
+  }, [session]);
 
   useEffect(() => {
     if (!reviewTarget || !session || !supabaseUrl || !supabaseKey) return;
@@ -2545,7 +2579,6 @@ export default function Home() {
     setRecordFocusDate(addDays(new Date(`${recordWindowStart}T12:00:00`), 1));
   }, [recordWindowStart]);
   const selectedDay = forecastRun.days[selectedForecastDay] ?? forecastRun.days[0];
-  const selectedPracticeDayDraft = practiceRun?.days[selectedPracticeDay] ?? practiceRun?.days[0] ?? null;
   const archiveMenu = archives.find((archive) => archive.id === archiveMenuId) ?? null;
   const pendingArchiveRemoval = archives.find((archive) => archive.id === pendingArchiveRemovalId) ?? null;
   const outlook = liveWeather?.forecastPeriods.reduce<{ date: string; label: string; high: number | null; low: number | null; shortForecast: string; precipitationChance: number | null; wind: string | null }[]>((days, period) => {
@@ -2628,87 +2661,95 @@ export default function Home() {
     }));
   }
 
-  // Practice (assignment) worksheet: a deliberately separate draft from forecastRun so
-  // opening an assignment never mixes its dates into a student's personal Forecast tab drafts.
-  function updatePracticePeriod(period: "day" | "night", field: Exclude<keyof PeriodDraft, "references">, value: string) {
-    setPracticeRun((run) => run && { ...run, days: run.days.map((day, index) => index === selectedPracticeDay ? { ...day, [period]: { ...day[period], [field]: value } } : day) });
+  // Assignments are deliberately independent of forecastRun/forecast_runs -- a lightweight
+  // per-day guess (temp range/condition/confidence), stored in assignment_submissions, never
+  // touches the real forecast archive or its automatic verification.
+  function updateAssignmentDraft(date: string, field: keyof AssignmentDayResponse, value: string) {
+    setAssignmentDraftResponses((current) => ({ ...current, [date]: { ...(current[date] ?? emptyAssignmentDayResponse), [field]: value } }));
   }
 
-  function formatPracticePeriodField(period: "day" | "night", field: "highLow" | "rainChance" | "timing") {
-    if (!selectedPracticeDayDraft) return;
-    const value = selectedPracticeDayDraft[period][field].trim();
-    if (!value) return;
-    if (field === "highLow") {
-      const number = temperatureInputValue(value);
-      updatePracticePeriod(period, field, number ? number.replace(/\.0+$/, "") : "");
-      return;
-    }
-    if (field === "rainChance") {
-      const number = Number.parseInt(percentInputValue(value), 10);
-      updatePracticePeriod(period, field, Number.isFinite(number) ? String(Math.max(0, Math.min(100, number))) : "");
-      return;
-    }
-    const normalized = value.replace(/\s*(a\.?m\.?|p\.?m\.?)\b/gi, (_, meridiem: string) => ` ${meridiem[0].toUpperCase()}M`).replace(/\s*-\s*/g, "–");
-    updatePracticePeriod(period, field, /\b(?:AM|PM)\b/.test(normalized) ? normalized : `${normalized} PM`);
-  }
-
-  function addFreshPracticeReference(period: "day" | "night", item: ReferenceItem) {
-    const freshReference = { ...item, id: `${item.id}-${crypto.randomUUID()}` };
-    setPracticeRun((run) => run && { ...run, days: run.days.map((day, index) => index !== selectedPracticeDay ? day : { ...day, [period]: { ...day[period], references: [...day[period].references, freshReference] } }) });
-    setPracticeMessage(`${item.label} added as a fresh ${period} reference snapshot.`);
-  }
-
-  function removePracticeReference(period: "day" | "night", referenceId: string) {
-    setPracticeRun((run) => run && { ...run, days: run.days.map((day, index) => index !== selectedPracticeDay ? day : { ...day, [period]: { ...day[period], references: day[period].references.filter((reference) => reference.id !== referenceId) } }) });
-  }
-
-  async function submitPracticeAssignment(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (practiceSubmitting || !practiceRun || !practiceRun.days.length) return;
-    if (!session || !supabaseUrl || !supabaseKey) { setPracticeMessage("Sign in before submitting so this forecast can be archived safely."); return; }
-    if (selectedClassroomAssignment && assignmentDates(selectedClassroomAssignment).some((date) => !practiceRun.days.some((day) => day.date === date))) {
-      setPracticeMessage(`This worksheet must include every target date for “${selectedClassroomAssignment.title}.”`);
-      return;
-    }
-    setPracticeSubmitting(true);
-    setPracticeSubmissionToken("");
-    const savedAt = new Date().toISOString();
-    const nextArchives = practiceRun.days.map((day) => ({
-      id: crypto.randomUUID(), locationId: selectedLocation.id, locationName: selectedLocation.name, savedAt, label: archiveTitle({ savedAt }), targetDate: day.date,
-      status: "submitted" as const, versionNumber: 1, parentRunId: null, authorId: session.user.id,
-      day: { high: day.day.highLow, conditions: day.day.conditions, rainChance: day.day.rainChance, timing: day.day.timing, hazards: day.day.hazards, reasoning: day.day.reasoning, references: day.day.references },
-      night: { low: day.night.highLow, conditions: day.night.conditions, rainChance: day.night.rainChance, timing: day.night.timing, hazards: day.night.hazards, reasoning: day.night.reasoning, references: day.night.references },
-      evidence: {
-        observation: liveWeather ? `${liveWeather.observation.temperatureF ?? "—"}°F, ${liveWeather.observation.description}; ${liveWeather.observation.station || liveWeather.observation.stationName || "NWS observation station"} at ${observedAt}` : "No live observation available when saved",
-        forecast: liveWeather?.forecast ? `${liveWeather.forecast.period}: ${liveWeather.forecast.shortForecast}; ${liveWeather.forecast.precipitationChance ?? 0}% precipitation chance` : "No NWS forecast available when saved",
-        alerts: liveWeather?.alerts.length ? liveWeather.alerts.map((alert) => alert.event).join(", ") : liveWeather?.alertsAvailable === false ? "NWS alert feed unavailable when saved" : "No active NWS alerts when saved",
-      },
-    } satisfies SavedForecast));
+  async function saveAssignmentSubmission(assignment: ClassroomAssignment, submit: boolean) {
+    if (assignmentSaving || !session || !supabaseUrl || !supabaseKey) return;
+    setAssignmentSaving(true);
+    setAssignmentMessage(submit ? "Submitting…" : "Saving draft…");
+    const headers = { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json", Prefer: "return=representation,resolution=merge-duplicates" };
+    const responses = Object.fromEntries(assignmentDates(assignment).map((date) => [date, assignmentDraftResponses[date] ?? emptyAssignmentDayResponse]));
     try {
-      const cloudRecord = await saveForecastRunToCloud(savedAt, practiceRun.days);
-      let instructorExamplePublished = false;
-      if (publishInstructorForecast && selectedClassroomAssignmentId) {
-        try {
-          await publishInstructorForecastSnapshot(selectedClassroomAssignmentId, savedAt);
-          instructorExamplePublished = true;
-        } catch (error) {
-          setPracticeMessage(error instanceof Error ? error.message : "The forecast saved, but the instructor example could not be published.");
-        }
-      }
-      const cloudArchives = nextArchives.map((archive) => ({ ...archive, id: `${cloudRecord.runId}:${archive.targetDate}`, runId: cloudRecord.runId, periodIds: cloudRecord.periodIdsByDate[archive.targetDate] }));
-      const combinedArchives = numberArchiveVersions([...cloudArchives, ...archives].slice(0, 50));
-      setArchives(combinedArchives);
-      if (selectedClassroomAssignmentId) setAssignmentSubmissionRefreshToken((value) => value + 1);
-      if (session) window.localStorage.setItem(archiveStorageKeyFor(session.user.id), JSON.stringify(combinedArchives));
-      const detail = `${cloudArchives.length}-day practice forecast submitted${instructorExamplePublished ? " · instructor example published" : ""} · archive token ${cloudRecord.runId.slice(0, 8).toUpperCase()}`;
-      setPracticeMessage(`${detail}.`);
-      setPracticeSubmissionToken(detail);
-      setPublishInstructorForecast(false);
+      const response = await fetch(`${supabaseUrl}/rest/v1/assignment_submissions?on_conflict=assignment_id,student_id`, {
+        method: "POST", headers,
+        body: JSON.stringify({ assignment_id: assignment.id, classroom_id: assignment.classroom_id, student_id: session.user.id, responses, status: submit ? "submitted" : "draft", submitted_at: submit ? new Date().toISOString() : null }),
+      });
+      const rows = await response.json().catch(() => []);
+      if (!response.ok || !rows[0]) throw new Error("The assignment could not be saved.");
+      setAssignmentSubmissions((current) => [rows[0] as AssignmentSubmission, ...current.filter((row) => row.id !== rows[0].id)]);
+      setAssignmentMessage(submit ? "Assignment submitted." : "Draft saved.");
     } catch (error) {
-      setPracticeMessage(`Forecast was not submitted: ${error instanceof Error ? error.message : "Cloud storage could not be reached."}`);
+      setAssignmentMessage(error instanceof Error ? error.message : "The assignment could not be saved.");
     } finally {
-      setPracticeSubmitting(false);
+      setAssignmentSaving(false);
     }
+  }
+
+  async function addAssignmentReference(assignment: ClassroomAssignment, fields: { kind: AssignmentReferenceKind; label: string; url?: string | null; detail?: Record<string, unknown> | null }) {
+    if (!session || !supabaseUrl || !supabaseKey || !canManageActiveClassroom) return;
+    const response = await fetch(`${supabaseUrl}/rest/v1/assignment_references`, {
+      method: "POST", headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json", Prefer: "return=representation" },
+      body: JSON.stringify({ assignment_id: assignment.id, classroom_id: assignment.classroom_id, kind: fields.kind, label: fields.label, url: fields.url ?? null, detail: fields.detail ?? null, created_by: session.user.id }),
+    });
+    const rows = await response.json().catch(() => []);
+    if (!response.ok || !rows[0]) { setAssignmentMessage("The reference could not be attached."); return; }
+    setAssignmentReferences((current) => [...current, rows[0] as AssignmentReferenceItem]);
+  }
+
+  async function removeAssignmentReference(referenceId: string) {
+    if (!session || !supabaseUrl || !supabaseKey || !canManageActiveClassroom) return;
+    setAssignmentReferences((current) => current.filter((reference) => reference.id !== referenceId));
+    await fetch(`${supabaseUrl}/rest/v1/assignment_references?id=eq.${referenceId}`, { method: "DELETE", headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` } });
+    setAssignmentReferenceRefreshToken((value) => value + 1);
+  }
+
+  async function saveAssignmentReview(submissionId: string) {
+    if (!session || !supabaseUrl || !supabaseKey || !canManageActiveClassroom) return;
+    const comment = assignmentReviewComment.trim();
+    const score = assignmentReviewScore.trim();
+    if (!comment && !score) { setAssignmentReviewMessage("Add a comment or a score before saving."); return; }
+    setAssignmentReviewMessage("Saving…");
+    const response = await fetch(`${supabaseUrl}/rest/v1/assignment_reviews`, {
+      method: "POST", headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json", Prefer: "return=representation" },
+      body: JSON.stringify({ submission_id: submissionId, reviewer_id: session.user.id, comment: comment || null, manual_score: score ? Number(score) : null }),
+    });
+    const rows = await response.json().catch(() => []);
+    if (!response.ok || !rows[0]) { setAssignmentReviewMessage("The review could not be saved."); return; }
+    setAssignmentReviews((current) => [rows[0] as AssignmentReview, ...current]);
+    setAssignmentReviewComment("");
+    setAssignmentReviewScore("");
+    setAssignmentReviewMessage("Review saved.");
+  }
+
+  async function markNotificationRead(notification: AppNotification) {
+    if (!session || !supabaseUrl || !supabaseKey || notification.read_at) return;
+    setNotifications((current) => current.map((row) => row.id === notification.id ? { ...row, read_at: new Date().toISOString() } : row));
+    await fetch(`${supabaseUrl}/rest/v1/notifications?id=eq.${notification.id}`, { method: "PATCH", headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" }, body: JSON.stringify({ read_at: new Date().toISOString() }) });
+  }
+
+  async function markAllNotificationsRead() {
+    if (!session || !supabaseUrl || !supabaseKey || !hasUnreadNotifications) return;
+    const readAt = new Date().toISOString();
+    setNotifications((current) => current.map((row) => row.read_at ? row : { ...row, read_at: readAt }));
+    await fetch(`${supabaseUrl}/rest/v1/notifications?read_at=is.null`, { method: "PATCH", headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" }, body: JSON.stringify({ read_at: readAt }) });
+  }
+
+  function openNotification(notification: AppNotification) {
+    markNotificationRead(notification);
+    setNotificationsOpen(false);
+    setWorkspaceMenuOpen(false);
+    if (notification.payload.classroom_id) {
+      const workspace = workspaceContexts.find((candidate) => candidate.classroomId === notification.payload.classroom_id);
+      if (workspace) setActiveWorkspaceKey(workspace.key);
+    }
+    if (notification.payload.assignment_id) setSelectedClassroomAssignmentId(notification.payload.assignment_id);
+    setClassroomHubTab("assignments");
+    setActiveSection("classroom");
   }
 
   function attachDeskReference(reference: ReferenceItem, targetDate?: string) {
@@ -2845,10 +2886,6 @@ export default function Home() {
       setSaveMessage("Sign in before submitting so this forecast can be archived safely.");
       return;
     }
-    if (selectedClassroomAssignment && assignmentDates(selectedClassroomAssignment).some((date) => !daysToSubmit.some((day) => day.date === date))) {
-      setSaveMessage(`This worksheet must include every target date for “${selectedClassroomAssignment.title}.” Open the assignment again to add the missing days.`);
-      return;
-    }
     setIsSubmitting(true);
     setSubmissionToken("");
     const savedAt = new Date().toISOString();
@@ -2867,15 +2904,6 @@ export default function Home() {
     });
     try {
       const cloudRecord = await saveForecastRunToCloud(savedAt, daysToSubmit);
-      let instructorExamplePublished = false;
-      if (publishInstructorForecast && selectedClassroomAssignmentId) {
-        try {
-          await publishInstructorForecastSnapshot(selectedClassroomAssignmentId, savedAt);
-          instructorExamplePublished = true;
-        } catch (error) {
-          setAssignmentMessage(error instanceof Error ? error.message : "The forecast saved, but the instructor example could not be published.");
-        }
-      }
       const cloudArchives = nextArchives.map((archive) => ({
         ...archive,
         id: `${cloudRecord.runId}:${archive.targetDate}`,
@@ -2885,10 +2913,9 @@ export default function Home() {
       }));
       const combinedArchives = numberArchiveVersions([...cloudArchives, ...archives].slice(0, 50));
       setArchives(combinedArchives);
-      if (selectedClassroomAssignmentId) setAssignmentSubmissionRefreshToken((value) => value + 1);
       setSelectedArchiveId(cloudArchives[0]?.id ?? null);
       if (session) window.localStorage.setItem(archiveStorageKeyFor(session.user.id), JSON.stringify(combinedArchives));
-      const detail = `${cloudArchives.length}-day forecast submitted${instructorExamplePublished ? " · instructor example published" : ""} · archive token ${cloudRecord.runId.slice(0, 8).toUpperCase()}`;
+      const detail = `${cloudArchives.length}-day forecast submitted · archive token ${cloudRecord.runId.slice(0, 8).toUpperCase()}`;
       setSaveMessage(`${detail}.`);
       setSubmissionToken(detail);
       // A submitted forecast is immutable in the archive. Days not included in
@@ -2909,7 +2936,6 @@ export default function Home() {
         setForecastRun(freshRun);
         setSelectedForecastDay(0);
       }
-      setPublishInstructorForecast(false);
       setRevisionParentRunId(null);
       setActiveScenarioId(null);
     } catch (error) {
@@ -2924,7 +2950,7 @@ export default function Home() {
     const headers = { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json", Prefer: "return=representation" };
     const runResponse = await fetch(`${supabaseUrl}/rest/v1/forecast_runs`, {
       method: "POST", headers,
-      body: JSON.stringify({ user_id: session.user.id, location_name: selectedLocation.name, latitude: selectedLocation.latitude, longitude: selectedLocation.longitude, organization_id: activeWorkspace?.organizationId ?? null, classroom_id: activeWorkspace?.classroomId ?? null, assignment_id: selectedClassroomAssignmentId || null, parent_run_id: revisionParentRunId, scenario_id: activeScenarioId, publication_scope: "private", initial_horizon_days: daysToSubmit.length, status: revisionParentRunId ? "revised" : "submitted", submitted_at: submittedAt }),
+      body: JSON.stringify({ user_id: session.user.id, location_name: selectedLocation.name, latitude: selectedLocation.latitude, longitude: selectedLocation.longitude, organization_id: activeWorkspace?.organizationId ?? null, classroom_id: activeWorkspace?.classroomId ?? null, parent_run_id: revisionParentRunId, scenario_id: activeScenarioId, publication_scope: "private", initial_horizon_days: daysToSubmit.length, status: revisionParentRunId ? "revised" : "submitted", submitted_at: submittedAt }),
     });
     const runRows = await runResponse.json().catch(() => []);
     if (!runResponse.ok || !runRows[0]?.id) throw new Error("Forecast run storage is not ready. Confirm the forecast-runs SQL migration was run.");
@@ -3346,15 +3372,6 @@ export default function Home() {
     setAssignmentMessage(isArchiving ? "Assignment archived. It stays on record but is hidden from the active list." : "Assignment updated.");
   }
 
-  async function publishInstructorForecastSnapshot(assignmentId: string, savedAt: string) {
-    if (!session || !supabaseUrl || !supabaseKey || !canManageActiveClassroom) return;
-    const instructor_forecast: InstructorForecastSnapshot = { saved_at: savedAt, location_name: selectedLocation.name, days: forecastRun.days.map((day) => ({ ...day, day: { ...day.day, references: [...day.day.references] }, night: { ...day.night, references: [...day.night.references] } })) };
-    const response = await fetch(`${supabaseUrl}/rest/v1/classroom_assignments?id=eq.${assignmentId}`, { method: "PATCH", headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json", Prefer: "return=representation" }, body: JSON.stringify({ instructor_forecast, instructor_forecast_updated_at: savedAt }) });
-    const rows = await response.json().catch(() => []);
-    if (!response.ok || !rows[0]) throw new Error("The forecast submitted, but the instructor example could not be published. Run the latest classroom SQL migration, then submit it again.");
-    setClassroomAssignments((assignments) => assignments.map((assignment) => assignment.id === assignmentId ? rows[0] as ClassroomAssignment : assignment));
-  }
-
   // deprecated: paired with ClassForecastOutlook, superseded by saveClassroomActiveForecastDates.
   /* async function saveClassForecastSnapshot(snapshot: ClassForecastSnapshot, publish = false) {
     if (!session || !supabaseUrl || !supabaseKey || !canManageActiveClassroom || !selectedClassroomAssignmentId) return;
@@ -3443,9 +3460,10 @@ export default function Home() {
         <div className="header-meta-row">
           <div className="location-menu-wrap"><button type="button" className="location-trigger" aria-expanded={locationMenuOpen} onClick={() => setLocationMenuOpen((open) => !open)}><span>Location</span><strong>{selectedLocation.name}</strong><i aria-hidden="true">⌄</i></button>{locationMenuOpen && <div className="location-menu"><strong>Workspace location</strong><div className="location-custom-station"><form onSubmit={searchLocation}><input type="text" value={locationSearchText} onChange={(event) => setLocationSearchText(event.target.value)} placeholder="City, state, or ZIP" aria-label="Search for a location" /><button type="submit" disabled={!locationSearchText.trim()}>Find</button></form>{customStationStatus && <span className="location-custom-status">{customStationStatus}</span>}</div><div>{weatherDeskLocations.map((location) => <button type="button" key={location.id} className={!customLocation && location.id === locationId ? "active" : ""} onClick={() => { setCustomLocation(null); setLocationId(location.id); setLocationMenuOpen(false); }}><strong>{location.name}</strong><span>{location.observationStation} observation · K{location.upperAirStation} upper air</span></button>)}{customLocation && <div className="location-menu-custom-active"><strong>{customLocation.name}</strong><span>{customLocation.observationStation} observation · {customLocation.upperAirStation} upper air</span><button type="button" className="location-custom-clear" onClick={() => { setCustomLocation(null); setCustomStationStatus(""); }}>Back to preset locations</button></div>}</div></div>}</div>
           {session ? <div className="avatar-menu-wrap">
-            <button type="button" className="avatar-trigger" aria-expanded={workspaceMenuOpen} aria-label="Account menu" onClick={() => setWorkspaceMenuOpen((open) => !open)}><span className="avatar-circle">{initialsFor(myDisplayName, session.user.email)}</span></button>
+            <button type="button" className="avatar-trigger" aria-expanded={workspaceMenuOpen} aria-label="Account menu" onClick={() => setWorkspaceMenuOpen((open) => !open)}><span className="avatar-circle">{initialsFor(myDisplayName, session.user.email)}{hasUnreadNotifications && <i className="avatar-unread-dot" aria-hidden="true" />}</span></button>
             {workspaceMenuOpen && <div className="avatar-menu">
               <div className="avatar-menu-head"><strong>{myDisplayName || session.user.email}</strong>{myDisplayName && <small>{session.user.email}</small>}</div>
+              <div className="avatar-menu-notifications"><button type="button" className="avatar-menu-notifications-trigger" aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen((open) => !open)}><span>Notifications{hasUnreadNotifications && <i className="avatar-unread-dot" aria-hidden="true" />}</span><i aria-hidden="true">⌄</i></button>{notificationsOpen && <div className="avatar-menu-notification-list">{hasUnreadNotifications && <button type="button" className="notification-mark-all" onClick={markAllNotificationsRead}>Mark all read</button>}{notifications.length ? notifications.slice(0, 8).map((notification) => <button type="button" key={notification.id} className={notification.read_at ? "" : "unread"} onClick={() => openNotification(notification)}><strong>{notification.kind === "assignment_created" ? `New assignment: ${notification.payload.title ?? ""}` : notification.payload.title ?? "Notification"}</strong><small>{new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(notification.created_at))}</small></button>) : <p className="empty">No notifications yet.</p>}</div>}</div>
               {soleStudentDeskKey && activeWorkspaceKey === soleStudentDeskKey ? <div className="avatar-menu-desk"><span className="avatar-menu-label">Desk</span><button type="button" className="avatar-menu-desk-open" onClick={() => { if (activeWorkspace?.kind === "organization") setActiveSection("school"); else if (activeWorkspace?.kind === "classroom") setActiveSection("classroom"); setWorkspaceMenuOpen(false); }}><strong>{workspaceDeskLabel(activeWorkspace)}</strong></button><button type="button" className="workspace-join-link" onClick={() => { setJoinPanelOpen(true); setWorkspaceMenuOpen(false); }}>Join another class</button></div> : <div className="avatar-menu-desk"><button type="button" className="avatar-menu-desk-trigger" aria-expanded={deskListOpen} onClick={() => setDeskListOpen((open) => !open)}><span>Your desks</span><i aria-hidden="true">⌄</i></button>{deskListOpen && <div className="avatar-menu-desk-list">{workspaceContexts.filter((workspace) => workspace.classroomStatus !== "archived").map((workspace) => <button type="button" key={workspace.key} className={workspace.key === activeWorkspaceKey ? "active" : ""} onClick={() => { switchWorkspace(workspace); setDeskListOpen(false); }}><strong>{workspaceDeskLabel(workspace)}</strong><span>{workspace.detail}{workspace.role ? ` · ${workspace.role}` : ""}</span></button>)}<button type="button" className="workspace-join-action" onClick={() => { setJoinPanelOpen(true); setWorkspaceMenuOpen(false); }}>Join a school or class</button>{workspaceContextStatus && <em>{workspaceContextStatus}</em>}</div>}</div>}
               {visibleWorkspace("control") && <div className="avatar-menu-actions"><button type="button" onClick={() => { setActiveSection("control"); setWorkspaceMenuOpen(false); }}>{workspaceNavigation.find((item) => item.id === "control")?.label || "Settings"}</button></div>}
               <button type="button" className="avatar-menu-theme" onClick={() => setTheme((value) => value === "light" ? "dark" : "light")}>{theme === "light" ? "Dark mode" : "Light mode"}</button>
@@ -3548,7 +3566,6 @@ export default function Home() {
       {activeSection === "forecast" && !session && <section className="workspace-card access-wall"><h2>Log in to forecast</h2><p>The dashboard is available to explore, while forecasts, references, and archive work stay private to your account.</p><button type="button" onClick={() => setLoginMenuOpen(true)}>Open login</button></section>}
       {activeSection === "forecast" && session && <section className="workspace-card">
         <div className="section-heading forecast-title"><div><h2>Forecast workspace</h2><p>Each tab is one dated Day/Night forecast.</p></div><div className="horizon-actions"><button type="button" onClick={() => { setRevisionParentRunId(null); setForecastRun(createNewForecastRun(3)); setSelectedForecastDay(0); }}>New 3-day</button><button type="button" onClick={() => { setRevisionParentRunId(null); setForecastRun(createNewForecastRun(7)); setSelectedForecastDay(0); }}>New 7-day</button><div className="scenario-picker"><button type="button" onClick={() => setScenarioPickerOpen((open) => !open)}>Scenarios</button>{scenarioPickerOpen && <div className="scenario-picker-menu"><strong>Historical scenarios</strong><p>Forecast a real past event. The target date has already happened, so submitting grades it immediately.</p>{scenarios.length ? scenarios.map((scenario) => <button type="button" key={scenario.id} onClick={() => { startScenario(scenario); setScenarioPickerOpen(false); }}><span>{scenario.title}</span><small>{new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }).format(new Date(`${scenario.event_date}T12:00:00Z`))}</small></button>) : <p className="empty">No scenarios are published yet.</p>}</div>}</div></div></div>
-        {activeWorkspace?.kind === "classroom" && showForecastAssignmentContext && selectedClassroomAssignment && <div className="assignment-linker assignment-context"><div><strong>{selectedClassroomAssignment.title}</strong><small>{assignmentDates(selectedClassroomAssignment).map(forecastTargetTitle).join(" · ")}{selectedClassroomAssignment.due_at ? ` · due ${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(selectedClassroomAssignment.due_at))}` : ""}</small>{selectedClassroomAssignment.instructions && <em>{selectedClassroomAssignment.instructions}</em>}</div>{canManageActiveClassroom && <label className="assignment-instructor-toggle"><input type="checkbox" checked={publishInstructorForecast} onChange={(event) => setPublishInstructorForecast(event.target.checked)} /> <span><strong>Share as instructor example</strong><small>Visible to this class after submission.</small></span></label>}</div>}
         {activeScenarioId && <div className="assignment-linker assignment-context scenario-context"><div><strong>{activeScenario?.title ?? "Historical scenario"}</strong><small>This date has already happened — submitting grades it immediately.</small>{activeScenario?.summary && <em>{activeScenario.summary}</em>}{activeScenario && (activeScenario.reference_notes || activeScenario.reference_links.length > 0) && <details className="scenario-reference-details"><summary>Reference data</summary>{activeScenario.reference_notes && <p>{activeScenario.reference_notes}</p>}{activeScenario.reference_links.length > 0 && <ul>{activeScenario.reference_links.map((link) => <li key={link.label}>{link.label}{link.detail ? ` — ${link.detail}` : ""}{link.url && <> · <a href={link.url} target="_blank" rel="noreferrer">Open</a></>}</li>)}</ul>}</details>}</div><button type="button" onClick={() => setActiveScenarioId(null)}>Clear scenario</button></div>}
         <div className="day-outlook-cards" role="tablist" aria-label="Forecast days">{forecastRun.days.map((day, index) => <div key={`${day.date}-${index}`} className={`day-outlook-card${index === selectedForecastDay ? " active" : ""}`}><button type="button" className="day-card-select" onClick={() => setSelectedForecastDay(index)} onContextMenu={(event) => { event.preventDefault(); setTabMenuIndex(index); setTabMenuPosition({ left: event.clientX, top: event.clientY }); setTabMenuMessage(""); }}><span className="dow">{new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(new Date(`${day.date}T12:00:00`))}</span><img src={`/weather-icons/${weatherIconStyle}/${periodIconCondition(day.day)}.svg`} alt="" /><em>{displayForecastTemperature(day.day.highLow)} / {displayForecastTemperature(day.night.highLow)}</em><small>{day.day.rainChance ? `${displayForecastChance(day.day.rainChance)} PoP` : "No PoP yet"}</small></button><div className="day-card-footer"><label><input type="checkbox" checked={day.ready} onChange={(event) => { const checked = event.target.checked; setForecastRun((run) => ({ ...run, days: run.days.map((candidate, candidateIndex) => candidateIndex === index ? { ...candidate, ready: checked } : candidate) })); }} /> Ready</label><button type="button" disabled={isSubmitting} onClick={() => submitForecastDays([day])}>Post</button></div></div>)}<button className="add-day" type="button" aria-label="Add next forecast day" onClick={() => setForecastRun((run) => ({ ...run, days: [...run.days, createForecastDay(addDays(new Date(`${run.days.at(-1)?.date}T12:00:00`), 1))] }))}>+</button></div>
         <input type="hidden" name="target-date" form="forecast-form" value={selectedDay.date} />
@@ -3583,43 +3600,6 @@ export default function Home() {
         </form>
       </section>}
 
-      {activeSection === "practice" && !session && <section className="workspace-card access-wall"><h2>Log in to forecast</h2><p>Practice worksheets stay private to your account.</p><button type="button" onClick={() => setLoginMenuOpen(true)}>Open login</button></section>}
-      {activeSection === "practice" && session && (!selectedClassroomAssignment || !practiceRun || !selectedPracticeDayDraft) && <section className="workspace-card"><p className="empty">No assignment is open. <button type="button" onClick={() => { setActiveSection("classroom"); setClassroomHubTab("assignments"); }}>Back to Assignments</button></p></section>}
-      {activeSection === "practice" && session && selectedClassroomAssignment && practiceRun && selectedPracticeDayDraft && <section className="workspace-card practice-desk">
-        <div className="section-heading forecast-title"><div><p className="eyebrow">Practice</p><h2>{selectedClassroomAssignment.title}</h2><p>{assignmentDates(selectedClassroomAssignment).map(forecastTargetTitle).join(" · ")}{selectedClassroomAssignment.due_at ? ` · due ${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(selectedClassroomAssignment.due_at))}` : ""}</p></div><button type="button" onClick={() => { setActiveSection("classroom"); setClassroomHubTab("assignments"); }}>← Back to Assignments</button></div>
-        {selectedClassroomAssignment.instructions && <p className="practice-instructions">{selectedClassroomAssignment.instructions}</p>}
-        {canManageActiveClassroom && <label className="assignment-instructor-toggle"><input type="checkbox" checked={publishInstructorForecast} onChange={(event) => setPublishInstructorForecast(event.target.checked)} /> <span><strong>Share as instructor example</strong><small>Visible to this class after submission.</small></span></label>}
-        {practiceRun.days.length > 1 && <div className="day-outlook-cards" role="tablist" aria-label="Practice days">{practiceRun.days.map((day, index) => <button type="button" key={day.date} className={index === selectedPracticeDay ? "active" : ""} onClick={() => setSelectedPracticeDay(index)}><span className="dow">{new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(new Date(`${day.date}T12:00:00`))}</span><img src={`/weather-icons/${weatherIconStyle}/${periodIconCondition(day.day)}.svg`} alt="" /><em>{displayForecastTemperature(day.day.highLow)} / {displayForecastTemperature(day.night.highLow)}</em><small>{day.day.rainChance ? `${displayForecastChance(day.day.rainChance)} PoP` : "No PoP yet"}</small></button>)}</div>}
-        <form onSubmit={submitPracticeAssignment}><div className="forecast-period-columns">
-          <fieldset className="forecast-period"><legend>{new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric" }).format(new Date(`${selectedPracticeDayDraft.date}T12:00:00`))} day <small>7 AM–7 PM</small></legend><div className="forecast-fields">
-            <label>High temperature<span className="unit-input" style={unitInputStyle(temperatureInputValue(selectedPracticeDayDraft.day.highLow), 2)}><input inputMode="decimal" placeholder="72" value={temperatureInputValue(selectedPracticeDayDraft.day.highLow)} onChange={(event) => updatePracticePeriod("day", "highLow", temperatureInputValue(event.target.value))} onBlur={() => formatPracticePeriodField("day", "highLow")} /><i aria-hidden="true">°</i></span></label>
-            <label>Conditions<select value={selectedPracticeDayDraft.day.conditions} onChange={(event) => updatePracticePeriod("day", "conditions", event.target.value)}><option value="">Choose conditions</option>{conditionOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-            <label className="wide-field">Icon<IconPicker value={periodIconCondition(selectedPracticeDayDraft.day)} onChange={(next) => updatePracticePeriod("day", "iconCondition", next)} style={weatherIconStyle} /></label>
-            <label>Rain chance<span className="unit-input" style={unitInputStyle(percentInputValue(selectedPracticeDayDraft.day.rainChance), 2)}><input inputMode="numeric" placeholder="40" value={percentInputValue(selectedPracticeDayDraft.day.rainChance)} onChange={(event) => updatePracticePeriod("day", "rainChance", percentInputValue(event.target.value))} onBlur={() => formatPracticePeriodField("day", "rainChance")} /><i aria-hidden="true">%</i></span></label>
-            <label>Likely timing<input placeholder="3–8 PM" value={selectedPracticeDayDraft.day.timing} onChange={(event) => updatePracticePeriod("day", "timing", event.target.value)} onBlur={() => formatPracticePeriodField("day", "timing")} /></label>
-            <label>Wind<input value={selectedPracticeDayDraft.day.wind} onChange={(event) => updatePracticePeriod("day", "wind", event.target.value)} /></label>
-            <label>Confidence<select value={selectedPracticeDayDraft.day.confidence} onChange={(event) => updatePracticePeriod("day", "confidence", event.target.value)}><option value="low">Low</option><option value="moderate">Moderate</option><option value="high">High</option></select></label>
-            <label className="wide-field">Hazards<textarea rows={2} placeholder="Hazards, impacts, or confidence notes" value={selectedPracticeDayDraft.day.hazards} onChange={(event) => updatePracticePeriod("day", "hazards", event.target.value)} /></label>
-            <ReferencePicker options={referenceOptions} references={selectedPracticeDayDraft.day.references} onAdd={(item) => addFreshPracticeReference("day", item)} onRemove={(id) => removePracticeReference("day", id)} addedLabel="Added to this day" />
-            <label className="wide-field">Day reasoning<textarea value={selectedPracticeDayDraft.day.reasoning} onChange={(event) => updatePracticePeriod("day", "reasoning", event.target.value)} /></label>
-          </div></fieldset>
-          <fieldset className="forecast-period"><legend>{new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric" }).format(new Date(`${selectedPracticeDayDraft.date}T12:00:00`))} night <small>7 PM–7 AM</small></legend><div className="forecast-fields">
-            <label>Low temperature<span className="unit-input" style={unitInputStyle(temperatureInputValue(selectedPracticeDayDraft.night.highLow), 2)}><input inputMode="decimal" placeholder="61" value={temperatureInputValue(selectedPracticeDayDraft.night.highLow)} onChange={(event) => updatePracticePeriod("night", "highLow", temperatureInputValue(event.target.value))} onBlur={() => formatPracticePeriodField("night", "highLow")} /><i aria-hidden="true">°</i></span></label>
-            <label>Conditions<select value={selectedPracticeDayDraft.night.conditions} onChange={(event) => updatePracticePeriod("night", "conditions", event.target.value)}><option value="">Choose conditions</option>{conditionOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-            <label className="wide-field">Icon<IconPicker value={periodIconCondition(selectedPracticeDayDraft.night)} onChange={(next) => updatePracticePeriod("night", "iconCondition", next)} style={weatherIconStyle} /></label>
-            <label>Rain chance<span className="unit-input" style={unitInputStyle(percentInputValue(selectedPracticeDayDraft.night.rainChance), 2)}><input inputMode="numeric" placeholder="20" value={percentInputValue(selectedPracticeDayDraft.night.rainChance)} onChange={(event) => updatePracticePeriod("night", "rainChance", percentInputValue(event.target.value))} onBlur={() => formatPracticePeriodField("night", "rainChance")} /><i aria-hidden="true">%</i></span></label>
-            <label>Likely timing<input placeholder="Before 10 PM" value={selectedPracticeDayDraft.night.timing} onChange={(event) => updatePracticePeriod("night", "timing", event.target.value)} onBlur={() => formatPracticePeriodField("night", "timing")} /></label>
-            <label>Wind<input value={selectedPracticeDayDraft.night.wind} onChange={(event) => updatePracticePeriod("night", "wind", event.target.value)} /></label>
-            <label>Confidence<select value={selectedPracticeDayDraft.night.confidence} onChange={(event) => updatePracticePeriod("night", "confidence", event.target.value)}><option value="low">Low</option><option value="moderate">Moderate</option><option value="high">High</option></select></label>
-            <label className="wide-field">Hazards<textarea rows={2} placeholder="Hazards, impacts, or confidence notes" value={selectedPracticeDayDraft.night.hazards} onChange={(event) => updatePracticePeriod("night", "hazards", event.target.value)} /></label>
-            <ReferencePicker options={referenceOptions} references={selectedPracticeDayDraft.night.references} onAdd={(item) => addFreshPracticeReference("night", item)} onRemove={(id) => removePracticeReference("night", id)} addedLabel="Added to this night" />
-            <label className="wide-field">Night reasoning<textarea value={selectedPracticeDayDraft.night.reasoning} onChange={(event) => updatePracticePeriod("night", "reasoning", event.target.value)} /></label>
-          </div></fieldset></div>
-          {practiceSubmissionToken && <div className="submission-token" role="status"><span>✓</span><div><strong>Practice forecast archived</strong><small>{practiceSubmissionToken}</small></div><button type="button" aria-label="Dismiss submission confirmation" onClick={() => setPracticeSubmissionToken("")}>×</button></div>}
-          <div className="form-actions"><span>{practiceMessage || "Submitting archives this practice worksheet as an immutable record. It does not change the class forecast."}</span><button type="submit" disabled={practiceSubmitting}>{practiceSubmitting ? "Submitting…" : "Submit practice forecast"}</button></div>
-        </form>
-      </section>}
-
       {activeSection === "verify" && !session && <section className="workspace-card access-wall"><h2>Sign in to open your archive</h2><p>Your forecasts, evidence, revisions, and verification history stay private to your account.</p><button onClick={() => setActiveSection("forecast")}>Go to Forecast sign-in</button></section>}
       {activeSection === "verify" && session && <nav className="classroom-hub-tabs" aria-label="Verify sections">
         <button type="button" className={verifyTab === "records" ? "active" : ""} onClick={() => setVerifyTab("records")}>Records</button>
@@ -3650,10 +3630,10 @@ export default function Home() {
           <button type="button" className={classroomHubTab === "progress" ? "active" : ""} onClick={() => setClassroomHubTab("progress")}>{canManageActiveClassroom ? "Class progress" : "Progress"}</button>
           {canManageActiveClassroom && <button type="button" className={classroomHubTab === "roster" ? "active" : ""} onClick={() => setClassroomHubTab("roster")}>Roster</button>}
         </nav>
-        {classroomHubTab === "assignments" && (reviewTarget && reviewTarget.classroomId === activeWorkspace.classroomId ? <><ClassroomReviewPanel target={reviewTarget} runs={visibleReviewRuns} selectedRun={selectedReviewRun} notes={reviewNotes} comment={reviewComment} manualScore={reviewManualScore} message={reviewMessage} onSelectRun={setSelectedReviewRunId} onCommentChange={setReviewComment} onManualScoreChange={setReviewManualScore} onSave={saveForecastReview} onClose={() => { setReviewTarget(null); setReviewRuns([]); setReviewNotes({}); }} />{selectedReviewRun && <InstructorRubricCard rubric={reviewRubric} onRubricChange={setReviewRubric} notes={reviewNotes[selectedReviewRun.id] ?? []} onSave={() => saveForecastReview(selectedReviewRun.id)} />}</> : <ClassroomAssignmentDesk assignments={classroomAssignments} submissions={assignmentSubmissions} roster={academicRoster} selectedAssignmentId={selectedClassroomAssignmentId} dismissedAssignmentId={dismissedClassroomAssignmentId} canManage={canManageActiveClassroom} canOpenForecast={showForecastAssignmentContext} onCreate={createClassroomAssignment} onSelectAssignment={selectClassroomAssignment} onDismissAssignment={dismissClassroomAssignment} onUpdateAssignment={updateClassroomAssignment} onOpenForecast={() => openClassroomAssignment(selectedClassroomAssignment!)} onReviewStudent={(student) => setReviewTarget({ userId: student.userId, label: student.label, organizationId: activeWorkspace.organizationId!, classroomId: activeWorkspace.classroomId, assignmentId: selectedClassroomAssignmentId })} message={assignmentMessage} />)}
+        {classroomHubTab === "assignments" && (reviewTarget && reviewTarget.classroomId === activeWorkspace.classroomId ? <><ClassroomReviewPanel target={reviewTarget} runs={visibleReviewRuns} selectedRun={selectedReviewRun} notes={reviewNotes} comment={reviewComment} manualScore={reviewManualScore} message={reviewMessage} onSelectRun={setSelectedReviewRunId} onCommentChange={setReviewComment} onManualScoreChange={setReviewManualScore} onSave={saveForecastReview} onClose={() => { setReviewTarget(null); setReviewRuns([]); setReviewNotes({}); }} />{selectedReviewRun && <InstructorRubricCard rubric={reviewRubric} onRubricChange={setReviewRubric} notes={reviewNotes[selectedReviewRun.id] ?? []} onSave={() => saveForecastReview(selectedReviewRun.id)} />}</> : <ClassroomAssignmentDesk assignments={classroomAssignments} submissions={assignmentSubmissions} references={assignmentReferences} reviews={assignmentReviews} roster={academicRoster} selectedAssignmentId={selectedClassroomAssignmentId} dismissedAssignmentId={dismissedClassroomAssignmentId} canManage={canManageActiveClassroom} myUserId={session.user.id} draftResponses={assignmentDraftResponses} saving={assignmentSaving} referenceOptions={referenceOptions} linkLabel={assignmentLinkLabel} linkUrl={assignmentLinkUrl} onCreate={createClassroomAssignment} onSelectAssignment={selectClassroomAssignment} onDismissAssignment={dismissClassroomAssignment} onUpdateAssignment={updateClassroomAssignment} onDraftChange={updateAssignmentDraft} onSaveDraft={saveAssignmentSubmission} onAddReference={(assignment, item) => addAssignmentReference(assignment, { kind: ["model-radar", "sounding"].includes(item.id) ? "model" : "observation", label: item.label, detail: { text: item.detail, preview: item.preview } })} onRemoveReference={removeAssignmentReference} onLinkLabelChange={setAssignmentLinkLabel} onLinkUrlChange={setAssignmentLinkUrl} onAddLinkReference={(assignment) => { addAssignmentReference(assignment, { kind: "link", label: assignmentLinkLabel.trim(), url: assignmentLinkUrl.trim() }); setAssignmentLinkLabel(""); setAssignmentLinkUrl(""); }} reviewOpenId={assignmentReviewOpenId} reviewComment={assignmentReviewComment} reviewScore={assignmentReviewScore} reviewMessage={assignmentReviewMessage} onOpenReview={(submissionId) => { setAssignmentReviewOpenId(submissionId); setAssignmentReviewComment(""); setAssignmentReviewScore(""); setAssignmentReviewMessage(""); }} onReviewCommentChange={setAssignmentReviewComment} onReviewScoreChange={setAssignmentReviewScore} onSaveReview={saveAssignmentReview} message={assignmentMessage} />)}
         {classroomHubTab === "outlook" && <ClassroomLiveForecast archives={archives} roster={academicRoster} canManage={canManageActiveClassroom} publicGuidance={outlook} message={assignmentMessage} />}
         {classroomHubTab === "progress" && <ClassroomProgress assignments={classroomAssignments} submissions={assignmentSubmissions} roster={academicRoster} canManage={canManageActiveClassroom} currentUserId={session.user.id} />}
-        {classroomHubTab === "roster" && canManageActiveClassroom && <ClassroomRosterPanel roster={classroomRoster} assignments={classroomAssignments} submissions={assignmentSubmissions} message={classroomRosterMessage} onRevoke={(userId) => setClassroomMemberStatus(userId, "suspended")} onRestore={(userId) => setClassroomMemberStatus(userId, "active")} onInvite={inviteClassroomStudent} />}
+        {classroomHubTab === "roster" && canManageActiveClassroom && <ClassroomRosterPanel roster={classroomRoster} assignments={classroomAssignments} submissions={assignmentSubmissions} reviews={assignmentReviews} message={classroomRosterMessage} onRevoke={(userId) => setClassroomMemberStatus(userId, "suspended")} onRestore={(userId) => setClassroomMemberStatus(userId, "active")} onInvite={inviteClassroomStudent} />}
       </section>}
       {activeSection === "control" && session && <section className="workspace-card control-panel plan-card"><header><p className="eyebrow">Account</p><h3>Your plan</h3><p>Model data, ensembles, and simulated reflectivity are part of Personal+. Live observations, radar, and the forecast workspace are on every plan.</p></header><div className="plan-status"><b className={hasSchoolMembership || personalTier === "paid" ? "status-ready" : "status-pending"}>{hasSchoolMembership ? "Included via school" : personalTier === "paid" ? "Personal+" : "Free"}</b>{hasSchoolMembership ? <span>Your school or class workspace already includes Personal+ features — no request needed.</span> : personalTier === "paid" ? <span>You have Personal+ access on this account.</span> : <span>Pricing is still being finalized while Frontline Forecast is pre-launch. Request access below and we will follow up by email.</span>}</div>{!hasSchoolMembership && personalTier !== "paid" && (pendingTierRequest ? <p className="control-message" role="status">Request pending review since {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(pendingTierRequest.created_at))}. Approved yet? <button type="button" className="login-menu-link" onClick={() => setProfileRefreshToken((value) => value + 1)}>Check again</button></p> : <form onSubmit={(event) => { event.preventDefault(); submitTierRequest(); }} className="settings-grid"><label>Note (optional)<textarea value={tierNote} onChange={(event) => setTierNote(event.target.value)} placeholder="Anything we should know?" rows={2} /></label><div className="settings-actions"><button type="submit" disabled={tierRequestBusy}>{tierRequestBusy ? "Sending…" : "Request Personal+ access"}</button></div></form>)}<div className="settings-actions"><button type="button" onClick={() => setJoinPanelOpen(true)}>Have a school or class code?</button></div>{tierRequestMessage && <p className="control-message" role="status">{tierRequestMessage}</p>}</section>}
       {activeSection === "control" && session && hasControlAccess && <section className="workspace-card control-panel"><header><p className="eyebrow">Account</p><h3>Tier requests</h3><p>Approve or deny Personal+ access until billing is wired up.</p></header><div className="access-roster-list">{adminTierRequests.map((request) => <div key={request.id}><span><strong>{request.profiles?.display_name || request.profiles?.email || request.user_id}</strong><small>{request.note || "No note"} · {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(request.created_at))}</small></span><button type="button" onClick={() => resolveTierRequest(request.id, true)}>Approve</button><button type="button" onClick={() => resolveTierRequest(request.id, false)}>Deny</button></div>)}</div>{!adminTierRequests.length && <p className="empty">No pending tier requests.</p>}{adminTierMessage && <p className="control-message" role="status">{adminTierMessage}</p>}</section>}
