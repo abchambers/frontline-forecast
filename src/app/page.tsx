@@ -314,12 +314,18 @@ function IconPicker({ value, onChange, style }: { value: string; onChange: (next
 // Caps the quick-add row at 3 chips (current obs, current forecast, NBM --
 // the ones worth one click every time) and tucks the rest of the reference
 // catalog behind a "more" toggle instead of showing all 8 at once.
-function ReferencePicker({ options, references, onAdd, onRemove, addedLabel }: { options: ReferenceItem[]; references: ReferenceItem[]; onAdd: (item: ReferenceItem) => void; onRemove: (id: string) => void; addedLabel: string }) {
+function ReferencePicker({ options, references, onAdd, onRemove, addedLabel, recommendedIds = [] }: { options: ReferenceItem[]; references: ReferenceItem[]; onAdd: (item: ReferenceItem) => void; onRemove: (id: string) => void; addedLabel: string; recommendedIds?: string[] }) {
   const [expanded, setExpanded] = useState(false);
-  const primary = options.slice(0, 3);
-  const rest = options.slice(3);
+  // Quick-add isn't meant to be a full catalog -- it's a shortcut for whatever the student
+  // already reached for on the previous day of this same draft, so the habit carries forward
+  // without re-browsing. Falls back to a fixed default set on day one, or if the prior day
+  // attached nothing.
+  const recommended = recommendedIds.map((id) => options.find((option) => option.id === id)).filter((item): item is ReferenceItem => Boolean(item));
+  const remainingOptions = options.filter((option) => !recommendedIds.includes(option.id));
+  const primary = recommended.length ? recommended : remainingOptions.slice(0, 3);
+  const rest = recommended.length ? remainingOptions : remainingOptions.slice(3);
   return <div className="wide-field reference-picker">
-    <span>Quick-add current reference data</span>
+    <span>{recommended.length ? "Suggested, based on your last day" : "Quick-add current reference data"}</span>
     <div>{primary.map((item) => <button type="button" key={item.id} onClick={() => onAdd(item)}>+ {item.label}</button>)}{rest.length > 0 && <button type="button" className="reference-picker-more" onClick={() => setExpanded((open) => !open)}>{expanded ? "Fewer references" : `+ ${rest.length} more`}</button>}</div>
     {expanded && rest.length > 0 && <div>{rest.map((item) => <button type="button" key={item.id} onClick={() => onAdd(item)}>+ {item.label}</button>)}</div>}
     {references.length > 0 && <div className="attached-draft-references"><strong>{addedLabel}</strong><div className="attached-reference-table"><div className="attached-reference-heading"><span>Reference</span><span>Snapshot</span><span>Action</span></div>{references.map((reference) => <div className="attached-reference-row" key={reference.id}><b>{reference.label}</b><small>{reference.detail.split("\n")[0]}</small><button type="button" onClick={() => onRemove(reference.id)}>Remove</button></div>)}</div></div>}
@@ -2663,6 +2669,21 @@ export default function Home() {
     updatePeriod(period, field, /\b(?:AM|PM)\b/.test(normalized) ? normalized : `${normalized} PM`);
   }
 
+  // A reference attached via quick-add gets `${sourceId}-${uuid}` as its id (see below), so the
+  // source it came from can be recovered without a separate column. Used to recommend the same
+  // source types the student reached for on the previous day of this draft -- each recommendation
+  // still adds a brand-new snapshot, never the prior day's stale data.
+  function recommendedReferenceIds(period: "day" | "night"): string[] {
+    const previousDay = forecastRun.days[selectedForecastDay - 1];
+    if (!previousDay) return [];
+    const ids: string[] = [];
+    for (const reference of previousDay[period].references) {
+      const sourceId = referenceOptions.find((option) => reference.id === option.id || reference.id.startsWith(`${option.id}-`))?.id;
+      if (sourceId && !ids.includes(sourceId)) ids.push(sourceId);
+    }
+    return ids;
+  }
+
   function addFreshReference(period: "day" | "night", item: ReferenceItem) {
     const freshReference = { ...item, id: `${item.id}-${crypto.randomUUID()}` };
     setForecastRun((run) => ({ ...run, days: run.days.map((day, index) => {
@@ -3632,7 +3653,7 @@ export default function Home() {
             <label>Wind<input value={selectedDay.day.wind} onChange={(event) => updatePeriod("day", "wind", event.target.value)} /></label>
             <label>Confidence<select value={selectedDay.day.confidence} onChange={(event) => updatePeriod("day", "confidence", event.target.value)}><option value="low">Low</option><option value="moderate">Moderate</option><option value="high">High</option></select></label>
             <label className="wide-field">Hazards<textarea rows={2} placeholder="Hazards, impacts, or confidence notes" value={selectedDay.day.hazards} onChange={(event) => updatePeriod("day", "hazards", event.target.value)} /></label>
-            <ReferencePicker options={referenceOptions} references={selectedDay.day.references} onAdd={(item) => addFreshReference("day", item)} onRemove={(id) => removeReference("day", id)} addedLabel="Added to this day" />
+            <ReferencePicker options={referenceOptions} references={selectedDay.day.references} onAdd={(item) => addFreshReference("day", item)} onRemove={(id) => removeReference("day", id)} addedLabel="Added to this day" recommendedIds={recommendedReferenceIds("day")} />
             <label className="wide-field">Day reasoning<textarea value={selectedDay.day.reasoning} onChange={(event) => updatePeriod("day", "reasoning", event.target.value)} /></label>
           </div></fieldset>
           <fieldset className="forecast-period"><legend>{new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric" }).format(new Date(`${selectedDay.date}T12:00:00`))} night <small>7 PM–7 AM</small></legend><div className="forecast-fields">
@@ -3644,7 +3665,7 @@ export default function Home() {
             <label>Wind<input value={selectedDay.night.wind} onChange={(event) => updatePeriod("night", "wind", event.target.value)} /></label>
             <label>Confidence<select value={selectedDay.night.confidence} onChange={(event) => updatePeriod("night", "confidence", event.target.value)}><option value="low">Low</option><option value="moderate">Moderate</option><option value="high">High</option></select></label>
             <label className="wide-field">Hazards<textarea rows={2} placeholder="Hazards, impacts, or confidence notes" value={selectedDay.night.hazards} onChange={(event) => updatePeriod("night", "hazards", event.target.value)} /></label>
-            <ReferencePicker options={referenceOptions} references={selectedDay.night.references} onAdd={(item) => addFreshReference("night", item)} onRemove={(id) => removeReference("night", id)} addedLabel="Added to this night" />
+            <ReferencePicker options={referenceOptions} references={selectedDay.night.references} onAdd={(item) => addFreshReference("night", item)} onRemove={(id) => removeReference("night", id)} addedLabel="Added to this night" recommendedIds={recommendedReferenceIds("night")} />
             <label className="wide-field">Night reasoning<textarea value={selectedDay.night.reasoning} onChange={(event) => updatePeriod("night", "reasoning", event.target.value)} /></label>
           </div></fieldset></div>
           {submissionToken && <div className="submission-token" role="status"><span>✓</span><div><strong>Forecast archived</strong><small>{submissionToken}</small></div><button type="button" aria-label="Dismiss submission confirmation" onClick={() => setSubmissionToken("")}>×</button></div>}
