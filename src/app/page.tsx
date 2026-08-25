@@ -1312,6 +1312,9 @@ export default function Home() {
   // it resets to off each session rather than sticking around.
   const [showStationPicker, setShowStationPicker] = useState(false);
   const [satelliteChannel, setSatelliteChannel] = useState<"geocolor" | "ir" | "wv">("geocolor");
+  const [satelliteFrames, setSatelliteFrames] = useState<{ time: string; url: string }[]>([]);
+  const [satelliteFrameIndex, setSatelliteFrameIndex] = useState(0);
+  const [satellitePlaying, setSatellitePlaying] = useState(false);
   const [radarOpacity, setRadarOpacity] = useState(72);
   const [radarProviderPreference, setRadarProviderPreference] = useState<RadarProviderPreference>("auto");
   const [radarSource, setRadarSource] = useState<"nexrad" | "provider" | null>(null);
@@ -1832,6 +1835,31 @@ export default function Home() {
     const refreshId = window.setInterval(() => setRadarRefreshToken((value) => value + 1), 300_000);
     return () => window.clearInterval(refreshId);
   }, [radarMapView]);
+
+  useEffect(() => {
+    if (radarMapView !== "satellite") return;
+    let isActive = true;
+    const loadSatelliteFrames = () => fetch(`/api/satellite/frames?channel=${satelliteChannel}`, { cache: "no-store" })
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Unable to load satellite frames");
+        if (isActive) {
+          const frames = data.frames as { time: string; url: string }[];
+          setSatelliteFrames(frames);
+          setSatelliteFrameIndex(Math.max(0, frames.length - 1));
+        }
+      })
+      .catch(() => isActive && setSatelliteFrames([]));
+    loadSatelliteFrames();
+    const refreshId = window.setInterval(loadSatelliteFrames, 300_000);
+    return () => { isActive = false; window.clearInterval(refreshId); };
+  }, [radarMapView, satelliteChannel]);
+
+  useEffect(() => {
+    if (!satellitePlaying || satelliteFrames.length < 2) return;
+    const playId = window.setInterval(() => setSatelliteFrameIndex((index) => (index + 1) % satelliteFrames.length), 700);
+    return () => window.clearInterval(playId);
+  }, [satellitePlaying, satelliteFrames.length]);
 
   useEffect(() => {
     if (activeSection !== "dashboard" || dataPanel !== "model-radar" || !hasModelAccess) return;
@@ -2610,6 +2638,8 @@ export default function Home() {
   const soundingWindowStart = Math.max(0, Math.min(soundingProfileIndex - 1, Math.max(0, soundingProfiles.length - 4)));
   const soundingProfileWindow = soundingProfiles.slice(soundingWindowStart, soundingWindowStart + 4);
   const radarFrameTime = radarFrame ? new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York", timeZoneName: "short" }).format(new Date(radarFrame.time * 1000)) : "Timeline unavailable";
+  const satelliteFrame = satelliteFrames[satelliteFrameIndex] ?? null;
+  const satelliteFrameTime = satelliteFrame ? new Intl.DateTimeFormat("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: "America/New_York", timeZoneName: "short" }).format(new Date(satelliteFrame.time)) : "Loading satellite timeline…";
   const futureRadarFrame = futureRadarFrames[futureRadarFrameIndex] ?? null;
   const futureRadarFrameTime = futureRadarFrame ? new Intl.DateTimeFormat("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: "America/New_York", timeZoneName: "short" }).format(new Date(futureRadarFrame.time * 1000)) : "Future radar unavailable";
   const focusedDateRecords = filteredArchives.filter((archive) => archive.targetDate === recordFocusDate).sort((a, b) => new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime());
@@ -3675,10 +3705,11 @@ export default function Home() {
         <div className="radar radar-workspace-map">
           <button type="button" className="radar-recenter-btn" title="Recenter" aria-label="Recenter radar" onClick={() => setRadarRecenterToken((value) => value + 1)}>⌖</button>
           <RadarControlsMenu radarMapView={radarMapView} onSelectView={selectRadarView} radarProviderPreference={radarProviderPreference} onProviderPreferenceChange={setRadarProviderPreference} reflectivityLabel="Reflectivity" showNwsAlerts={showNwsAlerts} onToggleAlerts={setShowNwsAlerts} showOutlookToggle showSpcOutlook={showSpcOutlook} onToggleOutlook={setShowSpcOutlook} outlookDay={outlookDay} onOutlookDayChange={setOutlookDay} showSevereMarkers={showSevereMarkers} onToggleSevereMarkers={setShowSevereMarkers} showStationPicker={showStationPicker} onToggleStationPicker={setShowStationPicker} radarOpacity={radarOpacity} onOpacityChange={setRadarOpacity} caption={radarMapView === "satellite" ? "NOAA GOES-East GeoColor imagery." : radarMapView === "velocity" ? `Live base velocity · ${radarSourceLabels[radarSource ?? "provider"]} · ${selectedLocation.radarSite}.` : `Live composite reflectivity · ${radarSourceLabels[radarSource ?? "provider"]} · ${selectedLocation.radarSite}.`} />
-          {radarMapView === "satellite" ? <figure className="satellite-view"><div className="radar-field-picker satellite-channel-picker">{(["geocolor", "ir", "wv"] as const).map((channel) => <button type="button" key={channel} className={satelliteChannel === channel ? "active" : ""} onClick={() => setSatelliteChannel(channel)}>{({ geocolor: "GeoColor", ir: "Infrared", wv: "Water vapor" } as Record<string, string>)[channel]}</button>)}</div><img src={`https://cdn.star.nesdis.noaa.gov/GOES19/ABI/CONUS/${{ geocolor: "GEOCOLOR", ir: "13", wv: "08" }[satelliteChannel]}/1250x750.jpg?refresh=${radarRefreshToken}`} alt={`Latest NOAA GOES-East ${{ geocolor: "GeoColor", ir: "clean infrared", wv: "upper-level water vapor" }[satelliteChannel]} image for the continental United States`} /><figcaption>{({ geocolor: "Observed NOAA GOES-East GeoColor", ir: "Observed NOAA GOES-East clean infrared (cloud-top temperature)", wv: "Observed NOAA GOES-East upper-level water vapor" } as Record<string, string>)[satelliteChannel]} · {selectedLocation.name}</figcaption></figure> : <RadarMap location={selectedLocation} opacity={radarOpacity / 100} showReflectivity={radarMapView === "composite" || radarMapView === "velocity"} moment={radarMapView === "velocity" ? "velocity" : "reflectivity"} showAlerts={showNwsAlerts} showOutlook={showSpcOutlook} outlookDay={outlookDay} showSevereMarkers={showSevereMarkers} showStationPicker={showStationPicker} onStationSelect={selectRadarStation} refreshToken={radarRefreshToken} recenterToken={radarRecenterToken} timelineTileUrl={radarMapView === "composite" ? radarFrame?.tileUrl : null} isCurrentFrame={isCurrentRadarFrame} inHouseFrameTime={radarMapView === "composite" ? radarFrame?.inHouseTime ?? null : null} forceProvider={radarProviderPreference === "iem"} theme="dark" scrollZoom onSourceChange={setRadarSource} onFrameMeta={setRadarFrameMeta} />}
+          {radarMapView === "satellite" ? <figure className="satellite-view"><div className="radar-field-picker satellite-channel-picker">{(["geocolor", "ir", "wv"] as const).map((channel) => <button type="button" key={channel} className={satelliteChannel === channel ? "active" : ""} onClick={() => { setSatelliteChannel(channel); setSatellitePlaying(false); }}>{({ geocolor: "GeoColor", ir: "Infrared", wv: "Water vapor" } as Record<string, string>)[channel]}</button>)}</div><img src={satelliteFrame?.url ?? `https://cdn.star.nesdis.noaa.gov/GOES19/ABI/CONUS/${{ geocolor: "GEOCOLOR", ir: "13", wv: "08" }[satelliteChannel]}/1250x750.jpg?refresh=${radarRefreshToken}`} alt={`NOAA GOES-East ${{ geocolor: "GeoColor", ir: "clean infrared", wv: "upper-level water vapor" }[satelliteChannel]} image for the continental United States${satelliteFrame ? ` at ${satelliteFrameTime}` : ""}`} /><figcaption>{({ geocolor: "Observed NOAA GOES-East GeoColor", ir: "Observed NOAA GOES-East clean infrared (cloud-top temperature)", wv: "Observed NOAA GOES-East upper-level water vapor" } as Record<string, string>)[satelliteChannel]} · {selectedLocation.name}</figcaption></figure> : <RadarMap location={selectedLocation} opacity={radarOpacity / 100} showReflectivity={radarMapView === "composite" || radarMapView === "velocity"} moment={radarMapView === "velocity" ? "velocity" : "reflectivity"} showAlerts={showNwsAlerts} showOutlook={showSpcOutlook} outlookDay={outlookDay} showSevereMarkers={showSevereMarkers} showStationPicker={showStationPicker} onStationSelect={selectRadarStation} refreshToken={radarRefreshToken} recenterToken={radarRecenterToken} timelineTileUrl={radarMapView === "composite" ? radarFrame?.tileUrl : null} isCurrentFrame={isCurrentRadarFrame} inHouseFrameTime={radarMapView === "composite" ? radarFrame?.inHouseTime ?? null : null} forceProvider={radarProviderPreference === "iem"} theme="dark" scrollZoom onSourceChange={setRadarSource} onFrameMeta={setRadarFrameMeta} />}
         </div>
         <RadarLegendStrip view={radarMapView} inline elevationDeg={radarFrameMeta?.elevationDeg ?? null} observedAtLabel={radarObservedAtLabel} />
         {radarMapView === "composite" && <div className="radar-playback"><button type="button" disabled={radarFrames.length < 2} onClick={() => setRadarPlaying((playing) => !playing)}>{radarPlaying ? "Pause" : "Play"}</button><input type="range" className="radar-scrub" min="0" max={Math.max(0, radarFrames.length - 1)} value={radarFrameIndex} disabled={radarFrames.length < 2} onChange={(event) => { setRadarPlaying(false); setRadarFrameIndex(Number(event.target.value)); }} /><span>{radarFrames.length ? radarFrameTime : radarTimelineStatus}</span></div>}
+        {radarMapView === "satellite" && satelliteFrames.length > 0 && <div className="radar-playback"><button type="button" disabled={satelliteFrames.length < 2} onClick={() => setSatellitePlaying((playing) => !playing)}>{satellitePlaying ? "Pause" : "Play"}</button><input type="range" className="radar-scrub" min="0" max={Math.max(0, satelliteFrames.length - 1)} value={satelliteFrameIndex} disabled={satelliteFrames.length < 2} onChange={(event) => { setSatellitePlaying(false); setSatelliteFrameIndex(Number(event.target.value)); }} /><span>{satelliteFrameTime}</span></div>}
       </section>}
 
       {activeSection === "forecast" && !session && <section className="workspace-card access-wall"><h2>Log in to forecast</h2><p>The dashboard is available to explore, while forecasts, references, and archive work stay private to your account.</p><button type="button" onClick={() => setLoginMenuOpen(true)}>Open login</button></section>}
