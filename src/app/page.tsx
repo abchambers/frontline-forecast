@@ -1316,6 +1316,10 @@ export default function Home() {
   const [futureRadarPlaying, setFutureRadarPlaying] = useState(false);
   const [futureRadarStatus, setFutureRadarStatus] = useState("Loading future radar…");
   const [radarMapView, setRadarMapView] = useState<RadarMapView>("composite");
+  // Deliberately its own state, never persisted: the Home dashboard's radar card should always
+  // land on composite reflectivity on a fresh page load, independent of whatever view the Radar
+  // workspace tab remembers from last time.
+  const [homeRadarMapView, setHomeRadarMapView] = useState<RadarMapView>("composite");
   const [showNwsAlerts, setShowNwsAlerts] = useState(true);
   const [showSpcOutlook, setShowSpcOutlook] = useState(false);
   const [outlookDay, setOutlookDay] = useState<1 | 2>(1);
@@ -1850,7 +1854,7 @@ export default function Home() {
   }, [radarMapView]);
 
   useEffect(() => {
-    if (radarMapView !== "satellite") return;
+    if (radarMapView !== "satellite" && homeRadarMapView !== "satellite") return;
     let isActive = true;
     const loadSatelliteFrames = () => fetch(`/api/satellite/frames?channel=${satelliteChannel}`, { cache: "no-store" })
       .then(async (response) => {
@@ -1858,6 +1862,13 @@ export default function Home() {
         if (!response.ok) throw new Error(data.error || "Unable to load satellite frames");
         if (isActive) {
           const frames = data.frames as { time: string; url: string }[];
+          // Play advances every 700ms, which is faster than a fresh network fetch + decode for a
+          // ~150-250KB CONUS frame -- without this, autoplay stutters on whichever frame hasn't
+          // finished loading yet, then jumps once it does. Scrubbing manually felt smooth because
+          // by the time you're dragging back and forth, the frames you've already passed are
+          // sitting in the browser's HTTP cache. Warming every frame into that same cache up front
+          // as soon as the list loads makes Play just as smooth as a manual scrub from frame one.
+          frames.forEach((frame) => { const image = new Image(); image.src = frame.url; });
           setSatelliteFrames(frames);
           setSatelliteFrameIndex(Math.max(0, frames.length - 1));
         }
@@ -1866,7 +1877,7 @@ export default function Home() {
     loadSatelliteFrames();
     const refreshId = window.setInterval(loadSatelliteFrames, 300_000);
     return () => { isActive = false; window.clearInterval(refreshId); };
-  }, [radarMapView, satelliteChannel]);
+  }, [radarMapView, homeRadarMapView, satelliteChannel]);
 
   useEffect(() => {
     if (!satellitePlaying || satelliteFrames.length < 2) return;
@@ -3607,6 +3618,11 @@ export default function Home() {
     window.requestAnimationFrame(() => document.querySelectorAll<HTMLDetailsElement>(".radar-tools[open]").forEach((controls) => controls.removeAttribute("open")));
   }
 
+  function selectHomeRadarView(view: RadarMapView) {
+    setHomeRadarMapView(view);
+    window.requestAnimationFrame(() => document.querySelectorAll<HTMLDetailsElement>(".radar-tools[open]").forEach((controls) => controls.removeAttribute("open")));
+  }
+
   return (
     <>
     <main className={`app desk-${activeWorkspace?.kind ?? "public"}`}>
@@ -3649,14 +3665,15 @@ export default function Home() {
       </section>}
       <section className="dashboard-grid">
         {homepageContent.showRadar && <article className="radar-card">
-          <div className="card-heading"><div><h2>{radarMapView === "satellite" ? "Satellite" : `${homepageContent.radarTitle} - ${radarMapView === "velocity" ? "Velocity" : "Composite Reflectivity"}`}</h2></div></div>
+          <div className="card-heading"><div><h2>{homeRadarMapView === "satellite" ? "Satellite" : `${homepageContent.radarTitle} - ${homeRadarMapView === "velocity" ? "Velocity" : "Composite Reflectivity"}`}</h2></div></div>
           <div className="radar">
             <button type="button" className="radar-recenter-btn" title="Recenter" aria-label="Recenter radar" onClick={() => setRadarRecenterToken((value) => value + 1)}>⌖</button>
-            <RadarControlsMenu radarMapView={radarMapView} onSelectView={selectRadarView} radarProviderPreference={radarProviderPreference} onProviderPreferenceChange={setRadarProviderPreference} reflectivityLabel="Radar" showNwsAlerts={showNwsAlerts} onToggleAlerts={setShowNwsAlerts} showSevereMarkers={showSevereMarkers} onToggleSevereMarkers={setShowSevereMarkers} showStationPicker={showStationPicker} onToggleStationPicker={setShowStationPicker} radarOpacity={radarOpacity} onOpacityChange={setRadarOpacity} caption={radarMapView === "satellite" ? "Observed NOAA GOES-East GeoColor imagery" : radarMapView === "velocity" ? `Live base velocity · ${radarSourceLabels[radarSource ?? "provider"]} · ${selectedLocation.radarSite}` : `Live composite reflectivity · ${radarSourceLabels[radarSource ?? "provider"]} · ${selectedLocation.radarSite}`} />
-            {radarMapView === "satellite" ? <figure className="satellite-view"><img src={`https://cdn.star.nesdis.noaa.gov/GOES19/ABI/CONUS/GEOCOLOR/1250x750.jpg?refresh=${radarRefreshToken}`} alt="Latest NOAA GOES-East GeoColor image for the continental United States" /><figcaption>GOES-East GeoColor · {selectedLocation.name} is within this regional view</figcaption></figure> : <RadarMap location={selectedLocation} opacity={radarOpacity / 100} showReflectivity={radarMapView === "composite" || radarMapView === "velocity"} moment={radarMapView === "velocity" ? "velocity" : "reflectivity"} showAlerts={showNwsAlerts} showSevereMarkers={showSevereMarkers} showStationPicker={showStationPicker} onStationSelect={selectRadarStation} refreshToken={radarRefreshToken} recenterToken={radarRecenterToken} timelineTileUrl={radarMapView === "composite" ? radarFrame?.tileUrl : null} isCurrentFrame={isCurrentRadarFrame} inHouseFrameTime={radarMapView === "composite" ? radarFrame?.inHouseTime ?? null : null} forceProvider={radarProviderPreference === "iem"} theme="dark" onSourceChange={setRadarSource} onFrameMeta={setRadarFrameMeta} />}
+            <RadarControlsMenu radarMapView={homeRadarMapView} onSelectView={selectHomeRadarView} radarProviderPreference={radarProviderPreference} onProviderPreferenceChange={setRadarProviderPreference} reflectivityLabel="Radar" showNwsAlerts={showNwsAlerts} onToggleAlerts={setShowNwsAlerts} showSevereMarkers={showSevereMarkers} onToggleSevereMarkers={setShowSevereMarkers} showStationPicker={showStationPicker} onToggleStationPicker={setShowStationPicker} radarOpacity={radarOpacity} onOpacityChange={setRadarOpacity} caption={homeRadarMapView === "satellite" ? "Observed NOAA GOES-East GeoColor imagery" : homeRadarMapView === "velocity" ? `Live base velocity · ${radarSourceLabels[radarSource ?? "provider"]} · ${selectedLocation.radarSite}` : `Live composite reflectivity · ${radarSourceLabels[radarSource ?? "provider"]} · ${selectedLocation.radarSite}`} />
+            {homeRadarMapView === "satellite" ? <figure className="satellite-view"><img src={satelliteFrame?.url ?? `https://cdn.star.nesdis.noaa.gov/GOES19/ABI/CONUS/GEOCOLOR/1250x750.jpg?refresh=${radarRefreshToken}`} alt={`Latest NOAA GOES-East GeoColor image for the continental United States${satelliteFrame ? ` at ${satelliteFrameTime}` : ""}`} /><figcaption>GOES-East GeoColor · {selectedLocation.name} is within this regional view</figcaption></figure> : <RadarMap location={selectedLocation} opacity={radarOpacity / 100} showReflectivity={homeRadarMapView === "composite" || homeRadarMapView === "velocity"} moment={homeRadarMapView === "velocity" ? "velocity" : "reflectivity"} showAlerts={showNwsAlerts} showSevereMarkers={showSevereMarkers} showStationPicker={showStationPicker} onStationSelect={selectRadarStation} refreshToken={radarRefreshToken} recenterToken={radarRecenterToken} timelineTileUrl={homeRadarMapView === "composite" ? radarFrame?.tileUrl : null} isCurrentFrame={isCurrentRadarFrame} inHouseFrameTime={homeRadarMapView === "composite" ? radarFrame?.inHouseTime ?? null : null} forceProvider={radarProviderPreference === "iem"} theme="dark" onSourceChange={setRadarSource} onFrameMeta={setRadarFrameMeta} />}
           </div>
-          <RadarLegendStrip view={radarMapView} inline elevationDeg={radarFrameMeta?.elevationDeg ?? null} observedAtLabel={radarObservedAtLabel} />
-          {radarMapView === "composite" && <div className="radar-playback"><button type="button" disabled={radarFrames.length < 2} onClick={() => setRadarPlaying((playing) => !playing)}>{radarPlaying ? "Pause" : "Play"}</button><input type="range" className="radar-scrub" min="0" max={Math.max(0, radarFrames.length - 1)} value={radarFrameIndex} disabled={radarFrames.length < 2} onChange={(event) => { setRadarPlaying(false); setRadarFrameIndex(Number(event.target.value)); }} /><span>{radarFrames.length ? radarFrameTime : radarTimelineStatus}</span></div>}
+          <RadarLegendStrip view={homeRadarMapView} inline elevationDeg={radarFrameMeta?.elevationDeg ?? null} observedAtLabel={radarObservedAtLabel} />
+          {homeRadarMapView === "composite" && <div className="radar-playback"><button type="button" disabled={radarFrames.length < 2} onClick={() => setRadarPlaying((playing) => !playing)}>{radarPlaying ? "Pause" : "Play"}</button><input type="range" className="radar-scrub" min="0" max={Math.max(0, radarFrames.length - 1)} value={radarFrameIndex} disabled={radarFrames.length < 2} onChange={(event) => { setRadarPlaying(false); setRadarFrameIndex(Number(event.target.value)); }} /><span>{radarFrames.length ? radarFrameTime : radarTimelineStatus}</span></div>}
+          {homeRadarMapView === "satellite" && satelliteFrames.length > 0 && <div className="radar-playback"><button type="button" disabled={satelliteFrames.length < 2} onClick={() => setSatellitePlaying((playing) => !playing)}>{satellitePlaying ? "Pause" : "Play"}</button><input type="range" className="radar-scrub" min="0" max={Math.max(0, satelliteFrames.length - 1)} value={satelliteFrameIndex} disabled={satelliteFrames.length < 2} onChange={(event) => { setSatellitePlaying(false); setSatelliteFrameIndex(Number(event.target.value)); }} /><span>{satelliteFrameTime}</span></div>}
         </article>}
 
         <aside className="quick-data" aria-label="Quick weather reference">
