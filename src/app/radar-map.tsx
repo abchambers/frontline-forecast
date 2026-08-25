@@ -16,14 +16,14 @@ type RadarStationSummary = { id: string; name: string; latitude: number; longitu
 // product/tilt/time readout, RadarScope-style, instead of just the color-scale legend.
 export type RadarFrameMeta = { elevationDeg: number | null; observedAt: string | null } | null;
 
-type RadarMapProps = { opacity?: number; showReflectivity?: boolean; moment?: "reflectivity" | "velocity"; showAlerts?: boolean; showOutlook?: boolean; showSevereMarkers?: boolean; showStationPicker?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; inHouseFrameTime?: string | null; forceProvider?: boolean; theme?: "light" | "dark"; scrollZoom?: boolean; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string }; onSourceChange?: (source: "nexrad" | "provider" | null) => void; onFrameMeta?: (meta: RadarFrameMeta) => void; onStationSelect?: (station: RadarStationSummary) => void };
+type RadarMapProps = { opacity?: number; showReflectivity?: boolean; moment?: "reflectivity" | "velocity"; showAlerts?: boolean; showOutlook?: boolean; outlookDay?: 1 | 2; showSevereMarkers?: boolean; showStationPicker?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; inHouseFrameTime?: string | null; forceProvider?: boolean; theme?: "light" | "dark"; scrollZoom?: boolean; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string }; onSourceChange?: (source: "nexrad" | "provider" | null) => void; onFrameMeta?: (meta: RadarFrameMeta) => void; onStationSelect?: (station: RadarStationSummary) => void };
 
 const basemapTiles = {
   light: { url: "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
   dark: { url: "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
 };
 
-export default function RadarMap({ opacity = 0.72, showReflectivity = true, moment = "reflectivity", showAlerts = true, showOutlook = false, showSevereMarkers = false, showStationPicker = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, isCurrentFrame = true, inHouseFrameTime = null, forceProvider = false, theme = "light", scrollZoom = false, location, onSourceChange, onFrameMeta, onStationSelect }: RadarMapProps) {
+export default function RadarMap({ opacity = 0.72, showReflectivity = true, moment = "reflectivity", showAlerts = true, showOutlook = false, outlookDay = 1, showSevereMarkers = false, showStationPicker = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, isCurrentFrame = true, inHouseFrameTime = null, forceProvider = false, theme = "light", scrollZoom = false, location, onSourceChange, onFrameMeta, onStationSelect }: RadarMapProps) {
   const mapElement = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const baseLayerRef = useRef<any>(null);
@@ -113,7 +113,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
     outlookLayerRef.current = null;
     if (!showOutlook) return;
     let active = true;
-    fetch("/api/outlook")
+    fetch(`/api/outlook?day=${outlookDay}`)
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "SPC outlook overlay unavailable");
@@ -122,13 +122,13 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
           style: (feature: any) => ({ color: feature?.properties?.stroke ?? "#c69000", fillColor: feature?.properties?.fill ?? "#c69000", fillOpacity: 0.35, weight: 1.5 }),
           onEachFeature: (feature: any, layer: any) => {
             const properties = feature?.properties ?? {};
-            layer.bindTooltip(`${properties.LABEL2 ?? "Convective outlook"}`, { className: "spc-outlook-tooltip", direction: "auto", sticky: true });
+            layer.bindTooltip(`Day ${outlookDay} · ${properties.LABEL2 ?? "Convective outlook"}`, { className: "spc-outlook-tooltip", direction: "auto", sticky: true });
           },
         }).addTo(mapRef.current);
       })
       .catch(() => undefined);
     return () => { active = false; };
-  }, [leafletLoaded, showOutlook, location]);
+  }, [leafletLoaded, showOutlook, outlookDay, location]);
 
   // Level III severe-weather detection markers (storm tracks, hail, tornadic vortex signatures,
   // mesocyclones) — an additional overlay layer, same pattern as the NWS alerts layer above, not
