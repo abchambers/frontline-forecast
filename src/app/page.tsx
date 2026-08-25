@@ -139,7 +139,7 @@ type AssignmentPeriodResponse = { highLow: string; conditions: string; iconCondi
 type AssignmentDayResponse = { day: AssignmentPeriodResponse; night: AssignmentPeriodResponse };
 type AssignmentSubmission = { id: string; assignment_id: string; classroom_id: string; student_id: string; responses: Record<string, AssignmentDayResponse>; status: "draft" | "submitted"; submitted_at: string | null; created_at: string; updated_at: string };
 type AssignmentReview = { id: string; submission_id: string; reviewer_id: string; comment: string | null; manual_score: number | null; created_at: string; updated_at: string };
-type AppNotification = { id: string; user_id: string; kind: string; payload: { assignment_id?: string; classroom_id?: string; title?: string }; read_at: string | null; created_at: string };
+type AppNotification = { id: string; user_id: string; kind: string; payload: { assignment_id?: string; classroom_id?: string; title?: string; run_id?: string; target_date?: string; day_score?: number; night_score?: number; manual_score?: number | null }; read_at: string | null; created_at: string };
 const emptyAssignmentPeriodResponse: AssignmentPeriodResponse = { highLow: "", conditions: "", iconCondition: "", rainChance: "", timing: "", wind: "", confidence: "", hazards: "", reasoning: "" };
 const emptyAssignmentDayResponse: AssignmentDayResponse = { day: emptyAssignmentPeriodResponse, night: emptyAssignmentPeriodResponse };
 // "auto" is the smart default: in-house NEXRAD first (live and, once the worker's retained-frame
@@ -2814,10 +2814,36 @@ export default function Home() {
     await fetch(`${supabaseUrl}/rest/v1/notifications?read_at=is.null`, { method: "PATCH", headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" }, body: JSON.stringify({ read_at: readAt }) });
   }
 
+  function notificationLabel(notification: AppNotification) {
+    if (notification.kind === "assignment_created") return `New assignment: ${notification.payload.title ?? ""}`;
+    if (notification.kind === "forecast_scored") return `Forecast scored${notification.payload.target_date ? ` · ${forecastTargetTitle(notification.payload.target_date)}` : ""}: ${notification.payload.day_score ?? "—"}% day / ${notification.payload.night_score ?? "—"}% night`;
+    if (notification.kind === "assignment_reviewed") return notification.payload.manual_score != null ? `Assignment feedback ready · ${notification.payload.manual_score}%` : "Assignment feedback ready";
+    return notification.payload.title ?? "Notification";
+  }
+
   function openNotification(notification: AppNotification) {
     markNotificationRead(notification);
     setNotificationsOpen(false);
     setWorkspaceMenuOpen(false);
+    // A scored forecast is always about the student's own record, viewed in Verify -- whether it
+    // was submitted from the personal desk or as part of a classroom assignment, never the
+    // class-wide aggregate grade.
+    if (notification.kind === "forecast_scored" || notification.kind === "assignment_reviewed") {
+      if (notification.payload.classroom_id) {
+        const workspace = workspaceContexts.find((candidate) => candidate.classroomId === notification.payload.classroom_id);
+        if (workspace) setActiveWorkspaceKey(workspace.key);
+      } else {
+        setActiveWorkspaceKey("personal");
+      }
+      if (notification.payload.target_date) {
+        setRecordFocusDate(notification.payload.target_date);
+        setRecordWindowStart(notification.payload.target_date);
+        const archive = archiveForDate(notification.payload.target_date);
+        if (archive) setSelectedArchiveId(archive.id);
+      }
+      setActiveSection("verify");
+      return;
+    }
     if (notification.payload.classroom_id) {
       const workspace = workspaceContexts.find((candidate) => candidate.classroomId === notification.payload.classroom_id);
       if (workspace) setActiveWorkspaceKey(workspace.key);
@@ -3551,7 +3577,7 @@ export default function Home() {
             <button type="button" className="avatar-trigger" aria-expanded={workspaceMenuOpen} aria-label="Account menu" onClick={() => setWorkspaceMenuOpen((open) => !open)}><span className="avatar-circle">{initialsFor(myDisplayName, session.user.email)}{hasUnreadNotifications && <i className="avatar-unread-dot" aria-hidden="true" />}</span></button>
             {workspaceMenuOpen && <div className="avatar-menu">
               <div className="avatar-menu-head"><strong>{myDisplayName || session.user.email}</strong>{myDisplayName && <small>{session.user.email}</small>}</div>
-              <div className="avatar-menu-notifications"><button type="button" className="avatar-menu-notifications-trigger" aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen((open) => !open)}><span>Notifications{hasUnreadNotifications && <i className="avatar-unread-dot" aria-hidden="true" />}</span><i aria-hidden="true">⌄</i></button>{notificationsOpen && <div className="avatar-menu-notification-list">{hasUnreadNotifications && <button type="button" className="notification-mark-all" onClick={markAllNotificationsRead}>Mark all read</button>}{notifications.length ? notifications.slice(0, 8).map((notification) => <button type="button" key={notification.id} className={notification.read_at ? "" : "unread"} onClick={() => openNotification(notification)}><strong>{notification.kind === "assignment_created" ? `New assignment: ${notification.payload.title ?? ""}` : notification.payload.title ?? "Notification"}</strong><small>{new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(notification.created_at))}</small></button>) : <p className="empty">No notifications yet.</p>}</div>}</div>
+              <div className="avatar-menu-notifications"><button type="button" className="avatar-menu-notifications-trigger" aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen((open) => !open)}><span>Notifications{hasUnreadNotifications && <i className="avatar-unread-dot" aria-hidden="true" />}</span><i aria-hidden="true">⌄</i></button>{notificationsOpen && <div className="avatar-menu-notification-list">{hasUnreadNotifications && <button type="button" className="notification-mark-all" onClick={markAllNotificationsRead}>Mark all read</button>}{notifications.length ? notifications.slice(0, 8).map((notification) => <button type="button" key={notification.id} className={notification.read_at ? "" : "unread"} onClick={() => openNotification(notification)}><strong>{notificationLabel(notification)}</strong><small>{new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(notification.created_at))}</small></button>) : <p className="empty">No notifications yet.</p>}</div>}</div>
               {soleStudentDeskKey && activeWorkspaceKey === soleStudentDeskKey ? <div className="avatar-menu-desk"><span className="avatar-menu-label">Desk</span><button type="button" className="avatar-menu-desk-open" onClick={() => { if (activeWorkspace?.kind === "organization") setActiveSection("school"); else if (activeWorkspace?.kind === "classroom") setActiveSection("classroom"); setWorkspaceMenuOpen(false); }}><strong>{workspaceDeskLabel(activeWorkspace)}</strong></button><button type="button" className="workspace-join-link" onClick={() => { setJoinPanelOpen(true); setWorkspaceMenuOpen(false); }}>Join another class</button></div> : <div className="avatar-menu-desk"><button type="button" className="avatar-menu-desk-trigger" aria-expanded={deskListOpen} onClick={() => setDeskListOpen((open) => !open)}><span>Your desks</span><i aria-hidden="true">⌄</i></button>{deskListOpen && <div className="avatar-menu-desk-list">{workspaceContexts.filter((workspace) => workspace.classroomStatus !== "archived").map((workspace) => <button type="button" key={workspace.key} className={workspace.key === activeWorkspaceKey ? "active" : ""} onClick={() => { switchWorkspace(workspace); setDeskListOpen(false); }}><strong>{workspaceDeskLabel(workspace)}</strong><span>{workspace.detail}{workspace.role ? ` · ${workspace.role}` : ""}</span></button>)}<button type="button" className="workspace-join-action" onClick={() => { setJoinPanelOpen(true); setWorkspaceMenuOpen(false); }}>Join a school or class</button>{workspaceContextStatus && <em>{workspaceContextStatus}</em>}</div>}</div>}
               {visibleWorkspace("control") && <div className="avatar-menu-actions"><button type="button" onClick={() => { setActiveSection("control"); setWorkspaceMenuOpen(false); }}>{workspaceNavigation.find((item) => item.id === "control")?.label || "Settings"}</button></div>}
               <button type="button" className="avatar-menu-theme" onClick={() => setTheme((value) => value === "light" ? "dark" : "light")}>{theme === "light" ? "Dark mode" : "Light mode"}</button>
