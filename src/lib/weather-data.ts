@@ -55,3 +55,28 @@ export function canonicalModelPoint(input: Omit<CanonicalWeatherPoint, "kind">):
 export function canonicalSensorPoint(input: Omit<CanonicalWeatherPoint, "kind">): CanonicalWeatherPoint {
   return { ...input, kind: "sensor" };
 }
+
+export type DailyOutlookDay = { date: string; label: string; high: number | null; low: number | null; shortForecast: string; precipitationChance: number | null; wind: string | null };
+
+type ForecastPeriodLike = { startTime: string; temperature: number; precipitationChance: number | null; windSpeed: string | null; windDirection: string | null; shortForecast: string };
+
+// Groups NWS's day/night forecast periods into one entry per calendar date. Shared between
+// /api/weather (live) and /api/cron/outlook (the durable archive) so both produce identically
+// keyed dates -- the archive backfills whatever dates the live feed no longer has.
+export function reduceForecastPeriodsToDailyOutlook(periods: ForecastPeriodLike[], timezone: string): DailyOutlookDay[] {
+  const days: DailyOutlookDay[] = [];
+  for (const period of periods) {
+    const date = new Intl.DateTimeFormat("en-CA", { timeZone: timezone }).format(new Date(period.startTime));
+    const label = new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: timezone }).format(new Date(period.startTime));
+    const wind = period.windSpeed ? `${period.windDirection ?? ""} ${period.windSpeed}`.trim() : null;
+    const existing = days.find((day) => day.date === date);
+    if (existing) {
+      existing.high = existing.high === null ? period.temperature : Math.max(existing.high, period.temperature);
+      existing.low = existing.low === null ? period.temperature : Math.min(existing.low, period.temperature);
+      existing.precipitationChance = Math.max(existing.precipitationChance ?? 0, period.precipitationChance ?? 0);
+    } else if (days.length < 7) {
+      days.push({ date, label, high: period.temperature, low: period.temperature, shortForecast: period.shortForecast, precipitationChance: period.precipitationChance, wind });
+    }
+  }
+  return days;
+}

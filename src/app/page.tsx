@@ -31,6 +31,9 @@ type LiveWeather = {
   forecastPeriods: { name: string; startTime: string; temperature: number; temperatureUnit: string; shortForecast: string; precipitationChance: number | null; icon: string | null; windSpeed: string | null; windDirection: string | null }[];
   alerts: { event: string; headline: string | null; severity: string; expires: string | null; effective: string | null; description: string | null; instruction: string | null; areaDesc: string | null; senderName: string | null }[];
   alertsAvailable: boolean;
+  // Live NWS data merged with weather_daily_outlook (the durable archive) server-side, so a date
+  // NWS's rolling forecast has already dropped still shows the guidance last captured for it.
+  dailyOutlook: { date: string; label: string; high: number | null; low: number | null; shortForecast: string; precipitationChance: number | null; wind: string | null }[];
   fetchedAt: string;
 };
 // `source`/`inHouseTime` are only ever set for the observed-radar timeline (never the HRRR
@@ -2654,20 +2657,7 @@ export default function Home() {
   const selectedDay = forecastRun.days[selectedForecastDay] ?? forecastRun.days[0];
   const archiveMenu = archives.find((archive) => archive.id === archiveMenuId) ?? null;
   const pendingArchiveRemoval = archives.find((archive) => archive.id === pendingArchiveRemovalId) ?? null;
-  const outlook = liveWeather?.forecastPeriods.reduce<{ date: string; label: string; high: number | null; low: number | null; shortForecast: string; precipitationChance: number | null; wind: string | null }[]>((days, period) => {
-    const date = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(period.startTime));
-    const existing = days.find((day) => day.date === date);
-    const label = new Intl.DateTimeFormat("en-US", { weekday: "short" , timeZone: "America/New_York" }).format(new Date(period.startTime));
-    const wind = period.windSpeed ? `${period.windDirection ?? ""} ${period.windSpeed}`.trim() : null;
-    if (existing) {
-      existing.high = existing.high === null ? period.temperature : Math.max(existing.high, period.temperature);
-      existing.low = existing.low === null ? period.temperature : Math.min(existing.low, period.temperature);
-      existing.precipitationChance = Math.max(existing.precipitationChance ?? 0, period.precipitationChance ?? 0);
-    } else if (days.length < 7) {
-      days.push({ date, label, high: period.temperature, low: period.temperature, shortForecast: period.shortForecast, precipitationChance: period.precipitationChance, wind });
-    }
-    return days;
-  }, []) ?? [];
+  const outlook = liveWeather?.dailyOutlook ?? [];
   const referenceOptions: ReferenceItem[] = [
     { id: "nws-observation", label: "Current NWS observation", detail: liveWeather ? `${liveWeather.observation.temperatureF ?? "—"}°F · ${liveWeather.observation.description} · ${liveWeather.observation.station || liveWeather.observation.stationName || "NWS observation station"} · ${observedAt}` : "Live observation was unavailable when attached.", preview: liveWeather ? { kind: "metrics", items: [{ label: "Temperature", value: `${liveWeather.observation.temperatureF ?? "—"}°F` }, { label: "Dew point", value: `${liveWeather.observation.dewpointF ?? "—"}°F` }, { label: "Wind", value: liveWeather.observation.windMph === null ? "—" : `${liveWeather.observation.windDirection ?? ""} ${liveWeather.observation.windMph} mph`.trim() }, { label: "Station", value: liveWeather.observation.station || liveWeather.observation.stationName || "NWS observation station" }] } : undefined },
     { id: "nws-guidance", label: "Current NWS forecast", detail: liveWeather?.forecast ? `${liveWeather.forecast.period}: ${liveWeather.forecast.detailedForecast}` : "NWS forecast was unavailable when attached.", preview: liveWeather?.forecast ? { kind: "metrics", items: [{ label: "Period", value: liveWeather.forecast.period }, { label: "Temperature", value: `${liveWeather.forecast.temperature}°${liveWeather.forecast.temperatureUnit}` }, { label: "Precipitation", value: `${liveWeather.forecast.precipitationChance ?? "—"}%` }, { label: "Conditions", value: liveWeather.forecast.shortForecast }] } : undefined },

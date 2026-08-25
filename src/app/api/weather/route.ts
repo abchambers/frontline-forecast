@@ -1,7 +1,28 @@
 import { NextResponse } from "next/server";
 import { resolveWeatherDeskLocation } from "@/lib/locations";
-import { canonicalObservation, celsiusToFahrenheit, metersPerSecondToMph, windDirectionLabel } from "@/lib/weather-data";
+import { canonicalObservation, celsiusToFahrenheit, metersPerSecondToMph, windDirectionLabel, reduceForecastPeriodsToDailyOutlook, type DailyOutlookDay } from "@/lib/weather-data";
 import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
+
+// Backfills dates the live NWS feed has already rolled past (see weather_daily_outlook_archive
+// migration / /api/cron/outlook) using the service role -- this table has no client-facing RLS
+// policy, so it can only be read server-side, never fetched from the browser.
+async function fetchArchivedOutlook(locationId: string, timezone: string): Promise<DailyOutlookDay[]> {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!supabaseUrl || !serviceKey) return [];
+  const since = new Intl.DateTimeFormat("en-CA", { timeZone: timezone }).format(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000));
+  try {
+    const response = await fetch(
+      `${supabaseUrl}/rest/v1/weather_daily_outlook?location_id=eq.${encodeURIComponent(locationId)}&valid_date=gte.${since}&order=valid_date.asc`,
+      { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` }, cache: "no-store" },
+    );
+    if (!response.ok) return [];
+    const rows: { valid_date: string; label: string; high_f: number | null; low_f: number | null; short_forecast: string; precipitation_chance: number | null; wind: string | null }[] = await response.json();
+    return rows.map((row) => ({ date: row.valid_date, label: row.label, high: row.high_f, low: row.low_f, shortForecast: row.short_forecast, precipitationChance: row.precipitation_chance, wind: row.wind }));
+  } catch {
+    return [];
+  }
+}
 
 type NwsFeature<T> = { properties: T };
 
@@ -92,6 +113,19 @@ export async function GET(request: Request) {
     const forecast = forecastResult.value;
     const alertsAvailable = alertsResult.status === "fulfilled";
     const alerts = alertsAvailable ? alertsResult.value : { features: [] };
+
+    // Live wins for any date the current NWS feed still has; the archive fills in the dates it's
+    // already dropped (typically just yesterday, but the merge covers whatever's missing).
+    const liveDailyOutlook = reduceForecastPeriodsToDailyOutlook(
+      forecast.properties.periods.map((period) => ({ startTime: period.startTime, temperature: period.temperature, precipitationChance: period.probabilityOfPrecipitation.value, windSpeed: period.windSpeed ?? null, windDirection: period.windDirection ?? null, shortForecast: period.shortForecast })),
+      selectedLocation.timezone,
+    );
+    const archivedDailyOutlook = await fetchArchivedOutlook(selectedLocation.id, selectedLocation.timezone);
+    const dailyOutlookByDate = new Map<string, DailyOutlookDay>();
+    for (const day of archivedDailyOutlook) dailyOutlookByDate.set(day.date, day);
+    for (const day of liveDailyOutlook) dailyOutlookByDate.set(day.date, day);
+    const dailyOutlook = [...dailyOutlookByDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+
     const current = observation.properties;
     const nextPeriod = forecast.properties.periods[0];
     const observedTemperatureF = celsiusToFahrenheit(current.temperature.value);
@@ -165,6 +199,7 @@ export async function GET(request: Request) {
           senderName: properties.senderName ?? null,
         })),
         alertsAvailable,
+        dailyOutlook,
         fetchedAt: new Date().toISOString(),
       },
       { headers: { "Cache-Control": "no-store" } },

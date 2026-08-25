@@ -11,6 +11,10 @@
     {
       "path": "/api/cron/billing",
       "schedule": "35 12 * * *"
+    },
+    {
+      "path": "/api/cron/outlook",
+      "schedule": "45 12 * * *"
     }
   ]
 }
