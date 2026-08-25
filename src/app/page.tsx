@@ -970,7 +970,7 @@ function SchoolDesk({ workspace, classrooms, members, codes, entitlement, classr
     {canCoordinate && archivedClassrooms.length > 0 && <details className="history-fold"><summary>Archived · {archivedClassrooms.length}</summary><div className="classroom-roster-list">{archivedClassrooms.map((classroom) => <article key={classroom.key}><span><strong>{workspaceDeskLabel(classroom)}</strong><small>{classroom.detail}</small></span><div><button type="button" onClick={() => onRestoreClassroom(classroom.classroomId!)}>Restore</button><button type="button" className="danger" onClick={() => setPendingDeletion(classroom)}>Delete permanently</button></div></article>)}</div></details>}
     {pendingDeletion && <div className="archive-confirmation" role="alertdialog" aria-modal="true" aria-labelledby="classroom-deletion-title"><div><p className="eyebrow">Confirm permanent deletion</p><h2 id="classroom-deletion-title">Delete {workspaceDeskLabel(pendingDeletion)}?</h2><p>This permanently removes the class, its roster, assignments, submissions, and join codes. Students' own forecast history is kept, just no longer linked to this class. This cannot be undone.</p><div><button type="button" onClick={() => setPendingDeletion(null)}>Cancel</button><button type="button" className="danger" onClick={() => { onDeleteClassroom(pendingDeletion.classroomId!); setPendingDeletion(null); }}>Delete permanently</button></div></div></div>}
   </section>
-  {classMenu && menuClassroom && <div className="tab-menu" style={{ left: classMenu.left, top: classMenu.top }}><strong>{workspaceDeskLabel(menuClassroom)}</strong><div><button type="button" onClick={() => { setOpenClassroomId(menuClassroom.classroomId!); setClassMenu(null); }}>Manage</button><button type="button" onClick={() => setClassMenu(null)}>Close</button></div>{canCoordinate && <><small>Archiving keeps the class, its roster, and its records — it just moves out of the active list.</small><button type="button" onClick={() => { onArchiveClassroom(menuClassroom.classroomId!); setClassMenu(null); }}>Archive class</button></>}</div>}
+  {classMenu && menuClassroom && <div className="tab-menu" style={{ left: classMenu.left, top: classMenu.top }}><strong>{workspaceDeskLabel(menuClassroom)}</strong><div><button type="button" onClick={() => { setOpenClassroomId(menuClassroom.classroomId!); setClassMenu(null); }}>Manage</button><button type="button" onClick={() => setClassMenu(null)}>Close</button></div>{canCoordinate && <><small>Archiving keeps the class, its roster, and its records — it just moves out of the active list. A class can only be permanently deleted after it's archived, from the Archived list below.</small><button type="button" onClick={() => { onArchiveClassroom(menuClassroom.classroomId!); setClassMenu(null); }}>Archive class</button></>}</div>}
   {message && <p className="control-message" role="status">{message}</p>}</section>;
 }
 
@@ -2377,13 +2377,19 @@ export default function Home() {
         .filter((classroom) => !membershipClassroomIds.has(classroom.id))
         .map((classroom) => ({ classroom_id: classroom.id, role: coordinatorRoleByOrg.get(classroom.organization_id) ?? "admin", status: "active", classrooms: classroom }));
       const knownOrganizationIds = new Set(organizationRows.flatMap((row) => row.organization_id ? [row.organization_id] : []));
+      // A platform owner's "see everything" view must carry real capability, not just visibility --
+      // otherwise a school they coordinate purely by platform ownership (no personal
+      // organization_memberships row, e.g. Andrew's own UGA classes) renders every
+      // coordinator-gated control (archive, delete, plan/seat management) invisible, even though
+      // they're the one person who should always be able to reach it. Matches the org-coordinator
+      // fallback below (`?? "admin"`) rather than leaving role empty.
       const platformOnlyOrganizationRows: OrganizationMembershipRow[] = allOrganizationRows
         .filter((organization) => !knownOrganizationIds.has(organization.id))
-        .map((organization) => ({ organization_id: organization.id, role: "", organizations: organization }));
+        .map((organization) => ({ organization_id: organization.id, role: "owner", organizations: organization }));
       const knownClassroomIds = new Set([...membershipClassroomIds, ...coordinatedOnlyRows.map((row) => row.classroom_id)]);
       const platformOnlyClassroomRows: ClassroomMembershipRow[] = allClassroomRows
         .filter((classroom) => !knownClassroomIds.has(classroom.id))
-        .map((classroom) => ({ classroom_id: classroom.id, role: "", status: "active", classrooms: classroom }));
+        .map((classroom) => ({ classroom_id: classroom.id, role: "owner", status: "active", classrooms: classroom }));
       const allOrganizationRowsMerged = [...organizationRows, ...platformOnlyOrganizationRows];
       const allClassroomRowsMerged = [...classroomRows, ...coordinatedOnlyRows, ...platformOnlyClassroomRows];
       const organizations = allOrganizationRowsMerged.flatMap((row) => {
