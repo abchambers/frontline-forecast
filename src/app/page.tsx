@@ -554,18 +554,13 @@ function RadarControlsMenu({
   </div></details>;
 }
 
-// The primary product/model choice, promoted above the map itself so switching between
-// Composite/Velocity/Satellite/Forecast doesn't require opening the ☰ menu first. The identical
-// picker still lives inside RadarControlsMenu too -- this doesn't replace it, just adds a more
-// visible entry point for the one choice people reach for most.
+// The Observed-vs-Forecast choice, promoted above the map itself -- just this one toggle, not
+// the full product/field picker (that stays inside the ☰ menu only, per Andrew's explicit call:
+// he didn't want the whole picker duplicated above, only this single most-important choice).
 function RadarProductStrip({ radarMapView, onSelectView, showForecastToggle = false }: { radarMapView: RadarMapView; onSelectView: (view: RadarMapView) => void; showForecastToggle?: boolean }) {
+  if (!showForecastToggle) return null;
   const isForecast = radarMapView === "future_reflectivity";
-  return <div className="radar-product-strip">
-    {showForecastToggle && <div className="radar-field-picker radar-mode-toggle"><button type="button" className={isForecast ? "" : "active"} onClick={() => onSelectView("composite")}>Observed</button><button type="button" className={isForecast ? "active forecast" : "forecast"} onClick={() => onSelectView("future_reflectivity")}>Forecast</button></div>}
-    {isForecast
-      ? <div className="radar-field-picker forecast-field-picker"><button type="button" className="active">Reflectivity</button><button type="button" disabled title="More model fields are planned">Temperature</button><button type="button" disabled title="More model fields are planned">Precip</button></div>
-      : <div className="radar-field-picker"><button type="button" className={radarMapView === "composite" ? "active" : ""} onClick={() => onSelectView("composite")}>Composite</button><button type="button" className={radarMapView === "velocity" ? "active" : ""} onClick={() => onSelectView("velocity")}>Velocity</button><button type="button" className={radarMapView === "satellite" ? "active" : ""} onClick={() => onSelectView("satellite")}>Satellite</button></div>}
-  </div>;
+  return <div className="radar-product-strip"><div className="radar-field-picker radar-mode-toggle"><button type="button" className={isForecast ? "" : "active"} onClick={() => onSelectView("composite")}>Observed</button><button type="button" className={isForecast ? "active forecast" : "forecast"} onClick={() => onSelectView("future_reflectivity")}>Forecast</button></div></div>;
 }
 
 function ModelAccessUpsell({ label, onOpenAccount }: { label: string; onOpenAccount: () => void }) {
