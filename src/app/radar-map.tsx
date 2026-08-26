@@ -18,9 +18,20 @@ export type RadarFrameMeta = { elevationDeg: number | null; observedAt: string |
 
 type RadarMapProps = { opacity?: number; showReflectivity?: boolean; moment?: "reflectivity" | "velocity"; showAlerts?: boolean; showOutlook?: boolean; outlookDay?: 1 | 2; showSevereMarkers?: boolean; showStationPicker?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; inHouseFrameTime?: string | null; forceProvider?: boolean; theme?: "light" | "dark"; scrollZoom?: boolean; prefetchTileUrls?: string[]; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string }; onSourceChange?: (source: "nexrad" | "provider" | null) => void; onFrameMeta?: (meta: RadarFrameMeta) => void; onStationSelect?: (station: RadarStationSummary) => void; onMapClick?: () => void };
 
+// Andrew, live (2026-08-26): CARTO stopped serving these keylessly — tiles still return a normal
+// 200, but every one now has "API KEY REQUIRED" stamped across it (confirmed by downloading a live
+// tile directly, not just guessing from the map looking off). Their own free tier is genuinely
+// usable here: no account needed, key emailed instantly from https://carto.com/basemaps/apikey/
+// (just an email + the site's domain + a one-line project description), 5 million tile requests/
+// month fair use, and per their docs "you do not need to tell us in advance whether your project is
+// commercial" — exceeding the limit gets a conversation about a paid plan, not a cutoff. Add the key
+// to Vercel as NEXT_PUBLIC_CARTO_API_KEY (must be NEXT_PUBLIC_ since this file fetches tiles
+// directly from the browser, not a server route) and this picks it up with no other code change.
+const cartoApiKey = process.env.NEXT_PUBLIC_CARTO_API_KEY;
+const cartoKeyParam = cartoApiKey ? `?key=${cartoApiKey}` : "";
 const basemapTiles = {
-  light: { url: "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
-  dark: { url: "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
+  light: { url: `https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png${cartoKeyParam}`, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
+  dark: { url: `https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png${cartoKeyParam}`, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
 };
 
 export default function RadarMap({ opacity = 0.72, showReflectivity = true, moment = "reflectivity", showAlerts = true, showOutlook = false, outlookDay = 1, showSevereMarkers = false, showStationPicker = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, isCurrentFrame = true, inHouseFrameTime = null, forceProvider = false, theme = "light", scrollZoom = false, prefetchTileUrls, location, onSourceChange, onFrameMeta, onStationSelect, onMapClick }: RadarMapProps) {
