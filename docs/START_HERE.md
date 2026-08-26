@@ -2,7 +2,7 @@
 
 Use this page to resume work from any computer. Bookmark the links you use most.
 
-**AI collaborators**: read [`WORKING_WITH_ANDREW.md`](WORKING_WITH_ANDREW.md) first — it's auto-loaded via `CLAUDE.md` in this repo, but worth knowing it exists.
+**AI collaborators**: read [`WORKING_WITH_ANDREW.md`](WORKING_WITH_ANDREW.md) and [`BUSINESS_IDENTITY.md`](BUSINESS_IDENTITY.md) first — both are auto-loaded via `CLAUDE.md` in this repo, but worth knowing they exist.
 
 **Setting up on a brand-new Mac with nothing installed?** Use [`new-machine-setup.md`](new-machine-setup.md) — covers Homebrew, GitHub CLI, and everything below from zero.
 
