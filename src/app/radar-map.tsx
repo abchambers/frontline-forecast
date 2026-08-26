@@ -16,14 +16,14 @@ type RadarStationSummary = { id: string; name: string; latitude: number; longitu
 // product/tilt/time readout, RadarScope-style, instead of just the color-scale legend.
 export type RadarFrameMeta = { elevationDeg: number | null; observedAt: string | null } | null;
 
-type RadarMapProps = { opacity?: number; showReflectivity?: boolean; moment?: "reflectivity" | "velocity"; showAlerts?: boolean; showOutlook?: boolean; outlookDay?: 1 | 2; showSevereMarkers?: boolean; showStationPicker?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; inHouseFrameTime?: string | null; forceProvider?: boolean; theme?: "light" | "dark"; scrollZoom?: boolean; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string }; onSourceChange?: (source: "nexrad" | "provider" | null) => void; onFrameMeta?: (meta: RadarFrameMeta) => void; onStationSelect?: (station: RadarStationSummary) => void };
+type RadarMapProps = { opacity?: number; showReflectivity?: boolean; moment?: "reflectivity" | "velocity"; showAlerts?: boolean; showOutlook?: boolean; outlookDay?: 1 | 2; showSevereMarkers?: boolean; showStationPicker?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; inHouseFrameTime?: string | null; forceProvider?: boolean; theme?: "light" | "dark"; scrollZoom?: boolean; prefetchTileUrls?: string[]; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string }; onSourceChange?: (source: "nexrad" | "provider" | null) => void; onFrameMeta?: (meta: RadarFrameMeta) => void; onStationSelect?: (station: RadarStationSummary) => void; onMapClick?: () => void };
 
 const basemapTiles = {
   light: { url: "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
   dark: { url: "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
 };
 
-export default function RadarMap({ opacity = 0.72, showReflectivity = true, moment = "reflectivity", showAlerts = true, showOutlook = false, outlookDay = 1, showSevereMarkers = false, showStationPicker = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, isCurrentFrame = true, inHouseFrameTime = null, forceProvider = false, theme = "light", scrollZoom = false, location, onSourceChange, onFrameMeta, onStationSelect }: RadarMapProps) {
+export default function RadarMap({ opacity = 0.72, showReflectivity = true, moment = "reflectivity", showAlerts = true, showOutlook = false, outlookDay = 1, showSevereMarkers = false, showStationPicker = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, isCurrentFrame = true, inHouseFrameTime = null, forceProvider = false, theme = "light", scrollZoom = false, prefetchTileUrls, location, onSourceChange, onFrameMeta, onStationSelect, onMapClick }: RadarMapProps) {
   const mapElement = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const baseLayerRef = useRef<any>(null);
@@ -32,7 +32,16 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
   const outlookLayerRef = useRef<any>(null);
   const severeMarkersLayerRef = useRef<any>(null);
   const stationPickerLayerRef = useRef<any>(null);
+  // Cache of provider tile-layer instances, keyed by their URL template, kept mounted (hidden at
+  // opacity 0) instead of destroyed on every frame swap. A Leaflet tile layer that's already been
+  // added once has its tiles sitting in the browser's own HTTP cache; recreating the layer object
+  // each frame change still meant Leaflet re-requesting every tile from scratch on this component's
+  // first pass through the loop. Reusing the instance instead skips the redundant fetch entirely on
+  // every subsequent visit to that frame — see the addProviderLayer/prefetch effect below.
+  const providerLayerCacheRef = useRef<Map<string, any>>(new Map());
   const [leafletLoaded, setLeafletLoaded] = useState(false);
+  const onMapClickRef = useRef(onMapClick);
+  useEffect(() => { onMapClickRef.current = onMapClick; }, [onMapClick]);
   // Only true for a station's FIRST radar layer (no previousLayer yet) — a refresh/timeline
   // change already has a visible frame underneath and fades the new one in, so a loading overlay
   // there would just flicker over a working map. This is specifically for the case a user reported
@@ -56,6 +65,10 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
     window.L.circleMarker(coordinates, { color: "#18222f", fillColor: "#ffffff", fillOpacity: 1, weight: 2, radius: 6 })
       .bindPopup(`${location.name} · nearest radar ${location.radarSite}`)
       .addTo(map);
+    // Click-to-pause (RadarScope convention): a plain click on the map background pauses whichever
+    // timeline the parent has playing. Station-marker and popup clicks stop their own propagation
+    // (see the station-picker effect below) so selecting a station doesn't also pause playback.
+    map.on("click", () => onMapClickRef.current?.());
 
     return () => {
       baseLayerRef.current = null;
@@ -64,6 +77,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       outlookLayerRef.current = null;
       severeMarkersLayerRef.current = null;
       stationPickerLayerRef.current = null;
+      providerLayerCacheRef.current.clear();
       mapRef.current = null;
       map.remove();
     };
@@ -212,7 +226,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
           radius: isActive ? 7 : 5,
         })
           .bindTooltip(`${station.name} (${station.id})`, { direction: "auto" })
-          .on("click", () => onStationSelectRef.current?.(station))
+          .on("click", (event: any) => { window.L.DomEvent.stopPropagation(event); onStationSelectRef.current?.(station); })
           .addTo(group);
       }
       group.addTo(mapRef.current);
@@ -249,6 +263,48 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
   useEffect(() => { onSourceChangeRef.current = onSourceChange; }, [onSourceChange]);
   const onFrameMetaRef = useRef(onFrameMeta);
   useEffect(() => { onFrameMetaRef.current = onFrameMeta; }, [onFrameMeta]);
+
+  // Bounded well above the ~12-frame timeline this ever actually sees — eviction is a safety net,
+  // not a real limit in normal operation.
+  const PROVIDER_CACHE_LIMIT = 16;
+  function getOrCreateProviderLayer(url: string) {
+    const cache = providerLayerCacheRef.current;
+    const existing = cache.get(url);
+    if (existing) return existing;
+    const layer = window.L.tileLayer(url, {
+      opacity: 0,
+      // IEM's mosaic tiles are rendered from ~1km-resolution data, which stops adding real
+      // detail past zoom 8. Leaflet keeps the user's closer map view by scaling that tile.
+      maxNativeZoom: 8,
+      maxZoom: 18,
+      attribution: 'Radar: <a href="https://mesonet.agron.iastate.edu/" target="_blank">Iowa Environmental Mesonet</a>',
+    });
+    cache.set(url, layer);
+    if (cache.size > PROVIDER_CACHE_LIMIT) {
+      const oldestKey = cache.keys().next().value;
+      if (oldestKey) {
+        const oldestLayer = cache.get(oldestKey);
+        if (oldestLayer && oldestLayer !== radarLayerRef.current && mapRef.current) mapRef.current.removeLayer(oldestLayer);
+        cache.delete(oldestKey);
+      }
+    }
+    return layer;
+  }
+
+  // Warms every frame in the current timeline into the tile cache above as soon as the frame list
+  // is known — not just the one frame currently on screen — so Play doesn't stutter through a wave
+  // of first-time tile fetches (same "choppy on first play, smooth on repeat" symptom the satellite
+  // Image-preload fix addressed; tile layers just need this per-layer form instead of a plain
+  // `new Image()` since a frame here is a grid of tiles, not one file).
+  useEffect(() => {
+    if (!leafletLoaded || !mapRef.current || !window.L || !prefetchTileUrls?.length) return;
+    for (const url of prefetchTileUrls) {
+      if (providerLayerCacheRef.current.has(url)) continue;
+      const layer = getOrCreateProviderLayer(url);
+      if (mapRef.current && !mapRef.current.hasLayer(layer)) layer.addTo(mapRef.current);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leafletLoaded, prefetchTileUrls?.join("|")]);
 
   useEffect(() => {
     if (!leafletLoaded || !mapRef.current || !window.L) return;
@@ -291,22 +347,27 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
 
     function addProviderLayer() {
       if (!mapRef.current) return;
-      const nextLayer = timelineTileUrl
-        ? window.L.tileLayer(timelineTileUrl, {
-          opacity: 0,
-          // IEM's mosaic tiles are rendered from ~1km-resolution data, which stops adding real
-          // detail past zoom 8. Leaflet keeps the user's closer map view by scaling that tile.
-          maxNativeZoom: 8,
-          maxZoom: 18,
-          attribution: 'Radar: <a href="https://mesonet.agron.iastate.edu/" target="_blank">Iowa Environmental Mesonet</a>',
-        })
-        : window.L.tileLayer.wms("https://opengeo.ncep.noaa.gov/geoserver/conus/conus_bref_qcd/ows", {
+      if (!timelineTileUrl) {
+        // Legacy WMS fallback — essentially never hit now that /api/radar/frames always sets a
+        // tileUrl, so this stays uncached (a per-request cache-busted WMS layer isn't reusable
+        // across frames the way a tile-template layer is).
+        const nextLayer = window.L.tileLayer.wms("https://opengeo.ncep.noaa.gov/geoserver/conus/conus_bref_qcd/ows", {
           layers: "conus_bref_qcd", format: "image/png", transparent: true, opacity: 0, version: "1.3.0", cache: Date.now() + refreshToken,
           attribution: 'Radar: <a href="https://www.weather.gov/gis/cloudgiswebservices">NOAA/NWS</a>',
         });
-      nextLayer.addTo(mapRef.current);
-      nextLayer.once("load", () => settle(nextLayer, "provider"));
-      window.setTimeout(() => settle(nextLayer, "provider"), 700);
+        nextLayer.addTo(mapRef.current);
+        nextLayer.once("load", () => settle(nextLayer, "provider"));
+        window.setTimeout(() => settle(nextLayer, "provider"), 700);
+        return;
+      }
+      const nextLayer = getOrCreateProviderLayer(timelineTileUrl);
+      const wasAlreadyMounted = mapRef.current.hasLayer(nextLayer);
+      if (!wasAlreadyMounted) nextLayer.addTo(mapRef.current);
+      const finish = () => settle(nextLayer, "provider");
+      nextLayer.once("load", finish);
+      // A reused/prefetched layer already has its tiles in place (mounted at opacity 0 since it was
+      // created) — settle almost immediately rather than waiting out the full first-fetch window.
+      window.setTimeout(finish, wasAlreadyMounted ? 60 : 700);
     }
 
     // The worker renders server-side and sends a ready PNG data URL directly

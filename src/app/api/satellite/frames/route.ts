@@ -14,7 +14,11 @@ import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 // response is cached briefly since new frames only land every 5 minutes.
 const CHANNEL_DIRS = { geocolor: "GEOCOLOR", ir: "13", wv: "08" } as const;
 type Channel = keyof typeof CHANNEL_DIRS;
-const MAX_FRAMES = 24; // ~2 hours at 5-minute cadence, matching the radar timeline's own window
+// Andrew, live: wanted enough history to actually see synoptic-scale motion (fronts, mid-latitude
+// systems), which doesn't read clearly over 2 hours. 48 frames = 4 hours at the CDN's 5-minute
+// cadence — still a light fetch (small CONUS JPGs) and well inside the "weeks of history" the
+// directory listing retains.
+const MAX_FRAMES = 48;
 
 function isoFromTimestamp(stamp: string) {
   const year = Number(stamp.slice(0, 4));
