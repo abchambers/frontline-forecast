@@ -544,7 +544,8 @@ function RadarControlsMenu({
   caption: string;
 }) {
   const isForecast = radarMapView === "future_reflectivity";
-  return <details className="radar-tools"><summary aria-label="Open radar controls">☰</summary><div>
+  const activeProductLabel = radarMapView === "satellite" ? "Satellite" : radarMapView === "velocity" ? "Velocity" : isForecast ? "Forecast" : reflectivityLabel;
+  return <details className="radar-tools"><summary aria-label={`Radar controls — currently showing ${activeProductLabel}`}><span className="radar-tools-current">{activeProductLabel}</span> ☰</summary><div>
     {showForecastToggle && <div className="radar-product-picker"><span>Time</span><div className="radar-field-picker radar-mode-toggle"><button type="button" className={isForecast ? "" : "active"} onClick={() => onSelectView("composite")}>Observed</button><button type="button" className={isForecast ? "active forecast" : "forecast"} onClick={() => onSelectView("future_reflectivity")}>Forecast</button></div></div>}
     <div className="radar-product-picker"><span>Data layer</span>{isForecast
       ? <div className="radar-field-picker forecast-field-picker"><button type="button" className="active">Reflectivity</button><button type="button" disabled title="More model fields are planned">Temperature</button><button type="button" disabled title="More model fields are planned">Precip</button></div>
