@@ -288,6 +288,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       // detail past zoom 8. Leaflet keeps the user's closer map view by scaling that tile.
       maxNativeZoom: 8,
       maxZoom: 18,
+      className: "radar-frame-layer",
       attribution: 'Radar: <a href="https://mesonet.agron.iastate.edu/" target="_blank">Iowa Environmental Mesonet</a>',
     });
     cache.set(url, layer);
@@ -332,16 +333,15 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
     const previousLayer = radarLayerRef.current;
     if (!previousLayer) setIsDataLoading(true);
     let settled = false;
-    // CROSSFADE_MS must stay ahead of .leaflet-tile/.leaflet-image-layer's own CSS transition
-    // (globals.css, 0.25s) — a real bug found live: this used to call removeLayer on the previous
-    // frame in the SAME tick as setting the new frame's opacity, so the old frame vanished
-    // instantly while the new one only *started* fading in from blank. That's not a crossfade,
-    // it's "flash to the bare map, then pop to full color" every single frame swap — the actual
-    // cause of reported choppiness/color flicker during playback, not just an absent transition.
-    // Fading the OLD layer's own opacity to 0 (instead of removing it outright) means both layers
-    // are genuinely on-screen and animating simultaneously during the transition window, then the
-    // old one is removed only once it's actually invisible.
-    const CROSSFADE_MS = 300;
+    // Andrew, live (2026-08-27): this used to be a real 300ms crossfade (globals.css gave
+    // .leaflet-tile/.leaflet-image-layer a .25s opacity transition) — removed for radar frames
+    // specifically via the "radar-frame-layer" className (see globals.css) since cross-fading
+    // hard-banded categorical data between two different storm positions reads as ghosting/flicker,
+    // not smooth motion. setOpacity below is now an instant hard cut for radar layers. The delay
+    // before actually removeLayer-ing the old one is just cleanup bookkeeping now (the old layer is
+    // already invisible the instant the new one settles) — kept short rather than zero only so a
+    // stray render in flight has no chance to touch a layer that's mid-removal.
+    const CROSSFADE_MS = 50;
     const settle = (nextLayer: any, source: "nexrad" | "provider", meta: RadarFrameMeta = null) => {
       if (settled || cancelled) return;
       settled = true;
@@ -364,6 +364,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
         // across frames the way a tile-template layer is).
         const nextLayer = window.L.tileLayer.wms("https://opengeo.ncep.noaa.gov/geoserver/conus/conus_bref_qcd/ows", {
           layers: "conus_bref_qcd", format: "image/png", transparent: true, opacity: 0, version: "1.3.0", cache: Date.now() + refreshToken,
+          className: "radar-frame-layer",
           attribution: 'Radar: <a href="https://www.weather.gov/gis/cloudgiswebservices">NOAA/NWS</a>',
         });
         nextLayer.addTo(mapRef.current);
@@ -396,7 +397,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       const dataUrl = data.imageDataUrl ?? (data.points ? renderer(data.points, data.bounds, data.step) : null);
       if (!dataUrl || cancelled || !mapRef.current) throw new Error("Render failed");
       const bounds: [[number, number], [number, number]] = [[data.bounds.minLatitude, data.bounds.minLongitude], [data.bounds.maxLatitude, data.bounds.maxLongitude]];
-      const nextLayer = window.L.imageOverlay(dataUrl, bounds, { opacity: 0, interactive: false });
+      const nextLayer = window.L.imageOverlay(dataUrl, bounds, { opacity: 0, interactive: false, className: "radar-frame-layer" });
       nextLayer.addTo(mapRef.current);
       settle(nextLayer, source, { elevationDeg: data.elevationDeg ?? null, observedAt: data.time ?? null });
     }
