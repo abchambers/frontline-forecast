@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Space_Grotesk, Inter, JetBrains_Mono } from "next/font/google";
+import { Analytics } from "@vercel/analytics/next";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./globals.css";
 import "./verify-overrides.css";
 import { SiteConfiguration } from "./site-configuration";
@@ -46,5 +48,5 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en" data-site-content="loading" className={`${spaceGrotesk.variable} ${inter.variable} ${jetbrainsMono.variable}`}><body><SiteConfiguration />{children}</body></html>;
+  return <html lang="en" data-site-content="loading" className={`${spaceGrotesk.variable} ${inter.variable} ${jetbrainsMono.variable}`}><body><SiteConfiguration />{children}<Analytics /><SpeedInsights /></body></html>;
 }

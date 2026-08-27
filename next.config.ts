@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { withSentryConfig } from "@sentry/nextjs";
 import { securityHeaders } from "./src/lib/security-headers";
 
 const nextConfig: NextConfig = {
@@ -19,4 +20,15 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+// Source-map upload (readable production stack traces) needs SENTRY_ORG/SENTRY_PROJECT/
+// SENTRY_AUTH_TOKEN env vars, none of which are set up yet — left disabled so the build never fails
+// or warns for their absence. Error capture itself only needs NEXT_PUBLIC_SENTRY_DSN (see
+// src/instrumentation.ts / src/instrumentation-client.ts) and works fully without this.
+export default withSentryConfig(nextConfig, {
+  org: process.env.SENTRY_ORG,
+  project: process.env.SENTRY_PROJECT,
+  authToken: process.env.SENTRY_AUTH_TOKEN,
+  silent: true,
+  telemetry: false,
+  sourcemaps: { disable: !process.env.SENTRY_AUTH_TOKEN },
+});

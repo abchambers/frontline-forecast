@@ -7,11 +7,18 @@ type Header = { key: string; value: string };
 // upgraded to HTTPS and fails outright since there's no local certificate.
 const contentSecurityPolicy = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' https://unpkg.com",
+  // Confirmed live: @vercel/analytics and @vercel/speed-insights load their script from
+  // va.vercel-scripts.com regardless of environment (dev serves a .debug.js variant from the same
+  // host) — without this, our own CSP silently blocked both of them at the browser level, no error
+  // surfaced anywhere except the console.
+  "script-src 'self' 'unsafe-inline' https://unpkg.com https://va.vercel-scripts.com",
   "style-src 'self' 'unsafe-inline' https://unpkg.com",
   "img-src 'self' data: blob: https://*.supabase.co https://basemaps.cartocdn.com https://opengeo.ncep.noaa.gov https://digital.weather.gov https://mesonet.agron.iastate.edu https://cdn.star.nesdis.noaa.gov https://www.spc.noaa.gov",
   "font-src 'self' data:",
-  "connect-src 'self' https://*.supabase.co wss://*.supabase.co",
+  // Sentry's own SDK is bundled into this app's JS (no external <script>), it just needs to be able
+  // to POST error reports out — allowing all three ingest domain shapes since the exact one depends
+  // on which data-region the Sentry project ends up on, not known until it's created.
+  "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://*.ingest.de.sentry.io",
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",

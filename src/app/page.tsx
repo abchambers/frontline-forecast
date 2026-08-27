@@ -2,6 +2,7 @@
 
 import { Component, useEffect, useRef, useState, type ErrorInfo, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import dynamic from "next/dynamic";
+import { track } from "@vercel/analytics";
 import { defaultWeatherDeskLocation, weatherDeskLocation, weatherDeskLocations, type WeatherDeskLocation } from "@/lib/locations";
 import { automaticForecastScore, type ForecastPeriodActual } from "@/lib/forecast-verification";
 import { hasModelDataAccess, type PersonalTier } from "@/lib/access";
@@ -3104,6 +3105,9 @@ export default function Home() {
       const detail = `${cloudArchives.length}-day forecast submitted · archive token ${cloudRecord.runId.slice(0, 8).toUpperCase()}`;
       setSaveMessage(`${detail}.`);
       setSubmissionToken(detail);
+      // Aggregate usage signal only — day count and whether it's a revision, never who submitted it
+      // or what the forecast actually said.
+      track("Forecast Submitted", { days: cloudArchives.length, isRevision: Boolean(revisionParentRunId) });
       // A submitted forecast is immutable in the archive. Days not included in
       // this submission (e.g. a single day posted from its card, or days never
       // marked Ready) stay in the draft untouched. If everything was just
