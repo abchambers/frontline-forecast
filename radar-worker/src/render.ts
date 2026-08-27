@@ -37,6 +37,21 @@ const COLOR_STOPS: { dbz: number; rgb: [number, number, number] }[] = [
   { dbz: 70, rgb: [255, 255, 255] },
 ];
 const NO_ECHO_THRESHOLD_DBZ = 2;
+// Andrew, live (2026-08-27): pulled a frame from RadarScope at the same station/moment as this
+// app's own live view for a direct comparison. RadarScope shows the SAME clear-air/biological-
+// scatter clutter this app's noise-floor pipeline deliberately lets through (see project.ts's
+// MIN_REFLECTIVITY_DBZ/despeckle/CC history — every attempt to filter that signal out further has a
+// real, measured cost of also losing genuine thin/weak precipitation). The visible difference isn't
+// the DATA, it's how the surviving weak signal gets PAINTED: RadarScope renders it as a soft,
+// blended haze, while this app painted every surviving cell — weak noise-adjacent speckle and solid
+// storm cores alike — with the same hard edge and the same faint blur, which is what read as
+// "messy"/speckled rather than atmospheric. Splitting the blur by strength (heavier for weak cells,
+// unchanged for strong ones) turns scattered weak speckle into the same kind of soft haze without
+// touching a single data-filtering threshold above. WEAK_STRONG_BOUNDARY_DBZ intentionally reuses
+// project.ts's own DESPECKLE_STRENGTH_GATE_DBZ (25) so the data layer and the render layer agree on
+// what counts as "real, trust it" signal instead of introducing a second, unrelated threshold.
+const WEAK_STRONG_BOUNDARY_DBZ = 25;
+const WEAK_SIGNAL_BLUR_PX = 2.4;
 const SOFT_BLUR_PX = 0.6;
 // Mirrors a real fix in src/lib/mrms-render.ts — was 235/255 (~92%), which
 // stacked multiplicatively with the separate user-facing opacity slider
@@ -98,22 +113,21 @@ function colorForVelocity(velocity: number): [number, number, number] {
 // isn't bound by browser canvas memory conventions the way HTMLCanvasElement
 // is, and this worker's own 2gb memory ceiling (see fly.toml) is the real
 // limit. Still returns null on a degenerate 0-area grid.
-function renderGrid(
+function paintLayer(
+  width: number,
+  height: number,
   points: MrmsPoint[],
   bounds: MrmsBounds,
   step: number,
   colorFor: (value: number) => [number, number, number],
-  passesThreshold: (value: number) => boolean,
-): string | null {
-  const width = Math.round((bounds.maxLongitude - bounds.minLongitude) / step) + 1;
-  const height = Math.round((bounds.maxLatitude - bounds.minLatitude) / step) + 1;
-  if (width <= 1 || height <= 1) return null;
-
+  include: (value: number) => boolean,
+) {
+  let any = false;
   const canvas = createCanvas(width, height);
   const context = canvas.getContext("2d");
   const imageData = context.createImageData(width, height);
   for (const point of points) {
-    if (point.dbz === null || !passesThreshold(point.dbz)) continue;
+    if (point.dbz === null || !include(point.dbz)) continue;
     const col = Math.round((point.lon - bounds.minLongitude) / step);
     const row = Math.round((bounds.maxLatitude - point.lat) / step);
     if (col < 0 || col >= width || row < 0 || row >= height) continue;
@@ -123,21 +137,59 @@ function renderGrid(
     imageData.data[index + 1] = g;
     imageData.data[index + 2] = b;
     imageData.data[index + 3] = PIXEL_ALPHA;
+    any = true;
   }
+  if (!any) return null;
   context.putImageData(imageData, 0, 0);
+  return canvas;
+}
 
-  const blurred = createCanvas(width, height);
-  const blurredContext = blurred.getContext("2d");
-  blurredContext.filter = `blur(${SOFT_BLUR_PX}px)`;
-  blurredContext.drawImage(canvas, 0, 0);
-  const buffer = blurred.toBuffer("image/png");
+function renderGrid(
+  points: MrmsPoint[],
+  bounds: MrmsBounds,
+  step: number,
+  colorFor: (value: number) => [number, number, number],
+  passesThreshold: (value: number) => boolean,
+  // Only reflectivity gets the weak/strong split (see WEAK_SIGNAL_BLUR_PX above) — velocity keeps a
+  // single uniform blur, same as before. A velocity value isn't a "strength" in the reflectivity
+  // sense (it's signed, centered at 0), and project.ts already documents why velocity deliberately
+  // gets different treatment than reflectivity throughout this pipeline.
+  splitByStrength: boolean,
+): string | null {
+  const width = Math.round((bounds.maxLongitude - bounds.minLongitude) / step) + 1;
+  const height = Math.round((bounds.maxLatitude - bounds.minLatitude) / step) + 1;
+  if (width <= 1 || height <= 1) return null;
+
+  const composite = createCanvas(width, height);
+  const compositeContext = composite.getContext("2d");
+
+  if (splitByStrength) {
+    const weak = paintLayer(width, height, points, bounds, step, colorFor, (v) => passesThreshold(v) && v < WEAK_STRONG_BOUNDARY_DBZ);
+    if (weak) {
+      compositeContext.filter = `blur(${WEAK_SIGNAL_BLUR_PX}px)`;
+      compositeContext.drawImage(weak, 0, 0);
+    }
+    const strong = paintLayer(width, height, points, bounds, step, colorFor, (v) => passesThreshold(v) && v >= WEAK_STRONG_BOUNDARY_DBZ);
+    if (strong) {
+      compositeContext.filter = `blur(${SOFT_BLUR_PX}px)`;
+      compositeContext.drawImage(strong, 0, 0);
+    }
+  } else {
+    const canvas = paintLayer(width, height, points, bounds, step, colorFor, passesThreshold);
+    if (canvas) {
+      compositeContext.filter = `blur(${SOFT_BLUR_PX}px)`;
+      compositeContext.drawImage(canvas, 0, 0);
+    }
+  }
+
+  const buffer = composite.toBuffer("image/png");
   return `data:image/png;base64,${buffer.toString("base64")}`;
 }
 
 export function renderMrmsGridToDataUrl(points: MrmsPoint[], bounds: MrmsBounds, step: number): string | null {
-  return renderGrid(points, bounds, step, colorForDbz, (v) => v >= NO_ECHO_THRESHOLD_DBZ);
+  return renderGrid(points, bounds, step, colorForDbz, (v) => v >= NO_ECHO_THRESHOLD_DBZ, true);
 }
 
 export function renderVelocityGridToDataUrl(points: MrmsPoint[], bounds: MrmsBounds, step: number): string | null {
-  return renderGrid(points, bounds, step, colorForVelocity, (v) => Math.abs(v) >= VELOCITY_NEUTRAL_BAND);
+  return renderGrid(points, bounds, step, colorForVelocity, (v) => Math.abs(v) >= VELOCITY_NEUTRAL_BAND, false);
 }

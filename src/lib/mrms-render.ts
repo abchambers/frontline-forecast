@@ -60,16 +60,70 @@ const PIXEL_ALPHA = 255;
 // amplified by whatever zoom/stretch factor the map is at, which a
 // zoomed-in test render doesn't show. Dialed back to a gentler touch.
 const SOFT_BLUR_PX = 0.6;
+// Andrew, live (2026-08-27): see the render.ts copy for the full RadarScope-comparison writeup —
+// same fix mirrored here for the client-side fallback path. Reuses project.ts's/nexrad's own
+// DESPECKLE_STRENGTH_GATE_DBZ (25) as the weak/strong boundary so the data and render layers agree
+// on what counts as "real" signal.
+const WEAK_STRONG_BOUNDARY_DBZ = 25;
+const WEAK_SIGNAL_BLUR_PX = 2.4;
 
-function applySoftBlur(source: HTMLCanvasElement): string {
-  const blurred = document.createElement("canvas");
-  blurred.width = source.width;
-  blurred.height = source.height;
-  const context = blurred.getContext("2d");
-  if (!context) return source.toDataURL("image/png");
-  context.filter = `blur(${SOFT_BLUR_PX}px)`;
-  context.drawImage(source, 0, 0);
-  return blurred.toDataURL("image/png");
+function paintLayer(width: number, height: number, points: MrmsPoint[], bounds: MrmsBounds, step: number, colorFor: (value: number) => [number, number, number], include: (value: number) => boolean): HTMLCanvasElement | null {
+  let any = false;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  const imageData = context.createImageData(width, height);
+  for (const point of points) {
+    if (point.dbz === null || !include(point.dbz)) continue;
+    const col = Math.round((point.lon - bounds.minLongitude) / step);
+    const row = Math.round((bounds.maxLatitude - point.lat) / step);
+    if (col < 0 || col >= width || row < 0 || row >= height) continue;
+    const [r, g, b] = colorFor(point.dbz);
+    const index = (row * width + col) * 4;
+    imageData.data[index] = r;
+    imageData.data[index + 1] = g;
+    imageData.data[index + 2] = b;
+    imageData.data[index + 3] = PIXEL_ALPHA;
+    any = true;
+  }
+  if (!any) return null;
+  context.putImageData(imageData, 0, 0);
+  return canvas;
+}
+
+// Composites weak and strong signal onto one canvas with different blur amounts each — a heavier
+// blur on weak/near-noise-floor cells reads as the same soft, blended haze RadarScope shows for that
+// signal, while strong storm cores stay just as crisp/hard-banded as before. `splitByStrength` is
+// false for velocity (see render.ts's renderGrid for why — a signed, zero-centered value isn't a
+// "strength" in the reflectivity sense).
+function compositeBlurred(width: number, height: number, points: MrmsPoint[], bounds: MrmsBounds, step: number, colorFor: (value: number) => [number, number, number], passesThreshold: (value: number) => boolean, splitByStrength: boolean): string {
+  const composite = document.createElement("canvas");
+  composite.width = width;
+  composite.height = height;
+  const compositeContext = composite.getContext("2d");
+  if (!compositeContext) return composite.toDataURL("image/png");
+
+  if (splitByStrength) {
+    const weak = paintLayer(width, height, points, bounds, step, colorFor, (v) => passesThreshold(v) && v < WEAK_STRONG_BOUNDARY_DBZ);
+    if (weak) {
+      compositeContext.filter = `blur(${WEAK_SIGNAL_BLUR_PX}px)`;
+      compositeContext.drawImage(weak, 0, 0);
+    }
+    const strong = paintLayer(width, height, points, bounds, step, colorFor, (v) => passesThreshold(v) && v >= WEAK_STRONG_BOUNDARY_DBZ);
+    if (strong) {
+      compositeContext.filter = `blur(${SOFT_BLUR_PX}px)`;
+      compositeContext.drawImage(strong, 0, 0);
+    }
+  } else {
+    const canvas = paintLayer(width, height, points, bounds, step, colorFor, passesThreshold);
+    if (canvas) {
+      compositeContext.filter = `blur(${SOFT_BLUR_PX}px)`;
+      compositeContext.drawImage(canvas, 0, 0);
+    }
+  }
+  return composite.toDataURL("image/png");
 }
 
 // Discrete/stepped, NOT interpolated — real radar displays (IEM, RadarScope, weather.gov) render
@@ -92,28 +146,7 @@ export function renderMrmsGridToDataUrl(points: MrmsPoint[], bounds: MrmsBounds,
   const width = Math.round((bounds.maxLongitude - bounds.minLongitude) / step) + 1;
   const height = Math.round((bounds.maxLatitude - bounds.minLatitude) / step) + 1;
   if (width <= 1 || height <= 1 || width * height > 500_000) return null;
-
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
-  if (!context) return null;
-
-  const imageData = context.createImageData(width, height);
-  for (const point of points) {
-    if (point.dbz === null || point.dbz < NO_ECHO_THRESHOLD_DBZ) continue;
-    const col = Math.round((point.lon - bounds.minLongitude) / step);
-    const row = Math.round((bounds.maxLatitude - point.lat) / step);
-    if (col < 0 || col >= width || row < 0 || row >= height) continue;
-    const [r, g, b] = colorForDbz(point.dbz);
-    const index = (row * width + col) * 4;
-    imageData.data[index] = r;
-    imageData.data[index + 1] = g;
-    imageData.data[index + 2] = b;
-    imageData.data[index + 3] = PIXEL_ALPHA;
-  }
-  context.putImageData(imageData, 0, 0);
-  return applySoftBlur(canvas);
+  return compositeBlurred(width, height, points, bounds, step, colorForDbz, (v) => v >= NO_ECHO_THRESHOLD_DBZ, true);
 }
 
 // Diverging green/red velocity scale (NWS convention: green = moving toward
@@ -162,26 +195,5 @@ export function renderVelocityGridToDataUrl(points: MrmsPoint[], bounds: MrmsBou
   const width = Math.round((bounds.maxLongitude - bounds.minLongitude) / step) + 1;
   const height = Math.round((bounds.maxLatitude - bounds.minLatitude) / step) + 1;
   if (width <= 1 || height <= 1 || width * height > 500_000) return null;
-
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
-  if (!context) return null;
-
-  const imageData = context.createImageData(width, height);
-  for (const point of points) {
-    if (point.dbz === null || Math.abs(point.dbz) < VELOCITY_NEUTRAL_BAND) continue;
-    const col = Math.round((point.lon - bounds.minLongitude) / step);
-    const row = Math.round((bounds.maxLatitude - point.lat) / step);
-    if (col < 0 || col >= width || row < 0 || row >= height) continue;
-    const [r, g, b] = colorForVelocity(point.dbz);
-    const index = (row * width + col) * 4;
-    imageData.data[index] = r;
-    imageData.data[index + 1] = g;
-    imageData.data[index + 2] = b;
-    imageData.data[index + 3] = PIXEL_ALPHA;
-  }
-  context.putImageData(imageData, 0, 0);
-  return applySoftBlur(canvas);
+  return compositeBlurred(width, height, points, bounds, step, colorForVelocity, (v) => Math.abs(v) >= VELOCITY_NEUTRAL_BAND, false);
 }
