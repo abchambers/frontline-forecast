@@ -43,14 +43,25 @@ const NO_ECHO_THRESHOLD_DBZ = 2;
 // MIN_REFLECTIVITY_DBZ/despeckle/CC history — every attempt to filter that signal out further has a
 // real, measured cost of also losing genuine thin/weak precipitation). The visible difference isn't
 // the DATA, it's how the surviving weak signal gets PAINTED: RadarScope renders it as a soft,
-// blended haze, while this app painted every surviving cell — weak noise-adjacent speckle and solid
-// storm cores alike — with the same hard edge and the same faint blur, which is what read as
-// "messy"/speckled rather than atmospheric. Splitting the blur by strength (heavier for weak cells,
-// unchanged for strong ones) turns scattered weak speckle into the same kind of soft haze without
-// touching a single data-filtering threshold above. WEAK_STRONG_BOUNDARY_DBZ intentionally reuses
-// project.ts's own DESPECKLE_STRENGTH_GATE_DBZ (25) so the data layer and the render layer agree on
-// what counts as "real, trust it" signal instead of introducing a second, unrelated threshold.
-const WEAK_STRONG_BOUNDARY_DBZ = 25;
+// blended haze, while this app painted every surviving cell with the same hard edge and the same
+// faint blur.
+//
+// FIRST attempt at this (reverted the same day) split the blur by raw dBZ VALUE — everything under
+// 25 dBZ got a heavy blur. Andrew caught the real flaw live: a big, cohesive area of genuine light-
+// to-moderate rain (15-24 dBZ is completely ordinary, common weather) got the same mushy treatment
+// as actual isolated noise specks, which is exactly backwards for a product whose whole point is
+// showing storm shape accurately. Strength was never the right proxy for "is this noise" — SIZE is.
+// project.ts's own removeSmallClusters already established this: real clutter forms tiny connected
+// blobs (measured live: 1198 of size 1-2, 606 of size 3-5), real storms — even weak, thin ones —
+// form large cohesive regions (a 394-cell blob, several 50-200-cell blobs). So this now runs the
+// same connected-component analysis at render time and blurs by COMPONENT SIZE, not dBZ: a cell
+// that's part of a small, isolated blob gets the heavy blur regardless of its strength, a cell in a
+// real, sizeable storm shape stays crisp regardless of how weak that storm's leading edge is.
+// SMALL_COMPONENT_MAX_CELLS is deliberately its own constant, well above project.ts's
+// MIN_CLUSTER_SIZE (6) — a 6-cell blob already survived that data-integrity cutoff as "plausibly
+// real," but at this render resolution it's still visually speck-sized and reads better as soft haze
+// than as a hard dot floating in isolation.
+const SMALL_COMPONENT_MAX_CELLS = 40;
 const WEAK_SIGNAL_BLUR_PX = 2.4;
 const SOFT_BLUR_PX = 0.6;
 // Mirrors a real fix in src/lib/mrms-render.ts — was 235/255 (~92%), which
@@ -109,37 +120,59 @@ function colorForVelocity(velocity: number): [number, number, number] {
   ];
 }
 
+type Cell = { row: number; col: number; dbz: number };
+
+// Same 8-neighbor flood fill as project.ts's removeSmallClusters, but this one tags component size
+// instead of deleting anything — every cell here already passed that data-integrity pass, this is a
+// purely visual "how big does this blob actually look" question.
+function findSmallComponentKeys(cells: Cell[]): Set<string> {
+  const byKey = new Map<string, Cell>();
+  for (const cell of cells) byKey.set(`${cell.row},${cell.col}`, cell);
+
+  const visited = new Set<string>();
+  const smallKeys = new Set<string>();
+  for (const key of byKey.keys()) {
+    if (visited.has(key)) continue;
+    const component: string[] = [key];
+    visited.add(key);
+    let head = 0;
+    while (head < component.length) {
+      const [row, col] = component[head].split(",").map(Number);
+      head += 1;
+      for (let dRow = -1; dRow <= 1; dRow += 1) {
+        for (let dCol = -1; dCol <= 1; dCol += 1) {
+          if (dRow === 0 && dCol === 0) continue;
+          const neighborKey = `${row + dRow},${col + dCol}`;
+          if (visited.has(neighborKey) || !byKey.has(neighborKey)) continue;
+          visited.add(neighborKey);
+          component.push(neighborKey);
+        }
+      }
+    }
+    if (component.length < SMALL_COMPONENT_MAX_CELLS) {
+      for (const componentKey of component) smallKeys.add(componentKey);
+    }
+  }
+  return smallKeys;
+}
+
 // No hard cell-count cap here unlike the browser version — @napi-rs/canvas
 // isn't bound by browser canvas memory conventions the way HTMLCanvasElement
 // is, and this worker's own 2gb memory ceiling (see fly.toml) is the real
 // limit. Still returns null on a degenerate 0-area grid.
-function paintLayer(
-  width: number,
-  height: number,
-  points: MrmsPoint[],
-  bounds: MrmsBounds,
-  step: number,
-  colorFor: (value: number) => [number, number, number],
-  include: (value: number) => boolean,
-) {
-  let any = false;
+function paintCells(width: number, height: number, cells: Cell[], colorFor: (value: number) => [number, number, number]) {
+  if (!cells.length) return null;
   const canvas = createCanvas(width, height);
   const context = canvas.getContext("2d");
   const imageData = context.createImageData(width, height);
-  for (const point of points) {
-    if (point.dbz === null || !include(point.dbz)) continue;
-    const col = Math.round((point.lon - bounds.minLongitude) / step);
-    const row = Math.round((bounds.maxLatitude - point.lat) / step);
-    if (col < 0 || col >= width || row < 0 || row >= height) continue;
-    const [r, g, b] = colorFor(point.dbz);
-    const index = (row * width + col) * 4;
+  for (const cell of cells) {
+    const [r, g, b] = colorFor(cell.dbz);
+    const index = (cell.row * width + cell.col) * 4;
     imageData.data[index] = r;
     imageData.data[index + 1] = g;
     imageData.data[index + 2] = b;
     imageData.data[index + 3] = PIXEL_ALPHA;
-    any = true;
   }
-  if (!any) return null;
   context.putImageData(imageData, 0, 0);
   return canvas;
 }
@@ -150,32 +183,42 @@ function renderGrid(
   step: number,
   colorFor: (value: number) => [number, number, number],
   passesThreshold: (value: number) => boolean,
-  // Only reflectivity gets the weak/strong split (see WEAK_SIGNAL_BLUR_PX above) — velocity keeps a
-  // single uniform blur, same as before. A velocity value isn't a "strength" in the reflectivity
-  // sense (it's signed, centered at 0), and project.ts already documents why velocity deliberately
-  // gets different treatment than reflectivity throughout this pipeline.
-  splitByStrength: boolean,
+  // Only reflectivity gets the small-blob/real-shape split (see SMALL_COMPONENT_MAX_CELLS above) —
+  // velocity keeps a single uniform blur, same as before. project.ts already documents why velocity
+  // deliberately gets different treatment than reflectivity throughout this pipeline (real severe-
+  // weather couplets are themselves small and localized, exactly what this split would blur away).
+  splitBySize: boolean,
 ): string | null {
   const width = Math.round((bounds.maxLongitude - bounds.minLongitude) / step) + 1;
   const height = Math.round((bounds.maxLatitude - bounds.minLatitude) / step) + 1;
   if (width <= 1 || height <= 1) return null;
 
+  const cells: Cell[] = [];
+  for (const point of points) {
+    if (point.dbz === null || !passesThreshold(point.dbz)) continue;
+    const col = Math.round((point.lon - bounds.minLongitude) / step);
+    const row = Math.round((bounds.maxLatitude - point.lat) / step);
+    if (col < 0 || col >= width || row < 0 || row >= height) continue;
+    cells.push({ row, col, dbz: point.dbz });
+  }
+
   const composite = createCanvas(width, height);
   const compositeContext = composite.getContext("2d");
 
-  if (splitByStrength) {
-    const weak = paintLayer(width, height, points, bounds, step, colorFor, (v) => passesThreshold(v) && v < WEAK_STRONG_BOUNDARY_DBZ);
-    if (weak) {
+  if (splitBySize) {
+    const smallKeys = findSmallComponentKeys(cells);
+    const small = paintCells(width, height, cells.filter((c) => smallKeys.has(`${c.row},${c.col}`)), colorFor);
+    if (small) {
       compositeContext.filter = `blur(${WEAK_SIGNAL_BLUR_PX}px)`;
-      compositeContext.drawImage(weak, 0, 0);
+      compositeContext.drawImage(small, 0, 0);
     }
-    const strong = paintLayer(width, height, points, bounds, step, colorFor, (v) => passesThreshold(v) && v >= WEAK_STRONG_BOUNDARY_DBZ);
-    if (strong) {
+    const large = paintCells(width, height, cells.filter((c) => !smallKeys.has(`${c.row},${c.col}`)), colorFor);
+    if (large) {
       compositeContext.filter = `blur(${SOFT_BLUR_PX}px)`;
-      compositeContext.drawImage(strong, 0, 0);
+      compositeContext.drawImage(large, 0, 0);
     }
   } else {
-    const canvas = paintLayer(width, height, points, bounds, step, colorFor, passesThreshold);
+    const canvas = paintCells(width, height, cells, colorFor);
     if (canvas) {
       compositeContext.filter = `blur(${SOFT_BLUR_PX}px)`;
       compositeContext.drawImage(canvas, 0, 0);
