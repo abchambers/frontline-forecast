@@ -30,13 +30,22 @@ export async function GET(request: Request) {
     tileUrl: tileUrlFor(minutesAgo),
   }));
 
-  // Optional — if the worker has its own retained render close to one of the slots above, prefer
-  // it (real in-house data, our own color table) over the IEM mosaic tile for that slot. Any slot
-  // without a nearby in-house frame keeps its IEM tileUrl unchanged, so a worker outage or a
-  // station outside the retained set degrades to exactly today's behavior, not a broken timeline.
+  // Andrew, live (2026-08-26): this used to upgrade each past-frame slot to in-house independently,
+  // whenever a retained worker frame happened to fall within MATCH_WINDOW_MS of it. That reads as a
+  // pure improvement in isolation (real in-house data + our own color table beats the IEM mosaic),
+  // but it ignores the whole timeline: an in-house frame renders as a bounded ~230km-radius image
+  // crop around the station (MAX_RANGE_KM in nexrad/route.ts), while an IEM frame is a full tile
+  // pyramid covering the whole visible map. Confirmed live on production: a real 12-frame timeline
+  // was mixing sources 7 times (nexrad/provider/nexrad/nexrad/provider/...), so the visible radar
+  // coverage area was popping between "small bounded box" and "full map" on nearly every frame
+  // change during playback — this, not frame-fetch timing, was the real cause of "choppy." A
+  // per-station timeline now upgrades ALL of its slots or NONE of them, so the loop is always one
+  // consistent look throughout. Only requires every slot to have a nearby in-house match, which in
+  // practice means a healthy worker with continuous retained history for this station.
   const station = new URL(request.url).searchParams.get("station")?.trim().toUpperCase();
   if (station && STATION_ID_PATTERN.test(station)) {
     const history = (await fetchFromWorker(`/frames?station=${station}`)) as { frames?: { time: string; elevationDeg: number }[] } | null;
+    const upgrades = new Map<(typeof frames)[number], string>();
     for (const inHouseFrame of history?.frames ?? []) {
       const inHouseMs = new Date(inHouseFrame.time).getTime();
       if (Number.isNaN(inHouseMs)) continue;
@@ -49,9 +58,10 @@ export async function GET(request: Request) {
           closest = frame;
         }
       }
-      if (closest && closestDelta <= MATCH_WINDOW_MS) {
-        Object.assign(closest, { source: "nexrad", inHouseTime: inHouseFrame.time });
-      }
+      if (closest && closestDelta <= MATCH_WINDOW_MS) upgrades.set(closest, inHouseFrame.time);
+    }
+    if (upgrades.size === frames.length) {
+      for (const frame of frames) Object.assign(frame, { source: "nexrad", inHouseTime: upgrades.get(frame) });
     }
   }
 
