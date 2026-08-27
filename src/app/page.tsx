@@ -1379,13 +1379,23 @@ export default function Home() {
     const interval = window.setInterval(() => setRadarRefreshToken((value) => value + 1), 5 * 60 * 1000);
     return () => window.clearInterval(interval);
   }, []);
-  const [clockTick, setClockTick] = useState(() => new Date());
+  // Real bug found live via Sentry-motivated verification (2026-08-27): initializing this to
+  // `new Date()` captured a different instant on the server (whenever that request was rendered)
+  // than on the client (whenever hydration actually ran, always at least one network round-trip
+  // later) — the exact "Variable input such as Date.now()... which changes each time it's called"
+  // hydration-mismatch case React's own docs call out, and unlike a one-off it fires on essentially
+  // every page load since the clock is in the header, present everywhere. Same fix shape already
+  // used for `activeSection` elsewhere in this file: start both server and the client's first paint
+  // on an identical, deterministic value (null), then resolve the real one in an effect, which never
+  // runs during SSR.
+  const [clockTick, setClockTick] = useState<Date | null>(null);
   useEffect(() => {
+    setClockTick(new Date());
     const interval = window.setInterval(() => setClockTick(new Date()), 1000);
     return () => window.clearInterval(interval);
   }, []);
-  const localTimeLabel = clockTick.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  const utcTimeLabel = `${String(clockTick.getUTCHours()).padStart(2, "0")}${String(clockTick.getUTCMinutes()).padStart(2, "0")}Z`;
+  const localTimeLabel = clockTick ? clockTick.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "—:—";
+  const utcTimeLabel = clockTick ? `${String(clockTick.getUTCHours()).padStart(2, "0")}${String(clockTick.getUTCMinutes()).padStart(2, "0")}Z` : "—";
   const [locationId, setLocationId] = useState(defaultWeatherDeskLocation.id);
   const [customLocation, setCustomLocation] = useState<WeatherDeskLocation | null>(null);
   const [customStationStatus, setCustomStationStatus] = useState("");
@@ -1561,11 +1571,18 @@ export default function Home() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [selectedClassroomAssignmentId, setSelectedClassroomAssignmentId] = useState("");
   const [dismissedClassroomAssignmentId, setDismissedClassroomAssignmentId] = useState<string | null>(null);
-  const [classroomHubTab, setClassroomHubTab] = useState<ClassroomHubTab>(() => {
-    if (typeof window === "undefined") return "assignments";
+  // Same real hydration-mismatch class as clockTick above, same fix shape as activeSection
+  // elsewhere in this file: branching this initializer on typeof window meant SSR unconditionally
+  // rendered "assignments" while the client's first paint recomputed "outlook" (the actual default
+  // whenever there's no ?tab= param, i.e. every classroom visit that isn't a deep link) — a real,
+  // guaranteed mismatch, not just a theoretical one. "outlook" is the correct default in both places
+  // now; a genuine ?tab= deep link is applied a moment later in a useEffect, same as ?class=/?view=
+  // already are.
+  const [classroomHubTab, setClassroomHubTab] = useState<ClassroomHubTab>("outlook");
+  useEffect(() => {
     const tab = new URLSearchParams(window.location.search).get("tab");
-    return tab === "outlook" || tab === "assignments" || tab === "progress" || tab === "roster" ? tab : "outlook";
-  });
+    if (tab === "outlook" || tab === "assignments" || tab === "progress" || tab === "roster") setClassroomHubTab(tab);
+  }, []);
   const [revisionParentRunId, setRevisionParentRunId] = useState<string | null>(null);
   const [assignmentMessage, setAssignmentMessage] = useState("");
   const selectedLocation = customLocation ?? weatherDeskLocation(locationId);
