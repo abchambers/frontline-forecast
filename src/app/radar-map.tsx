@@ -50,6 +50,10 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
   // first pass through the loop. Reusing the instance instead skips the redundant fetch entirely on
   // every subsequent visit to that frame — see the addProviderLayer/prefetch effect below.
   const providerLayerCacheRef = useRef<Map<string, any>>(new Map());
+  // Tracks which radar-source credit string is currently registered on the map's attribution
+  // control, managed explicitly in settle() below — see that comment for why this can't just be a
+  // per-layer `attribution` option like the basemap uses.
+  const radarAttributionRef = useRef<string | null>(null);
   const [leafletLoaded, setLeafletLoaded] = useState(false);
   const onMapClickRef = useRef(onMapClick);
   useEffect(() => { onMapClickRef.current = onMapClick; }, [onMapClick]);
@@ -289,7 +293,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       maxNativeZoom: 8,
       maxZoom: 18,
       className: "radar-frame-layer",
-      attribution: 'Radar: <a href="https://mesonet.agron.iastate.edu/" target="_blank">Iowa Environmental Mesonet</a>',
+      // No `attribution` option here on purpose — see radarAttributionRef below for why.
     });
     cache.set(url, layer);
     if (cache.size > PROVIDER_CACHE_LIMIT) {
@@ -352,6 +356,26 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
         previousLayer.setOpacity(0);
         window.setTimeout(() => { if (mapRef.current) mapRef.current.removeLayer(previousLayer); }, CROSSFADE_MS);
       }
+      // Andrew, live (2026-08-27): "the credits at the bottom do not change" — a real bug caused by
+      // this file's own tile-layer caching (providerLayerCacheRef): cached provider layers stay
+      // mounted forever for instant reuse, so Leaflet's attribution control (which tracks credits
+      // per currently-mounted layer) registers "Iowa Environmental Mesonet" once and then never lets
+      // go of it, even while a completely different in-house-rendered layer is what's actually
+      // visible on top. Managing the radar-source credit explicitly here — tied to what settle()
+      // just confirmed is ACTUALLY showing, not to Leaflet's layer-mount bookkeeping — fixes it
+      // regardless of caching. Every provider/WMS layer creation above deliberately omits its own
+      // `attribution` option so this is the only thing that ever touches this specific credit.
+      if (mapRef.current?.attributionControl) {
+        const attributionControl = mapRef.current.attributionControl;
+        const nextAttribution = source === "nexrad"
+          ? "Radar: in-house NEXRAD Level II"
+          : 'Radar: <a href="https://mesonet.agron.iastate.edu/" target="_blank">Iowa Environmental Mesonet</a>';
+        if (radarAttributionRef.current !== nextAttribution) {
+          if (radarAttributionRef.current) attributionControl.removeAttribution(radarAttributionRef.current);
+          attributionControl.addAttribution(nextAttribution);
+          radarAttributionRef.current = nextAttribution;
+        }
+      }
       onSourceChangeRef.current?.(source);
       onFrameMetaRef.current?.(meta);
     };
@@ -365,7 +389,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
         const nextLayer = window.L.tileLayer.wms("https://opengeo.ncep.noaa.gov/geoserver/conus/conus_bref_qcd/ows", {
           layers: "conus_bref_qcd", format: "image/png", transparent: true, opacity: 0, version: "1.3.0", cache: Date.now() + refreshToken,
           className: "radar-frame-layer",
-          attribution: 'Radar: <a href="https://www.weather.gov/gis/cloudgiswebservices">NOAA/NWS</a>',
+          // No `attribution` option here on purpose — see radarAttributionRef below for why.
         });
         nextLayer.addTo(mapRef.current);
         nextLayer.once("load", () => settle(nextLayer, "provider"));
