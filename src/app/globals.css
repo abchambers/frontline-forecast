@@ -3,7 +3,18 @@
 * { box-sizing:border-box; }
 body { margin:0; background:var(--hq-background); background-image:radial-gradient(1100px 520px at 18% -12%, color-mix(in srgb,var(--accent) 16%,transparent), transparent 60%); background-repeat:no-repeat; color:var(--ink); font-family:var(--font-body), var(--hq-font-family); } :root[data-theme="dark"] body { background:#0d192a; background-image:radial-gradient(1200px 620px at 15% -14%, color-mix(in srgb,var(--accent) 22%,transparent), transparent 60%),radial-gradient(900px 460px at 92% 6%, color-mix(in srgb,var(--brand-navy) 55%,transparent), transparent 55%); background-repeat:no-repeat; }
 .brand-lockup { align-items:center; display:flex; gap:14px; }.theme-brand-lockup { display:block; }.theme-brand-lockup img { display:block; height:64px; width:auto; }.brand-lockup-dark { display:none; }:root[data-theme="dark"] .brand-lockup-light { display:none; }:root[data-theme="dark"] .brand-lockup-dark { display:block; }
-button { font:inherit; cursor:pointer; }
+/* Andrew, live: the location dropdown's Find button was getting cut off in Safari specifically
+   (never reproduced in Chrome at any viewport/zoom tested) — the real cause, not a mysterious
+   Safari quirk: this file never once reset native button appearance. Safari applies real native OS
+   button chrome to <button> by default, especially a `type="submit"` inside a <form> (exactly what
+   Find is) — its own minimum size can win over custom padding/sizing even when every other custom
+   style is otherwise respected. Chrome is far more forgiving about this gap, which is exactly why
+   it never showed up in this session's Chrome-only testing. Scoped to `button` only, NOT
+   input/select/textarea — this app leans on native-control `accent-color` styling extensively
+   (checkboxes, radios, .radar-scrub and other range sliders), which stops working the moment
+   appearance:none removes the native rendering it colors; resetting those too would trade one
+   Safari-only bug for a real, guaranteed regression everywhere. */
+button { appearance:none; -webkit-appearance:none; font:inherit; cursor:pointer; }
 h1,h2,h3,.eyebrow { font-family:var(--font-display), var(--hq-font-family); }
 .mono,.data-readout,time { font-family:var(--font-mono), ui-monospace, monospace; font-feature-settings:"tnum" 1; }
 .app { max-width:1180px; margin:0 auto; padding:40px 24px 64px; }
