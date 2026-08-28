@@ -16,7 +16,7 @@ type RadarStationSummary = { id: string; name: string; latitude: number; longitu
 // product/tilt/time readout, RadarScope-style, instead of just the color-scale legend.
 export type RadarFrameMeta = { elevationDeg: number | null; observedAt: string | null } | null;
 
-type RadarMapProps = { opacity?: number; showReflectivity?: boolean; moment?: "reflectivity" | "velocity"; showAlerts?: boolean; showOutlook?: boolean; outlookDay?: 1 | 2; showSevereMarkers?: boolean; showStationPicker?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; inHouseFrameTime?: string | null; forceProvider?: boolean; theme?: "light" | "dark"; scrollZoom?: boolean; prefetchTileUrls?: string[]; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string }; onSourceChange?: (source: "nexrad" | "provider" | null) => void; onFrameMeta?: (meta: RadarFrameMeta) => void; onStationSelect?: (station: RadarStationSummary) => void; onMapClick?: () => void };
+type RadarMapProps = { opacity?: number; showReflectivity?: boolean; moment?: "reflectivity" | "velocity"; showAlerts?: boolean; showOutlook?: boolean; outlookDay?: 1 | 2; showSevereMarkers?: boolean; showStationPicker?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; inHouseFrameTime?: string | null; forceProvider?: boolean; theme?: "light" | "dark"; scrollZoom?: boolean; prefetchTileUrls?: string[]; prefetchNexradTimes?: string[]; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string }; onSourceChange?: (source: "nexrad" | "provider" | null) => void; onFrameMeta?: (meta: RadarFrameMeta) => void; onStationSelect?: (station: RadarStationSummary) => void; onMapClick?: () => void };
 
 // Andrew, live (2026-08-26): CARTO stopped serving these keylessly — tiles still return a normal
 // 200, but every one now has "API KEY REQUIRED" stamped across it (confirmed by downloading a live
@@ -34,7 +34,7 @@ const basemapTiles = {
   dark: { url: `https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png${cartoKeyParam}`, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
 };
 
-export default function RadarMap({ opacity = 0.72, showReflectivity = true, moment = "reflectivity", showAlerts = true, showOutlook = false, outlookDay = 1, showSevereMarkers = false, showStationPicker = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, isCurrentFrame = true, inHouseFrameTime = null, forceProvider = false, theme = "light", scrollZoom = false, prefetchTileUrls, location, onSourceChange, onFrameMeta, onStationSelect, onMapClick }: RadarMapProps) {
+export default function RadarMap({ opacity = 0.72, showReflectivity = true, moment = "reflectivity", showAlerts = true, showOutlook = false, outlookDay = 1, showSevereMarkers = false, showStationPicker = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, isCurrentFrame = true, inHouseFrameTime = null, forceProvider = false, theme = "light", scrollZoom = false, prefetchTileUrls, prefetchNexradTimes, location, onSourceChange, onFrameMeta, onStationSelect, onMapClick }: RadarMapProps) {
   const mapElement = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const baseLayerRef = useRef<any>(null);
@@ -50,6 +50,15 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
   // first pass through the loop. Reusing the instance instead skips the redundant fetch entirely on
   // every subsequent visit to that frame — see the addProviderLayer/prefetch effect below.
   const providerLayerCacheRef = useRef<Map<string, any>>(new Map());
+  // Mirrors providerLayerCacheRef's reasoning but for in-house NEXRAD past frames: without this,
+  // every frame the timeline plays through re-fetches /api/radar/nexrad?...&time=... (and, on the
+  // local-fallback path, re-renders the grid client-side) at the exact moment playback reaches it —
+  // a real network round-trip stalling every single frame advance, which is the actual root cause of
+  // "still not as smooth as RadarScope" even though the in-house rendering technique itself (a flat
+  // imageOverlay, not a tile pyramid) is already the right shape. Keyed by the frame's own
+  // `inHouseTime` string, which is safe to cache indefinitely: the worker's /frame endpoint already
+  // marks that response `Cache-Control: immutable` since a specific past volume never changes.
+  const nexradFrameCacheRef = useRef<Map<string, { imageDataUrl?: string; points?: MrmsPoint[]; bounds: MrmsBounds; step: number; elevationDeg?: number; time?: string }>>(new Map());
   // Tracks which radar-source credit string is currently registered on the map's attribution
   // control, managed explicitly in settle() below — see that comment for why this can't just be a
   // per-layer `attribution` option like the basemap uses.
@@ -93,6 +102,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       severeMarkersLayerRef.current = null;
       stationPickerLayerRef.current = null;
       providerLayerCacheRef.current.clear();
+      nexradFrameCacheRef.current.clear();
       mapRef.current = null;
       map.remove();
     };
@@ -322,6 +332,34 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leafletLoaded, prefetchTileUrls?.join("|")]);
 
+  // Same "load the whole loop before Play, not frame-by-frame during Play" idea as the provider-tile
+  // prefetch above, applied to in-house NEXRAD past frames. Fires all requests in parallel up front
+  // (COD's own site preloads its ~24 GIF frames the same way before animating) so by the time
+  // playback or scrubbing reaches a given past frame, addGridLayer below can paint it from
+  // nexradFrameCacheRef instantly instead of waiting on a live fetch.
+  const NEXRAD_FRAME_CACHE_LIMIT = 16;
+  useEffect(() => {
+    if (!leafletLoaded || !prefetchNexradTimes?.length) return;
+    let active = true;
+    for (const time of prefetchNexradTimes) {
+      if (nexradFrameCacheRef.current.has(time)) continue;
+      fetch(`/api/radar/nexrad?station=${location.radarSite}&time=${encodeURIComponent(time)}`)
+        .then(async (response) => {
+          if (!active || !response.ok) return;
+          const data = await response.json();
+          const cache = nexradFrameCacheRef.current;
+          cache.set(time, data);
+          if (cache.size > NEXRAD_FRAME_CACHE_LIMIT) {
+            const oldestKey = cache.keys().next().value;
+            if (oldestKey) cache.delete(oldestKey);
+          }
+        })
+        .catch(() => undefined);
+    }
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leafletLoaded, location.radarSite, prefetchNexradTimes?.join("|")]);
+
   useEffect(() => {
     if (!leafletLoaded || !mapRef.current || !window.L) return;
     if (!showReflectivity) {
@@ -458,13 +496,23 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       // back to the provider on any fetch failure or when no in-house frame exists for this slot,
       // same graceful-degradation pattern as the live-frame branch below.
       if (inHouseFrameTime) {
-        fetch(`/api/radar/nexrad?station=${location.radarSite}&time=${encodeURIComponent(inHouseFrameTime)}`)
-          .then(async (response) => {
-            if (!response.ok) throw new Error("In-house past frame unavailable");
-            const data = await response.json() as { imageDataUrl?: string; points?: MrmsPoint[]; bounds: MrmsBounds; step: number; elevationDeg?: number; time?: string };
-            addGridLayer(data, "nexrad", renderMrmsGridToDataUrl);
-          })
-          .catch(() => { if (!cancelled) addProviderLayer(); });
+        const cached = nexradFrameCacheRef.current.get(inHouseFrameTime);
+        if (cached) {
+          try {
+            addGridLayer(cached, "nexrad", renderMrmsGridToDataUrl);
+          } catch {
+            if (!cancelled) addProviderLayer();
+          }
+        } else {
+          fetch(`/api/radar/nexrad?station=${location.radarSite}&time=${encodeURIComponent(inHouseFrameTime)}`)
+            .then(async (response) => {
+              if (!response.ok) throw new Error("In-house past frame unavailable");
+              const data = await response.json() as { imageDataUrl?: string; points?: MrmsPoint[]; bounds: MrmsBounds; step: number; elevationDeg?: number; time?: string };
+              nexradFrameCacheRef.current.set(inHouseFrameTime, data);
+              addGridLayer(data, "nexrad", renderMrmsGridToDataUrl);
+            })
+            .catch(() => { if (!cancelled) addProviderLayer(); });
+        }
       } else {
         addProviderLayer();
       }
