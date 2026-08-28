@@ -137,6 +137,10 @@
 .plan-status { align-items:center; display:flex; gap:10px; }
 .plan-status span { color:var(--muted); font-size:.82rem; line-height:1.4; }
 .model-access-upsell { background:var(--soft); border:1px dashed var(--line); border-radius:12px; display:grid; gap:8px; justify-items:start; padding:24px; text-align:left; }
+/* Andrew, live: an upsell shown in place of a map (Forecast/Fronts/Upper air) left a big empty
+   dark gap below the card, since the card sits at its own natural height inside the map's fixed-
+   height container. Center it in that space instead of leaving it stranded at the top. */
+.radar-workspace-map > .model-access-upsell { left:50%; max-width:min(420px, calc(100% - 48px)); position:absolute; top:50%; transform:translate(-50%, -50%); }
 .model-access-upsell h3 { margin:0; }
 .model-access-upsell p { color:var(--muted); font-size:.86rem; line-height:1.5; margin:0; max-width:52ch; }
 .model-access-upsell button { background:var(--accent); border:1px solid var(--accent); border-radius:8px; color:var(--accent-contrast); font-weight:700; margin-top:6px; padding:9px 16px; }
