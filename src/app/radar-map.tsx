@@ -16,7 +16,7 @@ type RadarStationSummary = { id: string; name: string; latitude: number; longitu
 // product/tilt/time readout, RadarScope-style, instead of just the color-scale legend.
 export type RadarFrameMeta = { elevationDeg: number | null; observedAt: string | null } | null;
 
-type RadarMapProps = { opacity?: number; showReflectivity?: boolean; moment?: "reflectivity" | "velocity"; showAlerts?: boolean; showOutlook?: boolean; outlookDay?: 1 | 2; showFronts?: boolean; showSevereMarkers?: boolean; showStationPicker?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; inHouseFrameTime?: string | null; forceProvider?: boolean; theme?: "light" | "dark"; scrollZoom?: boolean; prefetchTileUrls?: string[]; prefetchNexradTimes?: string[]; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string }; onSourceChange?: (source: "nexrad" | "provider" | null) => void; onFrameMeta?: (meta: RadarFrameMeta) => void; onStationSelect?: (station: RadarStationSummary) => void; onMapClick?: () => void };
+type RadarMapProps = { opacity?: number; showReflectivity?: boolean; moment?: "reflectivity" | "velocity"; showAlerts?: boolean; showOutlook?: boolean; outlookDay?: 1 | 2; showSevereMarkers?: boolean; showStationPicker?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; inHouseFrameTime?: string | null; forceProvider?: boolean; theme?: "light" | "dark"; scrollZoom?: boolean; prefetchTileUrls?: string[]; prefetchNexradTimes?: string[]; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string }; onSourceChange?: (source: "nexrad" | "provider" | null) => void; onFrameMeta?: (meta: RadarFrameMeta) => void; onStationSelect?: (station: RadarStationSummary) => void; onMapClick?: () => void };
 
 // Andrew, live (2026-08-26): CARTO stopped serving these keylessly — tiles still return a normal
 // 200, but every one now has "API KEY REQUIRED" stamped across it (confirmed by downloading a live
@@ -34,14 +34,13 @@ const basemapTiles = {
   dark: { url: `https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png${cartoKeyParam}`, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
 };
 
-export default function RadarMap({ opacity = 0.72, showReflectivity = true, moment = "reflectivity", showAlerts = true, showOutlook = false, outlookDay = 1, showFronts = false, showSevereMarkers = false, showStationPicker = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, isCurrentFrame = true, inHouseFrameTime = null, forceProvider = false, theme = "light", scrollZoom = false, prefetchTileUrls, prefetchNexradTimes, location, onSourceChange, onFrameMeta, onStationSelect, onMapClick }: RadarMapProps) {
+export default function RadarMap({ opacity = 0.72, showReflectivity = true, moment = "reflectivity", showAlerts = true, showOutlook = false, outlookDay = 1, showSevereMarkers = false, showStationPicker = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, isCurrentFrame = true, inHouseFrameTime = null, forceProvider = false, theme = "light", scrollZoom = false, prefetchTileUrls, prefetchNexradTimes, location, onSourceChange, onFrameMeta, onStationSelect, onMapClick }: RadarMapProps) {
   const mapElement = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const baseLayerRef = useRef<any>(null);
   const radarLayerRef = useRef<any>(null);
   const alertLayerRef = useRef<any>(null);
   const outlookLayerRef = useRef<any>(null);
-  const frontsLayerRef = useRef<any>(null);
   const severeMarkersLayerRef = useRef<any>(null);
   const stationPickerLayerRef = useRef<any>(null);
   // Cache of provider tile-layer instances, keyed by their URL template, kept mounted (hidden at
@@ -100,7 +99,6 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       radarLayerRef.current = null;
       alertLayerRef.current = null;
       outlookLayerRef.current = null;
-      frontsLayerRef.current = null;
       severeMarkersLayerRef.current = null;
       stationPickerLayerRef.current = null;
       providerLayerCacheRef.current.clear();
@@ -170,59 +168,6 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       .catch(() => undefined);
     return () => { active = false; };
   }, [leafletLoaded, showOutlook, outlookDay, location]);
-
-  // WPC surface analysis (fronts, troughs, pressure centers) — same pattern as the SPC outlook
-  // layer above, plotting the GeoJSON /api/fronts already decodes from WPC's live coded bulletin.
-  // Colored/dashed lines rather than true frontal glyphs (triangles/semicircles) deliberately, to
-  // keep this a real, useful v1 rather than a custom-Leaflet-plugin project; H/L labels for pressure
-  // centers match the convention every forecaster already reads off a broadcast surface map.
-  const frontLineStyle: Record<string, { color: string; weight: number; dashArray?: string }> = {
-    cold: { color: "#2f6fed", weight: 3 },
-    warm: { color: "#e0393e", weight: 3 },
-    occluded: { color: "#b0348f", weight: 3 },
-    stationary: { color: "#7d5ba6", weight: 3, dashArray: "9,6" },
-    trough: { color: "#8a6d3b", weight: 2, dashArray: "4,5" },
-  };
-  const frontLabel: Record<string, string> = { cold: "Cold front", warm: "Warm front", occluded: "Occluded front", stationary: "Stationary front", trough: "Surface trough" };
-  useEffect(() => {
-    if (!leafletLoaded || !mapRef.current || !window.L) return;
-    if (frontsLayerRef.current) mapRef.current.removeLayer(frontsLayerRef.current);
-    frontsLayerRef.current = null;
-    if (!showFronts) return;
-    let active = true;
-    fetch("/api/fronts")
-      .then(async (response) => {
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "WPC surface analysis unavailable");
-        if (!active || !mapRef.current || !window.L) return;
-        frontsLayerRef.current = window.L.geoJSON(data, {
-          style: (feature: any) => frontLineStyle[feature?.properties?.kind] ?? { color: "#526274", weight: 2 },
-          pointToLayer: (feature: any, latlng: any) => {
-            const kind = feature?.properties?.kind === "high" ? "high" : "low";
-            const pressureMb = feature?.properties?.pressureMb;
-            return window.L.marker(latlng, {
-              icon: window.L.divIcon({
-                className: `wpc-pressure-marker wpc-pressure-marker-${kind}`,
-                html: `<span class="wpc-pressure-letter">${kind === "high" ? "H" : "L"}</span><span class="wpc-pressure-value">${pressureMb ?? ""}</span>`,
-                iconSize: [30, 34],
-                iconAnchor: [15, 17],
-              }),
-            });
-          },
-          onEachFeature: (feature: any, layer: any) => {
-            const kind = feature?.properties?.kind;
-            if (kind === "high" || kind === "low") {
-              layer.bindTooltip(`${kind === "high" ? "High" : "Low"} pressure${feature?.properties?.pressureMb ? ` · ${feature.properties.pressureMb}mb` : ""}`, { direction: "top" });
-            } else {
-              layer.bindTooltip(frontLabel[kind] ?? "Surface feature", { className: "spc-outlook-tooltip", direction: "auto", sticky: true });
-            }
-          },
-        }).addTo(mapRef.current);
-      })
-      .catch(() => undefined);
-    return () => { active = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leafletLoaded, showFronts]);
 
   // Level III severe-weather detection markers (storm tracks, hail, tornadic vortex signatures,
   // mesocyclones) — an additional overlay layer, same pattern as the NWS alerts layer above, not

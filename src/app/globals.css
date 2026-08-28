@@ -63,6 +63,19 @@ h1,h2,p { margin:0; } h1 { font-size:2rem; font-weight:600; letter-spacing:-.02e
    menu below) automatically renders correctly dark without threading a separate theme prop
    through each of them. */
 .radar { height:390px; margin-top:16px; position:relative; overflow:hidden; background:#0b0f14; border-radius:8px; --ink:#f2f3ff; --muted:#b7bcd6; --line:#3a4152; --surface:#12161d; --soft:#1a212c; --accent:#72c8f7; --accent-soft:#183d59; }.live-radar-map { height:100%; width:100%; z-index:0; }.radar-loop { display:block; height:100%; object-fit:cover; width:100%; }.radar-loading { align-items:center; color:var(--muted); display:flex; height:100%; justify-content:center; }
+/* Fronts tab: a dedicated, full-CONUS surface-analysis view, deliberately framed like a traditional
+   weather-service chart (light basemap, wider aspect) rather than the dark radar-dashboard look. */
+.fronts-map-wrapper { height:560px; }
+.fronts-map-footer { align-items:center; background:var(--soft); border-radius:0 0 8px 8px; display:flex; flex-wrap:wrap; gap:10px 20px; justify-content:space-between; margin-top:-8px; padding:10px 16px 12px; position:relative; z-index:1; }
+.fronts-legend { display:flex; flex-wrap:wrap; gap:6px 16px; }
+.fronts-legend span { align-items:center; color:var(--muted); display:inline-flex; font-size:.74rem; font-weight:600; gap:6px; }
+.fronts-legend-swatch { border-radius:2px; display:inline-block; height:3px; width:22px; }
+.fronts-legend-cold { background:#2f6fed; }
+.fronts-legend-warm { background:#e0393e; }
+.fronts-legend-stationary { background:repeating-linear-gradient(90deg,#7d5ba6 0 6px,transparent 6px 10px); }
+.fronts-legend-occluded { background:#b0348f; }
+.fronts-legend-trough { background:repeating-linear-gradient(90deg,#8a6d3b 0 4px,transparent 4px 7px); }
+.fronts-map-footer small { color:var(--muted); font-size:.72rem; }
 .satellite-view { background:#0f1722; height:100%; margin:0; position:relative; }.satellite-view img { display:block; height:100%; object-fit:cover; width:100%; }.satellite-view figcaption { background:rgba(12,20,30,.78); bottom:10px; border-radius:5px; color:#f3f7fb; font-size:.74rem; left:10px; padding:6px 8px; position:absolute; }
 .ring { position:absolute; border:1px solid #b5c4bb; border-radius:50%; left:50%; top:50%; transform:translate(-50%,-50%); }.ring-one { width:220px; height:220px; }.ring-two { width:430px; height:430px; }.crosshair { position:absolute; background:#b5c4bb; }.horizontal { width:100%; height:1px; top:50%; }.vertical { width:1px; height:100%; left:50%; }
 .storm { position:absolute; background:#48a867; opacity:.78; border-radius:55% 45% 50% 40%; }.storm-one { width:115px; height:72px; left:58%; top:25%; transform:rotate(-18deg); }.storm-two { width:72px; height:43px; left:27%; top:63%; }.storm-three { width:46px; height:28px; left:75%; top:68%; opacity:.55; }

@@ -12,6 +12,10 @@ const RadarMap = dynamic(() => import("./radar-map"), {
   ssr: false,
   loading: () => <div className="radar-loading">Loading live radar…</div>,
 });
+const FrontsMap = dynamic(() => import("./fronts-map"), {
+  ssr: false,
+  loading: () => <div className="radar-loading">Loading surface analysis…</div>,
+});
 
 type DataPanel = "nbm" | "afd" | "mcd" | "alerts" | "sounding" | "models" | "model-radar" | "ensembles" | "model-sounding";
 type GuidanceGroup = "high-res" | "global";
@@ -155,7 +159,7 @@ const emptyAssignmentDayResponse: AssignmentDayResponse = { day: emptyAssignment
 // toggle's own separate cross-subdomain-cookie mechanism, since this is radar-only, not shared
 // with company-hq or any other subdomain.
 type RadarProviderPreference = "auto" | "iem";
-type WorkspacePreferences = { defaultLocationId: string; radarMapView: RadarMapView; radarOpacity: number; showNwsAlerts: boolean; showSpcOutlook: boolean; outlookDay?: 1 | 2; showWpcFronts?: boolean; showSevereMarkers: boolean; radarProviderPreference: RadarProviderPreference; defaultForecastDays: 1 | 3 | 7 };
+type WorkspacePreferences = { defaultLocationId: string; radarMapView: RadarMapView; radarOpacity: number; showNwsAlerts: boolean; showSpcOutlook: boolean; outlookDay?: 1 | 2; showSevereMarkers: boolean; radarProviderPreference: RadarProviderPreference; defaultForecastDays: 1 | 3 | 7 };
 type ScenarioReferenceLink = { label: string; detail: string; url: string | null };
 type Scenario = { id: string; slug: string; title: string; category: string | null; summary: string | null; event_date: string; target_dates: string[] | null; location_id: string; reference_notes: string | null; reference_links: ScenarioReferenceLink[] };
 
@@ -517,7 +521,6 @@ function RadarControlsMenu({
   radarProviderPreference, onProviderPreferenceChange,
   showNwsAlerts, onToggleAlerts,
   showOutlookToggle = false, showSpcOutlook = false, onToggleOutlook, outlookDay = 1, onOutlookDayChange,
-  showFrontsToggle = false, showWpcFronts = false, onToggleFronts,
   showSevereMarkers, onToggleSevereMarkers,
   showStationPicker, onToggleStationPicker,
   radarOpacity, onOpacityChange,
@@ -536,9 +539,6 @@ function RadarControlsMenu({
   onToggleOutlook?: (value: boolean) => void;
   outlookDay?: 1 | 2;
   onOutlookDayChange?: (value: 1 | 2) => void;
-  showFrontsToggle?: boolean;
-  showWpcFronts?: boolean;
-  onToggleFronts?: (value: boolean) => void;
   showSevereMarkers: boolean;
   onToggleSevereMarkers: (value: boolean) => void;
   showStationPicker: boolean;
@@ -574,7 +574,7 @@ function RadarControlsMenu({
       // user's seat, doesn't reliably exist yet.
       : <div><button type="button" className={radarMapView === "composite" ? "active" : ""} onClick={() => onSelectView("composite")}>{reflectivityLabel}</button><button type="button" className={radarMapView === "satellite" ? "active" : ""} onClick={() => onSelectView("satellite")}>Satellite</button></div>}</div>
     {radarMapView !== "satellite" && !isForecast && <div className="radar-product-picker"><span>Radar source</span><div><button type="button" className={radarProviderPreference === "auto" ? "active" : ""} onClick={() => onProviderPreferenceChange("auto")}>In-house</button><button type="button" className={radarProviderPreference === "iem" ? "active" : ""} onClick={() => onProviderPreferenceChange("iem")}>IEM mosaic</button></div></div>}
-    {radarMapView !== "satellite" && !isForecast && <div className="radar-product-picker radar-overlay-group"><span>Overlays</span><div className="radar-overlay-list"><label className="alert-overlay-toggle"><input type="checkbox" checked={showNwsAlerts} onChange={(event) => { onToggleAlerts(event.target.checked); event.currentTarget.closest("details")?.removeAttribute("open"); }} /> NWS watches &amp; warnings</label>{showOutlookToggle && <><label className="alert-overlay-toggle"><input type="checkbox" checked={showSpcOutlook} onChange={(event) => { onToggleOutlook?.(event.target.checked); event.currentTarget.closest("details")?.removeAttribute("open"); }} /> SPC convective outlook</label>{showSpcOutlook && <div className="radar-field-picker outlook-day-picker"><button type="button" className={outlookDay === 1 ? "active" : ""} onClick={() => onOutlookDayChange?.(1)}>Day 1</button><button type="button" className={outlookDay === 2 ? "active" : ""} onClick={() => onOutlookDayChange?.(2)}>Day 2</button></div>}</>}{showFrontsToggle && <label className="alert-overlay-toggle"><input type="checkbox" checked={showWpcFronts} onChange={(event) => { onToggleFronts?.(event.target.checked); event.currentTarget.closest("details")?.removeAttribute("open"); }} /> Surface fronts &amp; pressure centers</label>}<label className="alert-overlay-toggle"><input type="checkbox" checked={showSevereMarkers} onChange={(event) => { onToggleSevereMarkers(event.target.checked); event.currentTarget.closest("details")?.removeAttribute("open"); }} /> Storm tracks &amp; severe markers</label><label className="alert-overlay-toggle"><input type="checkbox" checked={showStationPicker} onChange={(event) => { onToggleStationPicker(event.target.checked); event.currentTarget.closest("details")?.removeAttribute("open"); }} /> Show radar stations</label></div><label>Opacity <input type="range" min="20" max="100" value={radarOpacity} onChange={(event) => onOpacityChange(Number(event.target.value))} /> <span>{radarOpacity}%</span></label></div>}
+    {radarMapView !== "satellite" && !isForecast && <div className="radar-product-picker radar-overlay-group"><span>Overlays</span><div className="radar-overlay-list"><label className="alert-overlay-toggle"><input type="checkbox" checked={showNwsAlerts} onChange={(event) => { onToggleAlerts(event.target.checked); event.currentTarget.closest("details")?.removeAttribute("open"); }} /> NWS watches &amp; warnings</label>{showOutlookToggle && <><label className="alert-overlay-toggle"><input type="checkbox" checked={showSpcOutlook} onChange={(event) => { onToggleOutlook?.(event.target.checked); event.currentTarget.closest("details")?.removeAttribute("open"); }} /> SPC convective outlook</label>{showSpcOutlook && <div className="radar-field-picker outlook-day-picker"><button type="button" className={outlookDay === 1 ? "active" : ""} onClick={() => onOutlookDayChange?.(1)}>Day 1</button><button type="button" className={outlookDay === 2 ? "active" : ""} onClick={() => onOutlookDayChange?.(2)}>Day 2</button></div>}</>}<label className="alert-overlay-toggle"><input type="checkbox" checked={showSevereMarkers} onChange={(event) => { onToggleSevereMarkers(event.target.checked); event.currentTarget.closest("details")?.removeAttribute("open"); }} /> Storm tracks &amp; severe markers</label><label className="alert-overlay-toggle"><input type="checkbox" checked={showStationPicker} onChange={(event) => { onToggleStationPicker(event.target.checked); event.currentTarget.closest("details")?.removeAttribute("open"); }} /> Show radar stations</label></div><label>Opacity <input type="range" min="20" max="100" value={radarOpacity} onChange={(event) => onOpacityChange(Number(event.target.value))} /> <span>{radarOpacity}%</span></label></div>}
     <small>{caption}</small>
   </div></details>;
 }
@@ -582,10 +582,21 @@ function RadarControlsMenu({
 // The Observed-vs-Forecast choice, promoted above the map itself -- just this one toggle, not
 // the full product/field picker (that stays inside the ☰ menu only, per Andrew's explicit call:
 // he didn't want the whole picker duplicated above, only this single most-important choice).
-function RadarProductStrip({ radarMapView, onSelectView, showForecastToggle = false }: { radarMapView: RadarMapView; onSelectView: (view: RadarMapView) => void; showForecastToggle?: boolean }) {
-  if (!showForecastToggle) return null;
-  const isForecast = radarMapView === "future_reflectivity";
-  return <div className="radar-product-strip"><div className="radar-field-picker radar-mode-toggle"><button type="button" className={isForecast ? "" : "active"} onClick={() => onSelectView("composite")}>Observed</button><button type="button" className={isForecast ? "active forecast" : "forecast"} onClick={() => onSelectView("future_reflectivity")}>Forecast</button></div></div>;
+// "Fronts" lives here — as a peer of Observed/Forecast, always visible — rather than as a checkbox
+// buried in the radar map's own "☰" overlay menu (Andrew, live: "it should be it's own option and a
+// distinctly different product"). Unlike Forecast (a Personal+ model-data feature, gated behind
+// showForecastToggle), the fronts map is free for everyone, so the strip itself is never hidden —
+// only the Forecast pill is conditional. Selecting Fronts switches the whole workspace tab, not just
+// radarMapView, since the fronts view replaces the local radar/satellite map entirely (see
+// radarWorkspaceTab in the parent).
+function RadarProductStrip({ radarMapView, onSelectView, radarWorkspaceTab, onSelectWorkspaceTab, showForecastToggle = false }: { radarMapView: RadarMapView; onSelectView: (view: RadarMapView) => void; radarWorkspaceTab: "radar" | "fronts"; onSelectWorkspaceTab: (tab: "radar" | "fronts") => void; showForecastToggle?: boolean }) {
+  const isForecast = radarWorkspaceTab === "radar" && radarMapView === "future_reflectivity";
+  const isFronts = radarWorkspaceTab === "fronts";
+  return <div className="radar-product-strip"><div className="radar-field-picker radar-mode-toggle">
+    <button type="button" className={!isForecast && !isFronts ? "active" : ""} onClick={() => { onSelectWorkspaceTab("radar"); onSelectView("composite"); }}>Observed</button>
+    {showForecastToggle && <button type="button" className={isForecast ? "active forecast" : "forecast"} onClick={() => { onSelectWorkspaceTab("radar"); onSelectView("future_reflectivity"); }}>Forecast</button>}
+    <button type="button" className={isFronts ? "active" : ""} onClick={() => onSelectWorkspaceTab("fronts")}>Fronts</button>
+  </div></div>;
 }
 
 function ModelAccessUpsell({ label, onOpenAccount }: { label: string; onOpenAccount: () => void }) {
@@ -1358,10 +1369,14 @@ export default function Home() {
   // land on composite reflectivity on a fresh page load, independent of whatever view the Radar
   // workspace tab remembers from last time.
   const [homeRadarMapView, setHomeRadarMapView] = useState<RadarMapView>("composite");
+  // A distinct product from the local radar/satellite view, not a checkbox buried in its overlay
+  // menu (Andrew, live: "it should be it's own option and a distinctly different product") — a
+  // whole-CONUS surface analysis has nothing to do with the user's own station or timeline. Not
+  // persisted; the Radar workspace should open on the local radar by default each visit.
+  const [radarWorkspaceTab, setRadarWorkspaceTab] = useState<"radar" | "fronts">("radar");
   const [showNwsAlerts, setShowNwsAlerts] = useState(true);
   const [showSpcOutlook, setShowSpcOutlook] = useState(false);
   const [outlookDay, setOutlookDay] = useState<1 | 2>(1);
-  const [showWpcFronts, setShowWpcFronts] = useState(false);
   const [showSevereMarkers, setShowSevereMarkers] = useState(true);
   // Not persisted like the other overlay toggles above — this is a one-off
   // "let me find my station" action, not an ongoing display preference, so
@@ -1764,7 +1779,6 @@ export default function Home() {
       if (typeof settings.radarOpacity === "number" && settings.radarOpacity >= 20 && settings.radarOpacity <= 100) setRadarOpacity(settings.radarOpacity);
       if (typeof settings.showNwsAlerts === "boolean") setShowNwsAlerts(settings.showNwsAlerts);
       if (typeof settings.showSpcOutlook === "boolean") setShowSpcOutlook(settings.showSpcOutlook);
-      if (typeof settings.showWpcFronts === "boolean") setShowWpcFronts(settings.showWpcFronts);
       if (settings.outlookDay === 1 || settings.outlookDay === 2) setOutlookDay(settings.outlookDay);
       if (typeof settings.showSevereMarkers === "boolean") setShowSevereMarkers(settings.showSevereMarkers);
       if (settings.radarProviderPreference === "auto" || settings.radarProviderPreference === "iem") setRadarProviderPreference(settings.radarProviderPreference);
@@ -1844,8 +1858,8 @@ export default function Home() {
 
   useEffect(() => {
     if (!settingsReady) return;
-    window.localStorage.setItem(workspaceSettingsStorageKey, JSON.stringify({ defaultLocationId, radarMapView, radarOpacity, showNwsAlerts, showSpcOutlook, outlookDay, showWpcFronts, showSevereMarkers, radarProviderPreference, defaultForecastDays } satisfies WorkspacePreferences));
-  }, [defaultForecastDays, defaultLocationId, radarMapView, radarOpacity, radarProviderPreference, settingsReady, showNwsAlerts, showSpcOutlook, outlookDay, showWpcFronts, showSevereMarkers]);
+    window.localStorage.setItem(workspaceSettingsStorageKey, JSON.stringify({ defaultLocationId, radarMapView, radarOpacity, showNwsAlerts, showSpcOutlook, outlookDay, showSevereMarkers, radarProviderPreference, defaultForecastDays } satisfies WorkspacePreferences));
+  }, [defaultForecastDays, defaultLocationId, radarMapView, radarOpacity, radarProviderPreference, settingsReady, showNwsAlerts, showSpcOutlook, outlookDay, showSevereMarkers]);
 
   useEffect(() => {
     if (!workspaceNotice) return;
@@ -3786,18 +3800,20 @@ export default function Home() {
       </>}
 
       {activeSection === "radar" && <section className="radar-workspace">
-        <div className="radar-workspace-heading"><div><p className="eyebrow">Radar workspace</p><h2>Observed weather</h2></div></div>
-        <RadarProductStrip radarMapView={radarMapView} onSelectView={selectRadarView} showForecastToggle={hasModelAccess} />
+        <div className="radar-workspace-heading"><div><p className="eyebrow">Radar workspace</p><h2>{radarWorkspaceTab === "fronts" ? "Surface analysis" : "Observed weather"}</h2></div></div>
+        <RadarProductStrip radarMapView={radarMapView} onSelectView={selectRadarView} radarWorkspaceTab={radarWorkspaceTab} onSelectWorkspaceTab={setRadarWorkspaceTab} showForecastToggle={hasModelAccess} />
+        {radarWorkspaceTab === "fronts" ? <div className="radar radar-workspace-map fronts-map-wrapper"><FrontsMap /></div> : <>
         <div className="radar radar-workspace-map">
           <button type="button" className="radar-recenter-btn" title="Recenter" aria-label="Recenter radar" onClick={() => setRadarRecenterToken((value) => value + 1)}>⌖</button>
-          <RadarControlsMenu radarMapView={radarMapView} onSelectView={selectRadarView} radarProviderPreference={radarProviderPreference} onProviderPreferenceChange={setRadarProviderPreference} reflectivityLabel="Reflectivity" showNwsAlerts={showNwsAlerts} onToggleAlerts={setShowNwsAlerts} showOutlookToggle showSpcOutlook={showSpcOutlook} onToggleOutlook={setShowSpcOutlook} outlookDay={outlookDay} onOutlookDayChange={setOutlookDay} showFrontsToggle showWpcFronts={showWpcFronts} onToggleFronts={setShowWpcFronts} showSevereMarkers={showSevereMarkers} onToggleSevereMarkers={setShowSevereMarkers} showStationPicker={showStationPicker} onToggleStationPicker={setShowStationPicker} radarOpacity={radarOpacity} onOpacityChange={setRadarOpacity} showForecastToggle={hasModelAccess} caption={radarMapView === "satellite" ? "NOAA GOES-East GeoColor imagery." : radarMapView === "future_reflectivity" ? "HRRR simulated reflectivity — model guidance, not an observation." : radarMapView === "velocity" ? `Live base velocity · ${radarSourceLabels[radarSource ?? "provider"]} · ${selectedLocation.radarSite}.` : `Live composite reflectivity · ${radarSourceLabels[radarSource ?? "provider"]} · ${selectedLocation.radarSite}.`} />
-          {radarMapView === "satellite" ? <figure className="satellite-view" onClick={() => setSatellitePlaying(false)}><div className="radar-field-picker satellite-channel-picker">{(["geocolor", "ir", "wv"] as const).map((channel) => <button type="button" key={channel} className={satelliteChannel === channel ? "active" : ""} onClick={(event) => { event.stopPropagation(); setSatelliteChannel(channel); setSatellitePlaying(false); }}>{({ geocolor: "GeoColor", ir: "Infrared", wv: "Water vapor" } as Record<string, string>)[channel]}</button>)}</div><img src={satelliteFrame?.url ?? `https://cdn.star.nesdis.noaa.gov/GOES19/ABI/CONUS/${{ geocolor: "GEOCOLOR", ir: "13", wv: "08" }[satelliteChannel]}/1250x750.jpg?refresh=${radarRefreshToken}`} alt={`NOAA GOES-East ${{ geocolor: "GeoColor", ir: "clean infrared", wv: "upper-level water vapor" }[satelliteChannel]} image for the continental United States${satelliteFrame ? ` at ${satelliteFrameTime}` : ""}`} /><figcaption>{({ geocolor: "Observed NOAA GOES-East GeoColor", ir: "Observed NOAA GOES-East clean infrared (cloud-top temperature)", wv: "Observed NOAA GOES-East upper-level water vapor" } as Record<string, string>)[satelliteChannel]} · {selectedLocation.name}</figcaption></figure> : radarMapView === "future_reflectivity" ? <RadarMap location={selectedLocation} opacity={radarOpacity / 100} showReflectivity showAlerts={false} showStationPicker={showStationPicker} onStationSelect={selectRadarStation} recenterToken={radarRecenterToken} timelineTileUrl={futureRadarFrame?.tileUrl ?? null} isCurrentFrame={false} theme="dark" onMapClick={() => setFutureRadarPlaying(false)} /> : <RadarMap location={selectedLocation} opacity={radarOpacity / 100} showReflectivity={radarMapView === "composite" || radarMapView === "velocity"} moment={radarMapView === "velocity" ? "velocity" : "reflectivity"} showAlerts={showNwsAlerts} showOutlook={showSpcOutlook} outlookDay={outlookDay} showFronts={showWpcFronts} showSevereMarkers={showSevereMarkers} showStationPicker={showStationPicker} onStationSelect={selectRadarStation} refreshToken={radarRefreshToken} recenterToken={radarRecenterToken} timelineTileUrl={radarMapView === "composite" ? radarFrame?.tileUrl : null} isCurrentFrame={isCurrentRadarFrame} inHouseFrameTime={radarMapView === "composite" ? radarFrame?.inHouseTime ?? null : null} forceProvider={radarProviderPreference === "iem"} theme="dark" onSourceChange={setRadarSource} onFrameMeta={setRadarFrameMeta} onMapClick={() => setRadarPlaying(false)} prefetchTileUrls={radarMapView === "composite" ? radarFrames.map((frame) => frame.tileUrl) : undefined} prefetchNexradTimes={radarMapView === "composite" ? radarFrames.filter((frame) => frame.source === "nexrad" && frame.inHouseTime).map((frame) => frame.inHouseTime as string) : undefined} />}
+          <RadarControlsMenu radarMapView={radarMapView} onSelectView={selectRadarView} radarProviderPreference={radarProviderPreference} onProviderPreferenceChange={setRadarProviderPreference} reflectivityLabel="Reflectivity" showNwsAlerts={showNwsAlerts} onToggleAlerts={setShowNwsAlerts} showOutlookToggle showSpcOutlook={showSpcOutlook} onToggleOutlook={setShowSpcOutlook} outlookDay={outlookDay} onOutlookDayChange={setOutlookDay} showSevereMarkers={showSevereMarkers} onToggleSevereMarkers={setShowSevereMarkers} showStationPicker={showStationPicker} onToggleStationPicker={setShowStationPicker} radarOpacity={radarOpacity} onOpacityChange={setRadarOpacity} showForecastToggle={hasModelAccess} caption={radarMapView === "satellite" ? "NOAA GOES-East GeoColor imagery." : radarMapView === "future_reflectivity" ? "HRRR simulated reflectivity — model guidance, not an observation." : radarMapView === "velocity" ? `Live base velocity · ${radarSourceLabels[radarSource ?? "provider"]} · ${selectedLocation.radarSite}.` : `Live composite reflectivity · ${radarSourceLabels[radarSource ?? "provider"]} · ${selectedLocation.radarSite}.`} />
+          {radarMapView === "satellite" ? <figure className="satellite-view" onClick={() => setSatellitePlaying(false)}><div className="radar-field-picker satellite-channel-picker">{(["geocolor", "ir", "wv"] as const).map((channel) => <button type="button" key={channel} className={satelliteChannel === channel ? "active" : ""} onClick={(event) => { event.stopPropagation(); setSatelliteChannel(channel); setSatellitePlaying(false); }}>{({ geocolor: "GeoColor", ir: "Infrared", wv: "Water vapor" } as Record<string, string>)[channel]}</button>)}</div><img src={satelliteFrame?.url ?? `https://cdn.star.nesdis.noaa.gov/GOES19/ABI/CONUS/${{ geocolor: "GEOCOLOR", ir: "13", wv: "08" }[satelliteChannel]}/1250x750.jpg?refresh=${radarRefreshToken}`} alt={`NOAA GOES-East ${{ geocolor: "GeoColor", ir: "clean infrared", wv: "upper-level water vapor" }[satelliteChannel]} image for the continental United States${satelliteFrame ? ` at ${satelliteFrameTime}` : ""}`} /><figcaption>{({ geocolor: "Observed NOAA GOES-East GeoColor", ir: "Observed NOAA GOES-East clean infrared (cloud-top temperature)", wv: "Observed NOAA GOES-East upper-level water vapor" } as Record<string, string>)[satelliteChannel]} · {selectedLocation.name}</figcaption></figure> : radarMapView === "future_reflectivity" ? <RadarMap location={selectedLocation} opacity={radarOpacity / 100} showReflectivity showAlerts={false} showStationPicker={showStationPicker} onStationSelect={selectRadarStation} recenterToken={radarRecenterToken} timelineTileUrl={futureRadarFrame?.tileUrl ?? null} isCurrentFrame={false} theme="dark" onMapClick={() => setFutureRadarPlaying(false)} /> : <RadarMap location={selectedLocation} opacity={radarOpacity / 100} showReflectivity={radarMapView === "composite" || radarMapView === "velocity"} moment={radarMapView === "velocity" ? "velocity" : "reflectivity"} showAlerts={showNwsAlerts} showOutlook={showSpcOutlook} outlookDay={outlookDay} showSevereMarkers={showSevereMarkers} showStationPicker={showStationPicker} onStationSelect={selectRadarStation} refreshToken={radarRefreshToken} recenterToken={radarRecenterToken} timelineTileUrl={radarMapView === "composite" ? radarFrame?.tileUrl : null} isCurrentFrame={isCurrentRadarFrame} inHouseFrameTime={radarMapView === "composite" ? radarFrame?.inHouseTime ?? null : null} forceProvider={radarProviderPreference === "iem"} theme="dark" onSourceChange={setRadarSource} onFrameMeta={setRadarFrameMeta} onMapClick={() => setRadarPlaying(false)} prefetchTileUrls={radarMapView === "composite" ? radarFrames.map((frame) => frame.tileUrl) : undefined} prefetchNexradTimes={radarMapView === "composite" ? radarFrames.filter((frame) => frame.source === "nexrad" && frame.inHouseTime).map((frame) => frame.inHouseTime as string) : undefined} />}
         </div>
         {radarMapView === "future_reflectivity" && <div className="model-forecast-banner">Model guidance — not an observation. HRRR simulated reflectivity, styled like radar; treat it as less certain the further out it goes.</div>}
         <RadarLegendStrip view={radarMapView} inline elevationDeg={radarFrameMeta?.elevationDeg ?? null} observedAtLabel={radarObservedAtLabel} />
         {radarMapView === "composite" && <div className="radar-playback"><button type="button" disabled={radarFrames.length < 2} onClick={() => setRadarPlaying((playing) => !playing)}>{radarPlaying ? "Pause" : "Play"}</button><input type="range" className="radar-scrub" min="0" max={Math.max(0, radarFrames.length - 1)} value={radarFrameIndex} disabled={radarFrames.length < 2} onChange={(event) => { setRadarPlaying(false); setRadarFrameIndex(Number(event.target.value)); }} /><span>{radarFrames.length ? radarFrameTime : radarTimelineStatus}</span></div>}
         {radarMapView === "satellite" && satelliteFrames.length > 0 && <div className="radar-playback"><button type="button" disabled={satelliteFrames.length < 2} onClick={() => setSatellitePlaying((playing) => !playing)}>{satellitePlaying ? "Pause" : "Play"}</button><input type="range" className="radar-scrub" min="0" max={Math.max(0, satelliteFrames.length - 1)} value={satelliteFrameIndex} disabled={satelliteFrames.length < 2} onChange={(event) => { setSatellitePlaying(false); setSatelliteFrameIndex(Number(event.target.value)); }} /><span>{satelliteFrameTime}</span></div>}
         {radarMapView === "future_reflectivity" && futureRadarFrames.length > 0 && <div className="radar-playback"><button type="button" disabled={futureRadarFrames.length < 2} onClick={() => setFutureRadarPlaying((playing) => !playing)}>{futureRadarPlaying ? "Pause" : "Play"}</button><input type="range" className="radar-scrub" min="0" max={Math.max(0, futureRadarFrames.length - 1)} value={futureRadarFrameIndex} disabled={futureRadarFrames.length < 2} onChange={(event) => { setFutureRadarPlaying(false); setFutureRadarFrameIndex(Number(event.target.value)); }} /><span>{futureRadarFrameTime}</span></div>}
+        </>}
       </section>}
 
       {activeSection === "forecast" && !session && <section className="workspace-card access-wall"><h2>Log in to forecast</h2><p>The dashboard is available to explore, while forecasts, references, and archive work stay private to your account.</p><button type="button" onClick={() => setLoginMenuOpen(true)}>Open login</button></section>}
