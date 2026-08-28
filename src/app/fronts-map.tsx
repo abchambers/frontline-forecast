@@ -20,6 +20,11 @@ const CONUS_BOUNDS: [[number, number], [number, number]] = [
   [49.8, -66.5],
 ];
 
+// See radar-map.tsx's own copy of this for why the key param is required — CARTO stopped serving
+// these tiles keylessly (2026-08-26).
+const cartoApiKey = process.env.NEXT_PUBLIC_CARTO_API_KEY;
+const cartoKeyParam = cartoApiKey ? `?key=${cartoApiKey}` : "";
+
 type FrontsMeta = { validTime: string | null; issuedAt: string | null };
 
 export default function FrontsMap() {
@@ -39,7 +44,7 @@ export default function FrontsMap() {
     const map = window.L.map(mapElement.current, { zoomControl: false, scrollWheelZoom: false });
     map.fitBounds(CONUS_BOUNDS);
     window.L.control.zoom({ position: "bottomleft" }).addTo(map);
-    const tiles = window.L.tileLayer("https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+    const tiles = window.L.tileLayer(`https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png${cartoKeyParam}`, {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
       maxZoom: 12,
     });
