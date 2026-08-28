@@ -77,6 +77,12 @@ h1,h2,p { margin:0; } h1 { font-size:2rem; font-weight:600; letter-spacing:-.02e
 .fronts-legend-trough { background:repeating-linear-gradient(90deg,#8a6d3b 0 4px,transparent 4px 7px); }
 .fronts-map-footer small { color:var(--muted); font-size:.72rem; }
 .satellite-view { background:#0f1722; height:100%; margin:0; position:relative; }.satellite-view img { display:block; height:100%; object-fit:cover; width:100%; }.satellite-view figcaption { background:rgba(12,20,30,.78); bottom:10px; border-radius:5px; color:#f3f7fb; font-size:.74rem; left:10px; padding:6px 8px; position:absolute; }
+/* Upper-air charts are analyzed text/contour images, not photography — object-fit:contain so no
+   station plot, contour label, or the SPC/NOAA credit in the corner ever gets cropped off. */
+.upper-air-view { background:#e5e6e7; height:calc(100% - 40px); margin:0; position:relative; }
+.upper-air-view img { display:block; height:100%; object-fit:contain; width:100%; }
+.upper-air-view figcaption { background:rgba(12,20,30,.78); bottom:10px; border-radius:5px; color:#f3f7fb; font-size:.74rem; left:10px; padding:6px 8px; position:absolute; }
+.upper-air-level-picker { padding:10px 12px 0; }
 .ring { position:absolute; border:1px solid #b5c4bb; border-radius:50%; left:50%; top:50%; transform:translate(-50%,-50%); }.ring-one { width:220px; height:220px; }.ring-two { width:430px; height:430px; }.crosshair { position:absolute; background:#b5c4bb; }.horizontal { width:100%; height:1px; top:50%; }.vertical { width:1px; height:100%; left:50%; }
 .storm { position:absolute; background:#48a867; opacity:.78; border-radius:55% 45% 50% 40%; }.storm-one { width:115px; height:72px; left:58%; top:25%; transform:rotate(-18deg); }.storm-two { width:72px; height:43px; left:27%; top:63%; }.storm-three { width:46px; height:28px; left:75%; top:68%; opacity:.55; }
 .radar-label { position:absolute; left:18px; bottom:18px; display:grid; gap:4px; }.radar-label span { font-size:.86rem; }.card-footer { margin-top:14px; }.card-footer span:last-child { text-align:right; }

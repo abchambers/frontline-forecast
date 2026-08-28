@@ -16,6 +16,10 @@ const FrontsMap = dynamic(() => import("./fronts-map"), {
   ssr: false,
   loading: () => <div className="radar-loading">Loading surface analysis…</div>,
 });
+const UpperAirMap = dynamic(() => import("./upper-air-map"), {
+  ssr: false,
+  loading: () => <div className="radar-loading">Loading upper-air charts…</div>,
+});
 
 type DataPanel = "nbm" | "afd" | "mcd" | "alerts" | "sounding" | "models" | "model-radar" | "ensembles" | "model-sounding";
 type GuidanceGroup = "high-res" | "global";
@@ -589,13 +593,15 @@ function RadarControlsMenu({
 // only the Forecast pill is conditional. Selecting Fronts switches the whole workspace tab, not just
 // radarMapView, since the fronts view replaces the local radar/satellite map entirely (see
 // radarWorkspaceTab in the parent).
-function RadarProductStrip({ radarMapView, onSelectView, radarWorkspaceTab, onSelectWorkspaceTab, showForecastToggle = false }: { radarMapView: RadarMapView; onSelectView: (view: RadarMapView) => void; radarWorkspaceTab: "radar" | "fronts"; onSelectWorkspaceTab: (tab: "radar" | "fronts") => void; showForecastToggle?: boolean }) {
+function RadarProductStrip({ radarMapView, onSelectView, radarWorkspaceTab, onSelectWorkspaceTab, showForecastToggle = false }: { radarMapView: RadarMapView; onSelectView: (view: RadarMapView) => void; radarWorkspaceTab: "radar" | "fronts" | "upper-air"; onSelectWorkspaceTab: (tab: "radar" | "fronts" | "upper-air") => void; showForecastToggle?: boolean }) {
   const isForecast = radarWorkspaceTab === "radar" && radarMapView === "future_reflectivity";
   const isFronts = radarWorkspaceTab === "fronts";
+  const isUpperAir = radarWorkspaceTab === "upper-air";
   return <div className="radar-product-strip"><div className="radar-field-picker radar-mode-toggle">
-    <button type="button" className={!isForecast && !isFronts ? "active" : ""} onClick={() => { onSelectWorkspaceTab("radar"); onSelectView("composite"); }}>Observed</button>
+    <button type="button" className={!isForecast && !isFronts && !isUpperAir ? "active" : ""} onClick={() => { onSelectWorkspaceTab("radar"); onSelectView("composite"); }}>Observed</button>
     {showForecastToggle && <button type="button" className={isForecast ? "active forecast" : "forecast"} onClick={() => { onSelectWorkspaceTab("radar"); onSelectView("future_reflectivity"); }}>Forecast</button>}
     <button type="button" className={isFronts ? "active" : ""} onClick={() => onSelectWorkspaceTab("fronts")}>Fronts</button>
+    <button type="button" className={isUpperAir ? "active" : ""} onClick={() => onSelectWorkspaceTab("upper-air")}>Upper air</button>
   </div></div>;
 }
 
@@ -1373,7 +1379,7 @@ export default function Home() {
   // menu (Andrew, live: "it should be it's own option and a distinctly different product") — a
   // whole-CONUS surface analysis has nothing to do with the user's own station or timeline. Not
   // persisted; the Radar workspace should open on the local radar by default each visit.
-  const [radarWorkspaceTab, setRadarWorkspaceTab] = useState<"radar" | "fronts">("radar");
+  const [radarWorkspaceTab, setRadarWorkspaceTab] = useState<"radar" | "fronts" | "upper-air">("radar");
   const [showNwsAlerts, setShowNwsAlerts] = useState(true);
   const [showSpcOutlook, setShowSpcOutlook] = useState(false);
   const [outlookDay, setOutlookDay] = useState<1 | 2>(1);
@@ -3800,9 +3806,9 @@ export default function Home() {
       </>}
 
       {activeSection === "radar" && <section className="radar-workspace">
-        <div className="radar-workspace-heading"><div><p className="eyebrow">Radar workspace</p><h2>{radarWorkspaceTab === "fronts" ? "Surface analysis" : "Observed weather"}</h2></div></div>
+        <div className="radar-workspace-heading"><div><p className="eyebrow">Radar workspace</p><h2>{radarWorkspaceTab === "fronts" ? "Surface analysis" : radarWorkspaceTab === "upper-air" ? "Upper-air observations" : "Observed weather"}</h2></div></div>
         <RadarProductStrip radarMapView={radarMapView} onSelectView={selectRadarView} radarWorkspaceTab={radarWorkspaceTab} onSelectWorkspaceTab={setRadarWorkspaceTab} showForecastToggle={hasModelAccess} />
-        {radarWorkspaceTab === "fronts" ? <div className="radar radar-workspace-map fronts-map-wrapper"><FrontsMap /></div> : <>
+        {radarWorkspaceTab === "fronts" ? <div className="radar radar-workspace-map fronts-map-wrapper"><FrontsMap /></div> : radarWorkspaceTab === "upper-air" ? <div className="radar radar-workspace-map"><UpperAirMap /></div> : <>
         <div className="radar radar-workspace-map">
           <button type="button" className="radar-recenter-btn" title="Recenter" aria-label="Recenter radar" onClick={() => setRadarRecenterToken((value) => value + 1)}>⌖</button>
           <RadarControlsMenu radarMapView={radarMapView} onSelectView={selectRadarView} radarProviderPreference={radarProviderPreference} onProviderPreferenceChange={setRadarProviderPreference} reflectivityLabel="Reflectivity" showNwsAlerts={showNwsAlerts} onToggleAlerts={setShowNwsAlerts} showOutlookToggle showSpcOutlook={showSpcOutlook} onToggleOutlook={setShowSpcOutlook} outlookDay={outlookDay} onOutlookDayChange={setOutlookDay} showSevereMarkers={showSevereMarkers} onToggleSevereMarkers={setShowSevereMarkers} showStationPicker={showStationPicker} onToggleStationPicker={setShowStationPicker} radarOpacity={radarOpacity} onOpacityChange={setRadarOpacity} showForecastToggle={hasModelAccess} caption={radarMapView === "satellite" ? "NOAA GOES-East GeoColor imagery." : radarMapView === "future_reflectivity" ? "HRRR simulated reflectivity — model guidance, not an observation." : radarMapView === "velocity" ? `Live base velocity · ${radarSourceLabels[radarSource ?? "provider"]} · ${selectedLocation.radarSite}.` : `Live composite reflectivity · ${radarSourceLabels[radarSource ?? "provider"]} · ${selectedLocation.radarSite}.`} />
