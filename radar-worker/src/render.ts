@@ -62,8 +62,24 @@ const NO_ECHO_THRESHOLD_DBZ = 2;
 // real," but at this render resolution it's still visually speck-sized and reads better as soft haze
 // than as a hard dot floating in isolation.
 const SMALL_COMPONENT_MAX_CELLS = 40;
-const WEAK_SIGNAL_BLUR_PX = 2.4;
+// Andrew, live (2026-08-27, second report): "this blur is unacceptable" — a whole ring of small
+// weak-signal blobs (the clear-air/biological-scatter clutter described above, at a consistent range
+// from the radar site) was reading as a dominant, ugly haze across most of the image. Investigated
+// with render-preview.ts against live KFFC data before touching anything: dropping WEAK_SIGNAL_BLUR_PX
+// all the way to 0 barely changed the appearance — proof the blur RADIUS was never the actual cause.
+// The real problem was opacity: every surviving cell, weak-isolated or not, painted at full 255 alpha
+// (see PIXEL_ALPHA below), so a wide scatter of small blobs reads as a solid, busy field even blurred
+// down to a soft edge. RadarScope's "soft, blended haze" (see the comment above) is a low-OPACITY
+// blend, not merely a blurred full-strength color. Fixed by giving the small-component path its own,
+// much lower alpha (WEAK_SIGNAL_ALPHA) instead of leaning on blur radius alone — verified against the
+// same live volume that produced the ugly ring: real storm cores (large components, still full
+// PIXEL_ALPHA) stay exactly as crisp as before, only the scattered weak/isolated signal fades into a
+// subtle background texture instead of dominating the frame. Blur radius still gets a small bump
+// (was 2.4, now 1.2) purely to soften each speck's own hard edge, not to control how much of the
+// image it visually covers — that job now belongs to alpha.
+const WEAK_SIGNAL_BLUR_PX = 1.2;
 const SOFT_BLUR_PX = 0.6;
+const WEAK_SIGNAL_ALPHA = 65;
 // Mirrors a real fix in src/lib/mrms-render.ts — was 235/255 (~92%), which
 // stacked multiplicatively with the separate user-facing opacity slider
 // (defaults to 72%), making the real on-screen strength ~66% even though the
@@ -160,7 +176,7 @@ function findSmallComponentKeys(cells: Cell[]): Set<string> {
 // isn't bound by browser canvas memory conventions the way HTMLCanvasElement
 // is, and this worker's own 2gb memory ceiling (see fly.toml) is the real
 // limit. Still returns null on a degenerate 0-area grid.
-function paintCells(width: number, height: number, cells: Cell[], colorFor: (value: number) => [number, number, number]) {
+function paintCells(width: number, height: number, cells: Cell[], colorFor: (value: number) => [number, number, number], alpha: number) {
   if (!cells.length) return null;
   const canvas = createCanvas(width, height);
   const context = canvas.getContext("2d");
@@ -171,7 +187,7 @@ function paintCells(width: number, height: number, cells: Cell[], colorFor: (val
     imageData.data[index] = r;
     imageData.data[index + 1] = g;
     imageData.data[index + 2] = b;
-    imageData.data[index + 3] = PIXEL_ALPHA;
+    imageData.data[index + 3] = alpha;
   }
   context.putImageData(imageData, 0, 0);
   return canvas;
@@ -207,18 +223,18 @@ function renderGrid(
 
   if (splitBySize) {
     const smallKeys = findSmallComponentKeys(cells);
-    const small = paintCells(width, height, cells.filter((c) => smallKeys.has(`${c.row},${c.col}`)), colorFor);
+    const small = paintCells(width, height, cells.filter((c) => smallKeys.has(`${c.row},${c.col}`)), colorFor, WEAK_SIGNAL_ALPHA);
     if (small) {
       compositeContext.filter = `blur(${WEAK_SIGNAL_BLUR_PX}px)`;
       compositeContext.drawImage(small, 0, 0);
     }
-    const large = paintCells(width, height, cells.filter((c) => !smallKeys.has(`${c.row},${c.col}`)), colorFor);
+    const large = paintCells(width, height, cells.filter((c) => !smallKeys.has(`${c.row},${c.col}`)), colorFor, PIXEL_ALPHA);
     if (large) {
       compositeContext.filter = `blur(${SOFT_BLUR_PX}px)`;
       compositeContext.drawImage(large, 0, 0);
     }
   } else {
-    const canvas = paintCells(width, height, cells, colorFor);
+    const canvas = paintCells(width, height, cells, colorFor, PIXEL_ALPHA);
     if (canvas) {
       compositeContext.filter = `blur(${SOFT_BLUR_PX}px)`;
       compositeContext.drawImage(canvas, 0, 0);

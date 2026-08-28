@@ -67,7 +67,14 @@ const SOFT_BLUR_PX = 0.6;
 // sizeable storm shape stays crisp regardless of how weak that storm's edge is. Mirrored here for the
 // client-side fallback path.
 const SMALL_COMPONENT_MAX_CELLS = 40;
-const WEAK_SIGNAL_BLUR_PX = 2.4;
+// Andrew, live (2026-08-27, second report): "this blur is unacceptable" — see render.ts's copy for
+// the full investigation. Short version: dropping WEAK_SIGNAL_BLUR_PX to 0 barely changed how the
+// scattered weak-signal ring looked, proving blur radius was never the actual cause — every surviving
+// cell painted at full 255 alpha (PIXEL_ALPHA) is what made a wide scatter of small blobs read as a
+// solid, busy field even blurred soft. Fixed with a dedicated, much lower alpha for the small-
+// component path (WEAK_SIGNAL_ALPHA) instead of leaning on blur radius alone.
+const WEAK_SIGNAL_BLUR_PX = 1.2;
+const WEAK_SIGNAL_ALPHA = 65;
 
 type Cell = { row: number; col: number; dbz: number };
 
@@ -105,7 +112,7 @@ function findSmallComponentKeys(cells: Cell[]): Set<string> {
   return smallKeys;
 }
 
-function paintCells(width: number, height: number, cells: Cell[], colorFor: (value: number) => [number, number, number]): HTMLCanvasElement | null {
+function paintCells(width: number, height: number, cells: Cell[], colorFor: (value: number) => [number, number, number], alpha: number): HTMLCanvasElement | null {
   if (!cells.length) return null;
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -119,7 +126,7 @@ function paintCells(width: number, height: number, cells: Cell[], colorFor: (val
     imageData.data[index] = r;
     imageData.data[index + 1] = g;
     imageData.data[index + 2] = b;
-    imageData.data[index + 3] = PIXEL_ALPHA;
+    imageData.data[index + 3] = alpha;
   }
   context.putImageData(imageData, 0, 0);
   return canvas;
@@ -149,18 +156,18 @@ function compositeBlurred(width: number, height: number, points: MrmsPoint[], bo
 
   if (splitBySize) {
     const smallKeys = findSmallComponentKeys(cells);
-    const small = paintCells(width, height, cells.filter((c) => smallKeys.has(`${c.row},${c.col}`)), colorFor);
+    const small = paintCells(width, height, cells.filter((c) => smallKeys.has(`${c.row},${c.col}`)), colorFor, WEAK_SIGNAL_ALPHA);
     if (small) {
       compositeContext.filter = `blur(${WEAK_SIGNAL_BLUR_PX}px)`;
       compositeContext.drawImage(small, 0, 0);
     }
-    const large = paintCells(width, height, cells.filter((c) => !smallKeys.has(`${c.row},${c.col}`)), colorFor);
+    const large = paintCells(width, height, cells.filter((c) => !smallKeys.has(`${c.row},${c.col}`)), colorFor, PIXEL_ALPHA);
     if (large) {
       compositeContext.filter = `blur(${SOFT_BLUR_PX}px)`;
       compositeContext.drawImage(large, 0, 0);
     }
   } else {
-    const canvas = paintCells(width, height, cells, colorFor);
+    const canvas = paintCells(width, height, cells, colorFor, PIXEL_ALPHA);
     if (canvas) {
       compositeContext.filter = `blur(${SOFT_BLUR_PX}px)`;
       compositeContext.drawImage(canvas, 0, 0);
