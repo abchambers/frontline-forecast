@@ -1970,7 +1970,13 @@ export default function Home() {
 
   useEffect(() => {
     if (!satellitePlaying || satelliteFrames.length < 2) return;
-    const playId = window.setInterval(() => setSatelliteFrameIndex((index) => (index + 1) % satelliteFrames.length), 700);
+    // Andrew, live (2026-08-28): measured a real comparison recording of weather.cod.edu's loop —
+    // it cycles its ~24-frame loop in about 3.5s (roughly 140ms/frame), against this app's previous
+    // 700ms/frame. Same idea we're not copying their architecture for (see radar-map.tsx/page.tsx
+    // history — flat pre-rendered images cost real zoom/overlay features we're keeping), but the
+    // step-rate itself costs nothing to match: frames are already fully preloaded before Play starts,
+    // so a faster interval is just a quicker opacity swap, not a new fetch.
+    const playId = window.setInterval(() => setSatelliteFrameIndex((index) => (index + 1) % satelliteFrames.length), 320);
     return () => window.clearInterval(playId);
   }, [satellitePlaying, satelliteFrames.length]);
 
@@ -2008,16 +2014,23 @@ export default function Home() {
     // loop viewers) precisely because that's the one frame worth actually reading, not just glancing
     // past on the way back to the oldest one. A flat 650ms advance made every frame equally
     // fleeting, current or 50 minutes old, which was part of what read as "choppy."
+    // Andrew, live (2026-08-28): measured weather.cod.edu's own loop from a real screen recording —
+    // it cycles ~24 frames in about 3.5s, ~140ms/frame, against this app's previous 700ms/frame. Not
+    // adopting their flat-image architecture (real zoom/overlay features we're keeping would be
+    // lost), but the step rate is free to match: every frame is already preloaded before Play starts
+    // (see the NEXRAD-prefetch and provider-tile-cache work), so a shorter interval is just a
+    // quicker opacity swap, not a new fetch. Landed-on-now hold shortened proportionally, same ~3x
+    // ratio as before, so "now" still reads longer than the rest without dragging the whole loop out.
     let timeoutId: number;
     const advance = () => {
       setRadarFrameIndex((index) => {
         const next = (index + 1) % radarFrames.length;
         const landedOnMostRecent = next === radarFrames.length - 1;
-        timeoutId = window.setTimeout(advance, landedOnMostRecent ? 2200 : 700);
+        timeoutId = window.setTimeout(advance, landedOnMostRecent ? 1000 : 320);
         return next;
       });
     };
-    timeoutId = window.setTimeout(advance, 700);
+    timeoutId = window.setTimeout(advance, 320);
     return () => window.clearTimeout(timeoutId);
   }, [radarPlaying, radarFrames.length]);
 
