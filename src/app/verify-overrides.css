@@ -87,6 +87,14 @@
 .radar-legend-inline { background:#0b0f14; border:0; border-radius:0 0 8px 8px; bottom:auto; box-shadow:none; left:auto; margin-top:-8px; padding:8px 16px 10px; position:static; right:auto; width:100%; }
 .radar-legend-meta { color:#d6dde6; font-size:.58rem; font-weight:600; margin-left:6px; text-transform:none; }
 .leaflet-tooltip.nws-alert-tooltip,.leaflet-tooltip.spc-outlook-tooltip { background-color:#fff; box-shadow:0 4px 16px rgba(24,34,47,.25); box-sizing:border-box; color:#16183d; font:700 .76rem/1.35 system-ui,sans-serif; max-width:calc(100vw - 44px); min-width:200px; overflow-wrap:break-word; padding:7px 9px; white-space:normal; width:260px; word-break:normal; }
+/* H/L pressure-center labels for the WPC surface-fronts overlay — matches the letter+value stack
+   every forecaster already reads off a broadcast surface map, styled to stay legible over both the
+   dark radar canvas and the basemap underneath it. */
+.wpc-pressure-marker { align-items:center; display:flex; flex-direction:column; pointer-events:none; text-align:center; }
+.wpc-pressure-letter { font:800 1.35rem/1 system-ui,sans-serif; text-shadow:0 0 3px #0b0f14,0 0 6px #0b0f14; }
+.wpc-pressure-value { font:700 .62rem/1 system-ui,sans-serif; margin-top:1px; text-shadow:0 0 3px #0b0f14,0 0 6px #0b0f14; }
+.wpc-pressure-marker-high .wpc-pressure-letter,.wpc-pressure-marker-high .wpc-pressure-value { color:#5b9bf0; }
+.wpc-pressure-marker-low .wpc-pressure-letter,.wpc-pressure-marker-low .wpc-pressure-value { color:#ff6b6b; }
 
 .record-actions {
   align-items: center;
