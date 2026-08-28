@@ -195,6 +195,7 @@ html[data-site-content="loading"] .app,html[data-site-content="loading"] .about-
    between consecutive sections gives each one a clear boundary without adding new chrome. */
 .radar-tools > div > .radar-product-picker + .radar-product-picker { border-top:1px solid var(--line); margin-top:2px; padding-top:9px; }
 .radar-overlay-list { display:flex; flex-direction:column; gap:6px; }
+.overlay-signin-hint { color:var(--muted); font-size:.78rem; line-height:1.4; margin:0; }
 .model-forecast-banner { background:#2a2210; border:1px solid #6b4f1a; border-radius:8px; color:#f0c96a; font-size:.78rem; line-height:1.4; margin:12px 0 0; padding:9px 12px; }
 .radar-loading { display:grid; gap:10px; justify-items:center; }.radar-loading::before { animation:radar-sweep 1.6s linear infinite; background:conic-gradient(from 0deg, color-mix(in srgb,var(--accent) 65%,transparent), transparent 45%); border-radius:50%; content:""; height:38px; width:38px; }@keyframes radar-sweep { to { transform:rotate(360deg); } }
 .radar-loading-overlay { align-content:center; background:color-mix(in srgb,var(--surface) 82%,transparent); font-size:.82rem; font-weight:700; inset:0; position:absolute; z-index:400; }
