@@ -3732,7 +3732,29 @@ export default function Home() {
     <>
     <main className={`app desk-${activeWorkspace?.kind ?? "public"}`}>
       <header className="header">
-        <div className="brand-lockup brand-lockup-wordmark"><span className="theme-brand-lockup"><img className="brand-lockup-light" src="/brand/frontline-forecast-lockup-light.png" alt="Frontline Forecast" /><img className="brand-lockup-dark" src="/brand/frontline-forecast-lockup-dark.png" alt="Frontline Forecast" /></span>{session && activeSchoolBranding && <div className="school-brand-lockup" aria-label={`${activeSchoolBranding.school_name || activeWorkspace.label} school workspace`}><span aria-hidden="true">×</span>{supabaseUrl && activeSchoolLogoPath && <img src={schoolLogoUrl(supabaseUrl, activeSchoolLogoPath)} alt={activeSchoolBranding.logo_alt || `${activeSchoolBranding.school_name || activeWorkspace.label} logo`} />}<strong>{activeSchoolBranding.school_name || activeWorkspace.label}</strong></div>}</div>
+        <div className="brand-lockup brand-lockup-wordmark"><span className="theme-brand-lockup live-brand-lockup" aria-label="Frontline Forecast">
+          <span className="brand-lockup-light">
+          <span className="live-brand-mark">
+            <svg className="live-brand-icon" viewBox="0 0 100 100" aria-hidden="true"><rect width="100" height="100" rx="22" fill="#08054e"/><polygon points="52.24,16 42,54 48.4,54 46.48,84 58,42 50.96,42" fill="#ffffff"/><polygon points="20,20 45,18 45,26 24,28" fill="#ffffff"/><polygon points="24,50 41,48 41,56 24,58" fill="#ffffff"/><polygon points="80,20 58,18 58,26 76,28" fill="#ffffff"/><polygon points="76,50 57,48 57,56 76,58" fill="#ffffff"/></svg>
+            <span className="live-brand-text">
+              <span className="live-brand-name">FRONTLINE</span>
+              <svg className="live-brand-rule" viewBox="0 0 200 6" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="liveBrandRuleLight" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stopColor="#08054e" /><stop offset="100%" stopColor="#1877d1" /></linearGradient></defs><polygon points="0,1.75 200,1.5 200,4.5 0,4.25" fill="url(#liveBrandRuleLight)" /></svg>
+              <span className="live-brand-sub">FORECAST</span>
+            </span>
+          </span>
+          </span>
+          <span className="brand-lockup-dark">
+          <span className="live-brand-mark">
+            <svg className="live-brand-icon" viewBox="0 0 100 100" aria-hidden="true"><rect width="100" height="100" rx="22" fill="#ffffff"/><polygon points="52.24,16 42,54 48.4,54 46.48,84 58,42 50.96,42" fill="#08054e"/><polygon points="20,20 45,18 45,26 24,28" fill="#08054e"/><polygon points="24,50 41,48 41,56 24,58" fill="#08054e"/><polygon points="80,20 58,18 58,26 76,28" fill="#08054e"/><polygon points="76,50 57,48 57,56 76,58" fill="#08054e"/></svg>
+            <span className="live-brand-text">
+              <span className="live-brand-name">FRONTLINE</span>
+              <svg className="live-brand-rule" viewBox="0 0 200 6" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="liveBrandRuleDark" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stopColor="#ffffff" /><stop offset="100%" stopColor="#6ea8e8" /></linearGradient></defs><polygon points="0,1.75 200,1.5 200,4.5 0,4.25" fill="url(#liveBrandRuleDark)" /></svg>
+              <span className="live-brand-sub">FORECAST</span>
+            </span>
+          </span>
+            </span>
+          </span>
+        {session && activeSchoolBranding && <div className="school-brand-lockup" aria-label={`${activeSchoolBranding.school_name || activeWorkspace.label} school workspace`}><span aria-hidden="true">×</span>{supabaseUrl && activeSchoolLogoPath && <img src={schoolLogoUrl(supabaseUrl, activeSchoolLogoPath)} alt={activeSchoolBranding.logo_alt || `${activeSchoolBranding.school_name || activeWorkspace.label} logo`} />}<strong>{activeSchoolBranding.school_name || activeWorkspace.label}</strong></div>}</div>
         <div className="header-meta">
         <div className="header-meta-row">
           <div className="location-menu-wrap"><button type="button" className="location-trigger" aria-expanded={locationMenuOpen} onClick={() => setLocationMenuOpen((open) => !open)}><span>Location</span><strong>{selectedLocation.name}</strong><i aria-hidden="true">⌄</i></button>{locationMenuOpen && <div className="location-menu"><strong>Workspace location</strong><div className="location-custom-station"><form onSubmit={searchLocation}><input type="text" value={locationSearchText} onChange={(event) => setLocationSearchText(event.target.value)} placeholder="City, state, or ZIP" aria-label="Search for a location" /><button type="submit" disabled={!locationSearchText.trim()}>Find</button></form>{customStationStatus && <span className="location-custom-status">{customStationStatus}</span>}</div><div>{weatherDeskLocations.map((location) => <button type="button" key={location.id} className={!customLocation && location.id === locationId ? "active" : ""} onClick={() => { setCustomLocation(null); setLocationId(location.id); setLocationMenuOpen(false); }}><strong>{location.name}</strong><span>{location.observationStation} observation · K{location.upperAirStation} upper air</span></button>)}{customLocation && <div className="location-menu-custom-active"><strong>{customLocation.name}</strong><span>{customLocation.observationStation} observation · {customLocation.upperAirStation} upper air</span><button type="button" className="location-custom-clear" onClick={() => { setCustomLocation(null); setCustomStationStatus(""); }}>Back to preset locations</button></div>}</div></div>}</div>
