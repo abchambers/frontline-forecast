@@ -7,6 +7,7 @@
   "scripts": {
     "test:kffc": "tsx scripts/test-kffc.ts",
     "render:preview": "tsx scripts/render-preview.ts",
+    "mosaic:prototype": "tsx scripts/mosaic-prototype.ts",
     "typecheck": "tsc --noEmit",
     "start": "tsx src/server.ts",
     "dev": "tsx watch src/server.ts"
