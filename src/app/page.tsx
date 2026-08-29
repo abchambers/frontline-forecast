@@ -2788,6 +2788,17 @@ export default function Home() {
   const archiveMenu = archives.find((archive) => archive.id === archiveMenuId) ?? null;
   const pendingArchiveRemoval = archives.find((archive) => archive.id === pendingArchiveRemovalId) ?? null;
   const outlook = liveWeather?.dailyOutlook ?? [];
+  // Andrew, live (2026-08-29): "three extra days under the 7 day forecast in chrome and not in
+  // safari." Root-caused with real data, not a browser bug at all: /api/weather merges the live NWS
+  // feed with weather_daily_outlook, an archive that exists so the Verify page can still show a
+  // day's guidance after NWS's own rolling window has moved past it (see /api/cron/outlook's own
+  // comment). That merge has no floor, so once-live-now-past days sit in `outlook` right alongside
+  // the real forward-looking week — confirmed via the DB that Athens, GA's archive currently holds
+  // 2026-08-25 through 2026-08-28, all already in the past relative to today. The Verify page (below)
+  // genuinely needs those past dates to look up old guidance, so `outlook` itself stays unfiltered;
+  // this is a second, display-only view for the home page's forward-looking card list specifically.
+  const todayIsoDate = new Intl.DateTimeFormat("en-CA", { timeZone: selectedLocation.timezone }).format(new Date());
+  const homeOutlook = outlook.filter((day) => day.date >= todayIsoDate);
   const referenceOptions: ReferenceItem[] = [
     { id: "nws-observation", label: "Current NWS observation", detail: liveWeather ? `${liveWeather.observation.temperatureF ?? "—"}°F · ${liveWeather.observation.description} · ${liveWeather.observation.station || liveWeather.observation.stationName || "NWS observation station"} · ${observedAt}` : "Live observation was unavailable when attached.", preview: liveWeather ? { kind: "metrics", items: [{ label: "Temperature", value: `${liveWeather.observation.temperatureF ?? "—"}°F` }, { label: "Dew point", value: `${liveWeather.observation.dewpointF ?? "—"}°F` }, { label: "Wind", value: liveWeather.observation.windMph === null ? "—" : `${liveWeather.observation.windDirection ?? ""} ${liveWeather.observation.windMph} mph`.trim() }, { label: "Station", value: liveWeather.observation.station || liveWeather.observation.stationName || "NWS observation station" }] } : undefined },
     { id: "nws-guidance", label: "Current NWS forecast", detail: liveWeather?.forecast ? `${liveWeather.forecast.period}: ${liveWeather.forecast.detailedForecast}` : "NWS forecast was unavailable when attached.", preview: liveWeather?.forecast ? { kind: "metrics", items: [{ label: "Period", value: liveWeather.forecast.period }, { label: "Temperature", value: `${liveWeather.forecast.temperature}°${liveWeather.forecast.temperatureUnit}` }, { label: "Precipitation", value: `${liveWeather.forecast.precipitationChance ?? "—"}%` }, { label: "Conditions", value: liveWeather.forecast.shortForecast }] } : undefined },
@@ -3788,7 +3799,7 @@ export default function Home() {
       {liveWeather?.alerts.length ? <section className={`hazard-banner ${alertTone(liveWeather.alerts[0].severity)}`} role="status" aria-label="Active National Weather Service alerts"><button type="button" className="hazard-banner-trigger" onClick={() => { setDataPanel("alerts"); window.requestAnimationFrame(() => document.querySelector(".data-desk")?.scrollIntoView({ behavior: "smooth", block: "start" })); }}><span className="hazard-label">Active NWS alert · tap for details</span><strong>{liveWeather.alerts[0].event}</strong><p>{liveWeather.alerts[0].headline || "An active National Weather Service alert applies to this location."}</p>{liveWeather.alerts[0].expires ? <small>Expires {new Intl.DateTimeFormat("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(liveWeather.alerts[0].expires))}</small> : null}</button><a href="https://www.weather.gov/" target="_blank" rel="noreferrer">Official NWS alerts ↗</a></section> : null}
       {homepageContent.showOutlook && <section className="outlook-strip" aria-label="Seven-day NWS guidance">
         <div className="outlook-heading"><div><h2>{homepageContent.outlookTitle}</h2></div><span className={`sync-pill ${liveDataStatus.tone}`} title={weatherError || (liveDataTimestamp ? `Last successful update ${liveDataTimestamp}` : "Checking weather data")}><i aria-hidden="true" />{liveDataStatus.label}</span></div>
-        <div className="outlook-cards">{outlook.length ? outlook.map((day) => <article key={day.date}><strong>{day.label}</strong><b aria-hidden="true"><WeatherIcon description={day.shortForecast} style={weatherIconStyle} /></b><span>{day.shortForecast}</span><em>{day.high}° / {day.low}°</em><small>{day.precipitationChance ?? 0}% PoP</small></article>) : <p>Loading 7-day NWS guidance…</p>}</div>
+        <div className="outlook-cards">{homeOutlook.length ? homeOutlook.map((day) => <article key={day.date}><strong>{day.label}</strong><b aria-hidden="true"><WeatherIcon description={day.shortForecast} style={weatherIconStyle} /></b><span>{day.shortForecast}</span><em>{day.high}° / {day.low}°</em><small>{day.precipitationChance ?? 0}% PoP</small></article>) : <p>Loading 7-day NWS guidance…</p>}</div>
       </section>}
       <section className="dashboard-grid">
         {homepageContent.showRadar && <article className="radar-card">
