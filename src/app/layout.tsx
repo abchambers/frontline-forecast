@@ -12,7 +12,7 @@ const jetbrainsMono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-mon
 
 // Bump this whenever the favicon/app-icon files in public/ change — see the comment on `icons`
 // below for why a plain content swap at the same URL isn't enough to bust Safari's favicon cache.
-const ICON_VERSION = "2";
+const ICON_VERSION = "3";
 
 export const metadata: Metadata = {
   // Keep previews and social cards on the canonical production hostname.
