@@ -16,7 +16,7 @@
 import fs from "node:fs";
 import { getRadarSite } from "../src/site.js";
 import { getVolumeCached, extractLowestElevation } from "../src/level2.js";
-import { computeReflectivityGrid, buildCandidateCells, cellsToGrid, boundsOf } from "../src/project.js";
+import { computeReflectivityGrid, buildCandidateCells, cellsToGrid, boundsOf, mergeReflectivityCells } from "../src/project.js";
 import { renderMrmsGridToDataUrl } from "../src/render.js";
 import type { MrmsPoint } from "../src/types.js";
 
@@ -70,12 +70,7 @@ async function main() {
     const candidateCells = buildCandidateCells(site, GRID_STEP_DEG, MAX_RANGE_KM);
     const { grid } = computeReflectivityGrid(reflectivity, site, GRID_STEP_DEG, MAX_RANGE_KM, correlationCoefficient, candidateCells);
 
-    for (const point of grid) {
-      const key = `${Math.round(point.lat / GRID_STEP_DEG)},${Math.round(point.lon / GRID_STEP_DEG)}`;
-      const existing = merged.get(key);
-      if (existing === undefined) merged.set(key, point.dbz);
-      else if (point.dbz !== null && (existing === null || point.dbz > existing)) merged.set(key, point.dbz);
-    }
+    mergeReflectivityCells(merged, grid, GRID_STEP_DEG);
 
     const elapsedMs = performance.now() - stationStart;
     const rssAfter = process.memoryUsage().rss;

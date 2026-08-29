@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { getRadarSite } from "./site.js";
 import { getVolumeCached, extractLowestElevation } from "./level2.js";
-import { computeReflectivityGrid, computeVelocityGrid, buildCandidateCells } from "./project.js";
+import { computeReflectivityGrid, computeVelocityGrid, buildCandidateCells, cellsToGrid, boundsOf, mergeReflectivityCells } from "./project.js";
 import { fetchStormTracks, fetchHailDetections, fetchTvsDetections, fetchMesocycloneDetections } from "./level3-markers.js";
 import { renderMrmsGridToDataUrl, renderVelocityGridToDataUrl } from "./render.js";
 
@@ -295,6 +295,95 @@ async function handleSevere(station: string) {
   return { status: 200, body: payload, source: "live" as const };
 }
 
+// NOT WIRED IN to the main app yet (2026-08-29) — Andrew's explicit call: build this now, deploy
+// the code, but don't point any live traffic at it until the worker is upgraded off shared-cpu-1x
+// (see fly.toml). A `git push` here does NOT touch the running Fly machine — this project's
+// radar-worker only updates on an explicit `fly deploy` (see docs/START_HERE.md /
+// WORKING_WITH_ANDREW.md), so merging this is safe even before that upgrade happens. Once it IS
+// deployed, this endpoint deliberately still shares the single MAX_CONCURRENT_COMPUTE slot with
+// every other route above — a mosaic request can legitimately hold that slot for the sum of all its
+// stations' decode times (proven in scripts/mosaic-prototype.ts: ~6-9s/station), so it will queue
+// behind (and be queued behind by) ordinary single-station traffic on the current architecture.
+// That's the right tradeoff for now (never silently bypass the safety invariant that already fixed a
+// real overload incident) but is exactly why this shouldn't go live on the current small machine —
+// see the cost/latency investigation in chat before wiring this up for real.
+//
+// Deliberately takes an explicit station list from the caller rather than a lat/lon + radius: this
+// worker resolves individual station metadata live (site.ts), but has no cached list of ALL 159
+// station coordinates to search from. That "nearest N stations to this location" logic belongs in
+// the main app instead (which already fetches+caches the full station list for the station picker,
+// see src/app/api/radar/stations/route.ts) — this endpoint's job is only "decode+merge+render
+// whichever stations you tell me to."
+const MAX_MOSAIC_STATIONS = 8;
+const MOSAIC_CACHE_TTL_MS = 300_000; // matches PAYLOAD_CACHE_TTL_MS — same volume-refresh-cadence reasoning.
+
+async function handleMosaic(stationsParam: string) {
+  const stations = [...new Set(stationsParam.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean))];
+  if (stations.length === 0) return { status: 400, body: { error: "At least one station is required, e.g. ?stations=KFFC,KJGX,KVAX." }, source: "cache" as const };
+  if (stations.length > MAX_MOSAIC_STATIONS) return { status: 400, body: { error: `At most ${MAX_MOSAIC_STATIONS} stations per mosaic request.` }, source: "cache" as const };
+  for (const station of stations) {
+    if (!STATION_ID_PATTERN.test(station)) return { status: 400, body: { error: `Invalid station ID: ${station}` }, source: "cache" as const };
+  }
+
+  const cacheKey = `mosaic:${[...stations].sort().join(",")}`;
+  const hit = cached(cacheKey);
+  if (hit) return { status: 200, body: hit, source: "cache" as const };
+
+  const existing = inFlight.get(cacheKey);
+  if (existing) return existing;
+
+  const promise = withComputeSlot(() => computeMosaic(stations, cacheKey));
+  inFlight.set(cacheKey, promise);
+  try {
+    return await promise;
+  } finally {
+    inFlight.delete(cacheKey);
+  }
+}
+
+async function computeMosaic(stations: string[], cacheKey: string) {
+  const t0 = performance.now();
+  const merged = new Map<string, number | null>();
+  const perStationMs: string[] = [];
+
+  // Sequential, one station in flight at a time — same MAX_CONCURRENT_COMPUTE=1 invariant as every
+  // other route, just spread across several stations instead of one. See the block comment above
+  // this function for why that's the deliberate, safe choice on the CURRENT small machine.
+  for (const station of stations) {
+    const stationStart = performance.now();
+    const [site, volume] = await Promise.all([getRadarSite(station), getVolumeCached(station)]);
+    const elevation = extractLowestElevation(volume.radar, "reflectivity");
+    let correlationCoefficient;
+    try {
+      correlationCoefficient = extractLowestElevation(volume.radar, "correlationCoefficient");
+    } catch {
+      correlationCoefficient = undefined;
+    }
+    const candidateCells = buildCandidateCells(site, GRID_STEP_DEG, MAX_RANGE_KM);
+    const { grid } = computeReflectivityGrid(elevation, site, GRID_STEP_DEG, MAX_RANGE_KM, correlationCoefficient, candidateCells);
+    mergeReflectivityCells(merged, grid, GRID_STEP_DEG);
+    perStationMs.push(`${station}=${((performance.now() - stationStart) / 1000).toFixed(1)}s`);
+  }
+
+  const mergedPoints = cellsToGrid(merged, GRID_STEP_DEG);
+  const bounds = boundsOf(mergedPoints);
+  const imageDataUrl = renderMrmsGridToDataUrl(mergedPoints, bounds, GRID_STEP_DEG);
+  if (!imageDataUrl) throw new Error(`No mosaic coverage available for [${stations.join(",")}].`);
+
+  console.log(`[mosaic:${stations.join(",")}] ${perStationMs.join(" ")}, total ${((performance.now() - t0) / 1000).toFixed(1)}s`);
+
+  const payload = {
+    time: new Date().toISOString(),
+    bounds,
+    step: GRID_STEP_DEG,
+    imageDataUrl,
+    stations,
+    source: `NEXRAD Level II mosaic (${stations.join(", ")})`,
+  };
+  setCache(cacheKey, payload, MOSAIC_CACHE_TTL_MS);
+  return { status: 200, body: payload, source: "live" as const };
+}
+
 const server = createServer((request, response) => {
   const url = new URL(request.url ?? "/", `http://localhost:${PORT}`);
 
@@ -312,12 +401,24 @@ const server = createServer((request, response) => {
     return;
   }
 
-  const station = url.searchParams.get("station")?.trim().toUpperCase();
-
   const respondJson = (status: number, body: unknown, extraHeaders: Record<string, string> = {}) => {
     response.writeHead(status, { "Content-Type": "application/json", ...extraHeaders });
     response.end(JSON.stringify(body));
   };
+
+  // Special-cased ahead of the generic single-station routing below — takes a `stations` list
+  // instead of a single `station` param, so it can't share that block's validation.
+  if (url.pathname === "/mosaic") {
+    handleMosaic(url.searchParams.get("stations") ?? "")
+      .then((result) => respondJson(result.status, result.body, { "X-Radar-Source": result.source }))
+      .catch((error: unknown) => {
+        console.error(`[mosaic] request failed:`, error);
+        respondJson(502, { error: error instanceof Error ? error.message : "Mosaic request failed." });
+      });
+    return;
+  }
+
+  const station = url.searchParams.get("station")?.trim().toUpperCase();
 
   const routes: Record<string, (station: string) => Promise<{ status: number; body: unknown; source: "cache" | "live" }>> = {
     "/reflectivity": (s) => handleReflectivityOrVelocity(s, "reflectivity"),

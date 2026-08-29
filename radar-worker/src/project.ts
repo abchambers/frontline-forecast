@@ -412,6 +412,21 @@ export function cellsToGrid(cells: Map<string, number | null>, stepDeg: number):
   return grid;
 }
 
+// Merges one station's already-computed grid into a shared multi-station accumulator, for a
+// regional/mosaic composite. Stations' grids already share an absolute lattice (see cellKey above),
+// so no reprojection is needed — just a merge policy for cells more than one station covers: max
+// dBZ wins, but a null (filtered/no-echo) value from one station never overwrites a real value a
+// DIFFERENT station already found at that cell, only fills a cell nothing has claimed yet. Proven
+// out in scripts/mosaic-prototype.ts against 6 real stations before landing here.
+export function mergeReflectivityCells(target: Map<string, number | null>, source: MrmsPoint[], stepDeg: number): void {
+  for (const point of source) {
+    const key = cellKey(point.lat, point.lon, stepDeg);
+    const existing = target.get(key);
+    if (existing === undefined) target.set(key, point.dbz);
+    else if (point.dbz !== null && (existing === null || point.dbz > existing)) target.set(key, point.dbz);
+  }
+}
+
 // Bins reflectivity's irregular polar point cloud into a regular lat/lon
 // grid matching the exact shape src/lib/mrms-render.ts already renders, with
 // the noise-floor + despeckle pass above applied. Also returns an "echo
