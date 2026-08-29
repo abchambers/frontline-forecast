@@ -43,6 +43,9 @@ type LiveWeather = {
   // Live NWS data merged with weather_daily_outlook (the durable archive) server-side, so a date
   // NWS's rolling forecast has already dropped still shows the guidance last captured for it.
   dailyOutlook: { date: string; label: string; high: number | null; low: number | null; shortForecast: string; precipitationChance: number | null; wind: string | null }[];
+  // 12-hour view, unrelated to radar — sits between the reference-data panel and Radar on the home
+  // page, free for every visitor (same as the daily outlook, not gated like the forecaster tools).
+  hourly: { startTime: string; temperatureF: number; shortForecast: string; precipitationChance: number | null; windSpeed: string | null; windDirection: string | null; isDaytime: boolean }[];
   fetchedAt: string;
 };
 // `source`/`inHouseTime` are only ever set for the observed-radar timeline (never the HRRR
@@ -3824,6 +3827,19 @@ export default function Home() {
           <div><strong>Observation: {liveWeather.observation.station}</strong><span>{liveWeather.observation.stationName} · {observedAt}</span></div></>}
         </aside>
       </section>
+
+      {/* Andrew, 2026-08-29: "the 12 hour view will not have anything to do with radar but it will
+          be between the reference data and radar" — a plain NWS hourly forecast (temperature/
+          conditions), not a radar product, free for every visitor same as the 7-day outlook above. */}
+      {liveWeather && liveWeather.hourly.length > 0 && <section className="outlook-strip hourly-strip" aria-label="Next 12 hours">
+        <div className="outlook-heading"><div><h2>Next 12 hours</h2></div></div>
+        <div className="hourly-cards">{liveWeather.hourly.map((hour) => <article key={hour.startTime}>
+          <strong>{new Intl.DateTimeFormat("en-US", { hour: "numeric", timeZone: selectedLocation.timezone }).format(new Date(hour.startTime))}</strong>
+          <b aria-hidden="true"><WeatherIcon description={hour.shortForecast} style={weatherIconStyle} /></b>
+          <em>{hour.temperatureF}°</em>
+          <small>{hour.precipitationChance ?? 0}% PoP</small>
+        </article>)}</div>
+      </section>}
 
       {homepageContent.showReferences && <section className="data-desk">
         <div className="section-heading data-desk-heading"><div><h2>{homepageContent.referenceTitle}</h2><p>{homepageContent.referenceCaption}</p></div></div>

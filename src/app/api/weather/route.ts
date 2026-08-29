@@ -91,7 +91,7 @@ export async function GET(request: Request) {
       ?? stationList.features[0]?.properties.stationIdentifier;
     if (!stationId) throw new Error("No nearby NWS observation station was available");
 
-    const [observationResult, forecastResult, alertsResult] = await Promise.allSettled([
+    const [observationResult, forecastResult, alertsResult, hourlyResult] = await Promise.allSettled([
       nws<NwsFeature<ObservationProperties>>(
         `https://api.weather.gov/stations/${stationId}/observations/latest`,
       ),
@@ -99,6 +99,11 @@ export async function GET(request: Request) {
       nws<{ features: NwsFeature<AlertProperties>[] }>(
         `https://api.weather.gov/alerts/active?point=${selectedLocation.latitude},${selectedLocation.longitude}`,
       ),
+      // Andrew, 2026-08-29: new 12-hour view, unrelated to radar — pointData.forecastHourly was
+      // already captured from the NWS point response but never fetched. Same free NWS product as
+      // the daily forecast, just the hourly grid instead of the 7-day one; not gated behind sign-in
+      // like the forecaster tools, since this is plain NWS guidance same as the 7-day outlook.
+      nws<{ properties: { periods: (ForecastPeriod & { isDaytime: boolean })[] } }>(pointData.forecastHourly),
     ]);
 
     if (observationResult.status !== "fulfilled" || forecastResult.status !== "fulfilled") {
@@ -125,6 +130,21 @@ export async function GET(request: Request) {
     for (const day of archivedDailyOutlook) dailyOutlookByDate.set(day.date, day);
     for (const day of liveDailyOutlook) dailyOutlookByDate.set(day.date, day);
     const dailyOutlook = [...dailyOutlookByDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+
+    // 12-hour view, unrelated to radar — sits between the reference-data panel and Radar on the
+    // page. Failing open to an empty array rather than throwing: this is a nice-to-have alongside
+    // the daily outlook/observation, not core enough to take down the whole /api/weather response.
+    const hourly = hourlyResult.status === "fulfilled"
+      ? hourlyResult.value.properties.periods.slice(0, 12).map((period) => ({
+          startTime: period.startTime,
+          temperatureF: period.temperature,
+          shortForecast: period.shortForecast,
+          precipitationChance: period.probabilityOfPrecipitation.value,
+          windSpeed: period.windSpeed ?? null,
+          windDirection: period.windDirection ?? null,
+          isDaytime: period.isDaytime,
+        }))
+      : [];
 
     const current = observation.properties;
     const nextPeriod = forecast.properties.periods[0];
@@ -200,6 +220,7 @@ export async function GET(request: Request) {
         })),
         alertsAvailable,
         dailyOutlook,
+        hourly,
         fetchedAt: new Date().toISOString(),
       },
       { headers: { "Cache-Control": "no-store" } },
