@@ -2253,6 +2253,14 @@ export default function Home() {
     }
     const headers = { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` };
     const organizationId = activeWorkspace.organizationId;
+    // Guards against a real race: switching schools quickly fires this effect again before the
+    // previous run's fetches resolve, and with no guard the SLOWER (now-superseded) run's response
+    // could land last and overwrite the newer school's data — e.g. a fast switch to a second school
+    // still showing the FIRST school's entitlement/Plan status. Found live 2026-08-30 (Andrew) via a
+    // quick DEV TEST SCHOOL -> University Of Georgia switch showing UGA's header with DEV TEST
+    // SCHOOL's "Trial" plan momentarily. cancelled short-circuits every setState below if a newer
+    // effect run has already started.
+    let cancelled = false;
     Promise.all([
       fetch(`${supabaseUrl}/rest/v1/organization_memberships?select=id,organization_id,user_id,role,status&organization_id=eq.${organizationId}&status=eq.active&order=created_at.asc`, { headers }),
       fetch(`${supabaseUrl}/rest/v1/workspace_join_codes?select=id,classroom_id,label,code_hint,active,expires_at,max_uses,use_count,created_at&organization_id=is.null&order=created_at.desc`, { headers }),
@@ -2265,20 +2273,24 @@ export default function Home() {
       const profilesResponse = ids.length ? await fetch(`${supabaseUrl}/rest/v1/profiles?select=id,email,display_name,person_type&id=in.(${ids.join(",")})`, { headers }) : null;
       const people = profilesResponse?.ok ? await profilesResponse.json() as Pick<Profile, "id" | "email" | "display_name" | "person_type">[] : [];
       const peopleById = new Map(people.map((profile) => [profile.id, profile]));
+      if (cancelled) return;
       setSchoolMembers(members.map((member) => ({ ...member, profiles: peopleById.get(member.user_id) ?? null })));
       const rawCodes = codesResponse.ok ? await codesResponse.json() as ClassroomJoinCode[] : [];
+      if (cancelled) return;
       setClassroomJoinCodes(rawCodes.filter((code) => Boolean(code.classroom_id)));
       const entitlementRows = entitlementResponse.ok ? await entitlementResponse.json() as { seat_limit: number; status: string; next_payment_due_at: string | null }[] : [];
+      if (cancelled) return;
       setSchoolEntitlement(entitlementRows[0] ?? null);
       const classroomRows = classroomIdsResponse.ok ? await classroomIdsResponse.json() as { id: string }[] : [];
       const classroomIds = classroomRows.map((row) => row.id);
-      if (!classroomIds.length) { setClassroomEnrollment({}); return; }
+      if (!classroomIds.length) { if (!cancelled) setClassroomEnrollment({}); return; }
       const enrollmentResponse = await fetch(`${supabaseUrl}/rest/v1/classroom_memberships?select=classroom_id&classroom_id=in.(${classroomIds.join(",")})&role=eq.student&status=eq.active`, { headers });
       const enrollmentRows = enrollmentResponse.ok ? await enrollmentResponse.json() as { classroom_id: string }[] : [];
       const counts: Record<string, number> = {};
       for (const row of enrollmentRows) counts[row.classroom_id] = (counts[row.classroom_id] ?? 0) + 1;
-      setClassroomEnrollment(counts);
-    }).catch((error: Error) => setAccessMessage(error.message));
+      if (!cancelled) setClassroomEnrollment(counts);
+    }).catch((error: Error) => { if (!cancelled) setAccessMessage(error.message); });
+    return () => { cancelled = true; };
   }, [activeWorkspaceKey, session]);
 
   useEffect(() => {
