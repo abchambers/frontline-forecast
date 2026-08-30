@@ -2209,10 +2209,12 @@ export default function Home() {
 
   useEffect(() => {
     if (!session || !supabaseUrl || !supabaseKey || activeWorkspace?.kind !== "classroom" || !activeWorkspace.classroomId) { setClassroomOfficialForecast(null); return; }
+    let cancelled = false;
     fetch(`${supabaseUrl}/rest/v1/classroom_official_forecasts?select=classroom_id,forecast,updated_by,updated_at,published_at&classroom_id=eq.${activeWorkspace.classroomId}`, { headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` } })
       .then((response) => response.ok ? response.json() : Promise.reject(new Error("Class outlook is not ready. Apply the latest classroom migration.")))
-      .then((rows: ClassroomOfficialForecast[]) => setClassroomOfficialForecast(rows[0] ?? null))
-      .catch(() => setClassroomOfficialForecast(null));
+      .then((rows: ClassroomOfficialForecast[]) => { if (!cancelled) setClassroomOfficialForecast(rows[0] ?? null); })
+      .catch(() => { if (!cancelled) setClassroomOfficialForecast(null); });
+    return () => { cancelled = true; };
   }, [activeWorkspaceKey, session]);
 
   useEffect(() => {
@@ -2305,42 +2307,48 @@ export default function Home() {
       ? `${supabaseUrl}/rest/v1/classroom_memberships?select=user_id,role&classroom_id=eq.${activeWorkspace.classroomId}&status=eq.active&order=created_at.asc`
       : `${supabaseUrl}/rest/v1/organization_memberships?select=user_id,role&organization_id=eq.${activeWorkspace.organizationId}&status=eq.active&order=created_at.asc`;
     setAcademicMessage("Loading authorized workspace members…");
+    let cancelled = false;
     fetch(membershipUrl, { headers }).then(async (membershipResponse) => {
       if (!membershipResponse.ok) throw new Error("Workspace roster is not available to this account.");
       const memberships = await membershipResponse.json() as { user_id: string; role: string }[];
-      if (!memberships.length) { setAcademicRoster([]); setAcademicMessage("No active members are assigned yet."); return; }
+      if (!memberships.length) { if (!cancelled) { setAcademicRoster([]); setAcademicMessage("No active members are assigned yet."); } return; }
       const ids = memberships.map((membership) => membership.user_id).join(",");
       const profileResponse = await fetch(`${supabaseUrl}/rest/v1/profiles?select=id,email,display_name,person_type&id=in.(${ids})`, { headers });
       if (!profileResponse.ok) throw new Error("Workspace member profiles could not be loaded.");
       const profilesById = new Map((await profileResponse.json() as Pick<Profile, "id" | "email" | "display_name" | "person_type">[]).map((profile) => [profile.id, profile]));
+      if (cancelled) return;
       setAcademicRoster(memberships.map((membership) => {
         const profile = profilesById.get(membership.user_id);
         return { userId: membership.user_id, label: profile?.display_name || profile?.email || "Unnamed account", email: profile?.email ?? null, personType: profile?.person_type ?? null, role: membership.role, organizationId: activeWorkspace.organizationId ?? "", classroomId: isClassroom ? activeWorkspace.classroomId : undefined };
       }));
       setAcademicMessage("");
-    }).catch((error: Error) => { setAcademicRoster([]); setAcademicMessage(error.message); });
+    }).catch((error: Error) => { if (!cancelled) { setAcademicRoster([]); setAcademicMessage(error.message); } });
+    return () => { cancelled = true; };
   }, [activeWorkspaceKey, hasAcademicReviewAccess, session]);
 
   useEffect(() => {
     if (!session || !supabaseUrl || !supabaseKey || !canManageActiveClassroom || activeWorkspace?.kind !== "classroom" || classroomHubTab !== "roster") { setClassroomRoster([]); return; }
     const headers = { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` };
     setClassroomRosterMessage("Loading roster…");
+    let cancelled = false;
     fetch(`${supabaseUrl}/rest/v1/classroom_memberships?select=user_id,status,created_at&classroom_id=eq.${activeWorkspace.classroomId}&role=eq.student&order=created_at.asc`, { headers })
       .then(async (response) => {
         if (!response.ok) throw new Error("Roster is not available.");
         const memberships = await response.json() as { user_id: string; status: "active" | "invited" | "suspended"; created_at: string }[];
-        if (!memberships.length) { setClassroomRoster([]); setClassroomRosterMessage("No students are enrolled yet."); return; }
+        if (!memberships.length) { if (!cancelled) { setClassroomRoster([]); setClassroomRosterMessage("No students are enrolled yet."); } return; }
         const ids = memberships.map((membership) => membership.user_id).join(",");
         const profileResponse = await fetch(`${supabaseUrl}/rest/v1/profiles?select=id,email,display_name&id=in.(${ids})`, { headers });
         if (!profileResponse.ok) throw new Error("Student profiles could not be loaded.");
         const profilesById = new Map((await profileResponse.json() as { id: string; email: string | null; display_name: string | null }[]).map((profile) => [profile.id, profile]));
+        if (cancelled) return;
         setClassroomRoster(memberships.map((membership) => {
           const profile = profilesById.get(membership.user_id);
           return { userId: membership.user_id, label: profile?.display_name || profile?.email || "Unnamed account", email: profile?.email ?? null, status: membership.status, enrolledAt: membership.created_at };
         }));
         setClassroomRosterMessage("");
       })
-      .catch((error: Error) => { setClassroomRoster([]); setClassroomRosterMessage(error.message); });
+      .catch((error: Error) => { if (!cancelled) { setClassroomRoster([]); setClassroomRosterMessage(error.message); } });
+    return () => { cancelled = true; };
   }, [activeWorkspaceKey, classroomHubTab, canManageActiveClassroom, session]);
 
   async function setClassroomMemberStatus(userId: string, status: "active" | "suspended") {
@@ -2392,35 +2400,43 @@ export default function Home() {
       return;
     }
     setAssignmentMessage("Loading class assignments…");
+    let cancelled = false;
     fetch(`${supabaseUrl}/rest/v1/classroom_assignments?select=id,classroom_id,title,instructions,target_date,target_dates,due_at,status,scenario_id,scenario:scenarios(title,summary,reference_notes,reference_links),instructor_forecast,instructor_forecast_updated_at,class_forecast,class_forecast_updated_at,class_forecast_published_at,created_at&classroom_id=eq.${activeWorkspace.classroomId}&order=target_date.asc`, { headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` } })
       .then((response) => response.ok ? response.json() : Promise.reject(new Error("Class assignments could not be loaded. Apply the academic assignments migration, then refresh.")))
-      .then((assignments: ClassroomAssignment[]) => { setClassroomAssignments(assignments); setSelectedClassroomAssignmentId((selected) => { if (assignments.some((assignment) => assignment.id === selected)) return selected; const urlAssignmentId = new URLSearchParams(window.location.search).get("assignment"); if (urlAssignmentId && assignments.some((assignment) => assignment.id === urlAssignmentId)) return urlAssignmentId; return assignments.find((assignment) => assignment.status === "open")?.id ?? ""; }); setAssignmentMessage(""); })
-      .catch((error: Error) => { setClassroomAssignments([]); setAssignmentMessage(error.message); });
+      .then((assignments: ClassroomAssignment[]) => { if (cancelled) return; setClassroomAssignments(assignments); setSelectedClassroomAssignmentId((selected) => { if (assignments.some((assignment) => assignment.id === selected)) return selected; const urlAssignmentId = new URLSearchParams(window.location.search).get("assignment"); if (urlAssignmentId && assignments.some((assignment) => assignment.id === urlAssignmentId)) return urlAssignmentId; return assignments.find((assignment) => assignment.status === "open")?.id ?? ""; }); setAssignmentMessage(""); })
+      .catch((error: Error) => { if (!cancelled) { setClassroomAssignments([]); setAssignmentMessage(error.message); } });
+    return () => { cancelled = true; };
   }, [activeWorkspaceKey, session]);
 
   useEffect(() => {
     if (!session || !supabaseUrl || !supabaseKey || activeWorkspace?.kind !== "classroom" || !activeWorkspace.classroomId) { setAssignmentSubmissions([]); return; }
+    let cancelled = false;
     fetch(`${supabaseUrl}/rest/v1/assignment_submissions?select=id,assignment_id,classroom_id,student_id,responses,status,submitted_at,created_at,updated_at&classroom_id=eq.${activeWorkspace.classroomId}&order=updated_at.desc`, { headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` } })
       .then((response) => response.ok ? response.json() : Promise.reject(new Error("Assignment submissions could not be loaded. Apply the assignment content migration, then refresh.")))
-      .then((submissions: AssignmentSubmission[]) => setAssignmentSubmissions(submissions))
-      .catch(() => setAssignmentSubmissions([]));
+      .then((submissions: AssignmentSubmission[]) => { if (!cancelled) setAssignmentSubmissions(submissions); })
+      .catch(() => { if (!cancelled) setAssignmentSubmissions([]); });
+    return () => { cancelled = true; };
   }, [activeWorkspaceKey, assignmentSubmissionRefreshToken, session]);
 
   useEffect(() => {
     if (!session || !supabaseUrl || !supabaseKey || !selectedClassroomAssignmentId) { setAssignmentReferences([]); return; }
+    let cancelled = false;
     fetch(`${supabaseUrl}/rest/v1/assignment_references?select=id,assignment_id,classroom_id,kind,label,url,detail,created_by,created_at&assignment_id=eq.${selectedClassroomAssignmentId}&order=created_at.asc`, { headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` } })
       .then((response) => response.ok ? response.json() : Promise.reject(new Error("Reference material could not be loaded.")))
-      .then((references: AssignmentReferenceItem[]) => setAssignmentReferences(references))
-      .catch(() => setAssignmentReferences([]));
+      .then((references: AssignmentReferenceItem[]) => { if (!cancelled) setAssignmentReferences(references); })
+      .catch(() => { if (!cancelled) setAssignmentReferences([]); });
+    return () => { cancelled = true; };
   }, [selectedClassroomAssignmentId, assignmentReferenceRefreshToken, session]);
 
   useEffect(() => {
     if (!session || !supabaseUrl || !supabaseKey || !assignmentSubmissions.length) { setAssignmentReviews([]); return; }
     const ids = assignmentSubmissions.map((submission) => submission.id).join(",");
+    let cancelled = false;
     fetch(`${supabaseUrl}/rest/v1/assignment_reviews?select=id,submission_id,reviewer_id,comment,manual_score,created_at,updated_at&submission_id=in.(${ids})&order=created_at.desc`, { headers: { apikey: supabaseKey, Authorization: `Bearer ${session.access_token}` } })
       .then((response) => response.ok ? response.json() : Promise.reject(new Error("Assignment reviews could not be loaded.")))
-      .then((reviews: AssignmentReview[]) => setAssignmentReviews(reviews))
-      .catch(() => setAssignmentReviews([]));
+      .then((reviews: AssignmentReview[]) => { if (!cancelled) setAssignmentReviews(reviews); })
+      .catch(() => { if (!cancelled) setAssignmentReviews([]); });
+    return () => { cancelled = true; };
   }, [assignmentSubmissions, session]);
 
   useEffect(() => {
