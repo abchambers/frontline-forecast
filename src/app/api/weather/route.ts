@@ -9,17 +9,23 @@ import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 async function fetchArchivedOutlook(locationId: string, timezone: string): Promise<DailyOutlookDay[]> {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!supabaseUrl || !serviceKey) return [];
+  // Andrew, 2026-08-31: this used to fail completely silently (both the missing-env-var case and
+  // any fetch/HTTP failure just returned [] with no trace), which made a real production
+  // discrepancy (dev correctly showed today's archived high, prod showed null for the same
+  // location/date/row) impossible to diagnose from logs alone. Logging here costs nothing --
+  // this path already fails open to an empty array either way -- but now at least says why.
+  if (!supabaseUrl || !serviceKey) { console.error("[weather] archived outlook skipped: missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY"); return []; }
   const since = new Intl.DateTimeFormat("en-CA", { timeZone: timezone }).format(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000));
   try {
     const response = await fetch(
       `${supabaseUrl}/rest/v1/weather_daily_outlook?location_id=eq.${encodeURIComponent(locationId)}&valid_date=gte.${since}&order=valid_date.asc`,
       { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` }, cache: "no-store" },
     );
-    if (!response.ok) return [];
+    if (!response.ok) { console.error(`[weather] archived outlook fetch failed for ${locationId}: HTTP ${response.status} ${await response.text().catch(() => "")}`); return []; }
     const rows: { valid_date: string; label: string; high_f: number | null; low_f: number | null; short_forecast: string; precipitation_chance: number | null; wind: string | null }[] = await response.json();
     return rows.map((row) => ({ date: row.valid_date, label: row.label, high: row.high_f, low: row.low_f, shortForecast: row.short_forecast, precipitationChance: row.precipitation_chance, wind: row.wind }));
-  } catch {
+  } catch (error) {
+    console.error(`[weather] archived outlook fetch threw for ${locationId}:`, error);
     return [];
   }
 }
