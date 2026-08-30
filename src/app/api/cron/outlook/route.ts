@@ -25,7 +25,23 @@ export async function GET(request: NextRequest) {
       if (!response.ok) continue;
       const data = await response.json();
       const days = reduceForecastPeriodsToDailyOutlook(data.forecastPeriods ?? [], location.timezone);
+      // Read-before-write so a run that lands after today's daytime period has already dropped out
+      // of NWS's feed (a retry, a schedule change, this cron ever running more than once a day)
+      // can't blank out a real high/low this same location+date already captured -- same
+      // "never overwritten with missing data" invariant this file already documents above, just
+      // actually enforced for same-day updates now instead of only across day-rollover. See the
+      // /api/weather route's matching fix for the live-display half of this same bug.
+      const existingResponse = await fetch(
+        `${supabaseUrl}/rest/v1/weather_daily_outlook?select=valid_date,high_f,low_f&location_id=eq.${encodeURIComponent(location.id)}&valid_date=in.(${days.map((day) => day.date).join(",")})`,
+        { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
+      );
+      const existingByDate = new Map(
+        existingResponse.ok
+          ? ((await existingResponse.json()) as { valid_date: string; high_f: number | null; low_f: number | null }[]).map((row) => [row.valid_date, row])
+          : [],
+      );
       for (const day of days) {
+        const existing = existingByDate.get(day.date);
         const archive = await fetch(`${supabaseUrl}/rest/v1/weather_daily_outlook?on_conflict=location_id,valid_date`, {
           method: "POST",
           headers,
@@ -34,8 +50,8 @@ export async function GET(request: NextRequest) {
             location_name: location.name,
             valid_date: day.date,
             label: day.label,
-            high_f: day.high,
-            low_f: day.low,
+            high_f: day.high ?? existing?.high_f ?? null,
+            low_f: day.low ?? existing?.low_f ?? null,
             short_forecast: day.shortForecast,
             precipitation_chance: day.precipitationChance,
             wind: day.wind,

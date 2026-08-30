@@ -58,25 +58,38 @@ export function canonicalSensorPoint(input: Omit<CanonicalWeatherPoint, "kind">)
 
 export type DailyOutlookDay = { date: string; label: string; high: number | null; low: number | null; shortForecast: string; precipitationChance: number | null; wind: string | null };
 
-type ForecastPeriodLike = { startTime: string; temperature: number; precipitationChance: number | null; windSpeed: string | null; windDirection: string | null; shortForecast: string };
+type ForecastPeriodLike = { startTime: string; temperature: number; precipitationChance: number | null; windSpeed: string | null; windDirection: string | null; shortForecast: string; isDaytime: boolean };
 
 // Groups NWS's day/night forecast periods into one entry per calendar date. Shared between
 // /api/weather (live) and /api/cron/outlook (the durable archive) so both produce identically
 // keyed dates -- the archive backfills whatever dates the live feed no longer has.
+//
+// `high` is only ever set from a daytime (isDaytime: true) period and `low` only from a
+// nighttime one -- NOT simply max/min across whatever periods happen to be present. Real bug this
+// fixes (Andrew, live, 2026-08-31): once today's daytime period ages out of NWS's own feed (evening
+// -- only "Tonight" is left), the old version of this function echoed that single leftover
+// temperature into BOTH high and low ("70°/70°"), which reads as a real narrow-range day instead of
+// "we don't have today's high anymore." Now a day with no daytime period in THIS batch simply
+// reports high: null -- callers (the /api/weather merge, specifically) are responsible for filling
+// that from a durable source (the archive) rather than this function fabricating a value.
 export function reduceForecastPeriodsToDailyOutlook(periods: ForecastPeriodLike[], timezone: string): DailyOutlookDay[] {
   const days: DailyOutlookDay[] = [];
   for (const period of periods) {
     const date = new Intl.DateTimeFormat("en-CA", { timeZone: timezone }).format(new Date(period.startTime));
     const label = new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: timezone }).format(new Date(period.startTime));
     const wind = period.windSpeed ? `${period.windDirection ?? ""} ${period.windSpeed}`.trim() : null;
-    const existing = days.find((day) => day.date === date);
-    if (existing) {
-      existing.high = existing.high === null ? period.temperature : Math.max(existing.high, period.temperature);
-      existing.low = existing.low === null ? period.temperature : Math.min(existing.low, period.temperature);
-      existing.precipitationChance = Math.max(existing.precipitationChance ?? 0, period.precipitationChance ?? 0);
-    } else if (days.length < 7) {
-      days.push({ date, label, high: period.temperature, low: period.temperature, shortForecast: period.shortForecast, precipitationChance: period.precipitationChance, wind });
+    let day = days.find((d) => d.date === date);
+    if (!day) {
+      if (days.length >= 7) continue;
+      day = { date, label, high: null, low: null, shortForecast: period.shortForecast, precipitationChance: period.precipitationChance, wind };
+      days.push(day);
     }
+    if (period.isDaytime) {
+      day.high = day.high === null ? period.temperature : Math.max(day.high, period.temperature);
+    } else {
+      day.low = day.low === null ? period.temperature : Math.min(day.low, period.temperature);
+    }
+    day.precipitationChance = Math.max(day.precipitationChance ?? 0, period.precipitationChance ?? 0);
   }
   return days;
 }

@@ -47,6 +47,7 @@ type ObservationProperties = {
 type ForecastPeriod = {
   name: string;
   startTime: string;
+  isDaytime: boolean;
   temperature: number;
   temperatureUnit: string;
   shortForecast: string;
@@ -121,14 +122,30 @@ export async function GET(request: Request) {
 
     // Live wins for any date the current NWS feed still has; the archive fills in the dates it's
     // already dropped (typically just yesterday, but the merge covers whatever's missing).
+    //
+    // Andrew, live (2026-08-31): today's card showed "70°/70°" in the evening -- once today's
+    // daytime period rolls out of NWS's own feed (only "Tonight" is left), the old version of this
+    // reducer had no day/night awareness and just echoed that single leftover temperature into BOTH
+    // high and low. Real fix per Andrew: hold onto today's actual high once we've seen it, and only
+    // let a REAL replacement overwrite it -- a missing value should never erase a known one. Two
+    // parts: the reducer below now only ever assigns `high` from an isDaytime period and `low` from
+    // a night period (so an evening-only fetch correctly reports high:null for today, not a fake
+    // echoed value), and the merge just below prefers live's value but falls back to the archive's
+    // whenever live doesn't have one for that field -- so once the archive captured this morning's
+    // real high (the daily cron runs at 8:45am ET, comfortably before today's daytime period drops
+    // out of NWS's feed), the evening view keeps showing it instead of losing it.
     const liveDailyOutlook = reduceForecastPeriodsToDailyOutlook(
-      forecast.properties.periods.map((period) => ({ startTime: period.startTime, temperature: period.temperature, precipitationChance: period.probabilityOfPrecipitation.value, windSpeed: period.windSpeed ?? null, windDirection: period.windDirection ?? null, shortForecast: period.shortForecast })),
+      forecast.properties.periods.map((period) => ({ startTime: period.startTime, temperature: period.temperature, precipitationChance: period.probabilityOfPrecipitation.value, windSpeed: period.windSpeed ?? null, windDirection: period.windDirection ?? null, shortForecast: period.shortForecast, isDaytime: period.isDaytime })),
       selectedLocation.timezone,
     );
     const archivedDailyOutlook = await fetchArchivedOutlook(selectedLocation.id, selectedLocation.timezone);
+    const archivedByDate = new Map(archivedDailyOutlook.map((day) => [day.date, day]));
     const dailyOutlookByDate = new Map<string, DailyOutlookDay>();
     for (const day of archivedDailyOutlook) dailyOutlookByDate.set(day.date, day);
-    for (const day of liveDailyOutlook) dailyOutlookByDate.set(day.date, day);
+    for (const day of liveDailyOutlook) {
+      const archived = archivedByDate.get(day.date);
+      dailyOutlookByDate.set(day.date, { ...day, high: day.high ?? archived?.high ?? null, low: day.low ?? archived?.low ?? null });
+    }
     const dailyOutlook = [...dailyOutlookByDate.values()].sort((a, b) => a.date.localeCompare(b.date));
 
     // 12-hour view, unrelated to radar — sits between the reference-data panel and Radar on the
@@ -199,6 +216,7 @@ export async function GET(request: Request) {
         forecastPeriods: forecast.properties.periods.slice(0, 14).map((period) => ({
           name: period.name,
           startTime: period.startTime,
+          isDaytime: period.isDaytime,
           temperature: period.temperature,
           temperatureUnit: period.temperatureUnit,
           shortForecast: period.shortForecast,
