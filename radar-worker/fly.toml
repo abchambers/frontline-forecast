@@ -38,9 +38,14 @@ primary_region = "iad" # near the us-east-1 S3 buckets this worker reads from.
   # no benefit to a single-request-bound workload like this one — more machines don't relieve
   # per-request CPU throttling).
   #
-  # Below is the ORIGINAL shared-cpu-1x memory-tuning history, kept for context since the same
-  # constraints (2GB ceiling, velocity's extra peak memory, GRID_STEP_DEG's resolution/memory
-  # tradeoff) still apply at this tier too, just with real CPU behind them now instead of throttled:
+  # Memory bumped 2048mb -> 4096mb the same day, ~$10/mo more: the very first live /mosaic test after
+  # the CPU upgrade (3 stations) OOM'd for real — `anon-rss:1812500kB`, right at the old 2GB ceiling —
+  # confirmed via fly logs, not guessed. Fly's own crash recovery caught it and the service restarted
+  # itself within seconds (single-station traffic was never actually down), but a mosaic that can't
+  # reliably finish isn't usable for the fine-tuning pass Andrew wants to do next. Below is the
+  # ORIGINAL shared-cpu-1x memory-tuning history, kept for context since the same underlying
+  # constraints (velocity's extra peak memory, GRID_STEP_DEG's resolution/memory tradeoff) still
+  # apply at this tier too, just with more headroom now and real CPU behind them instead of throttled:
   # 512mb got OS-OOM-killed (137), 1024mb hit V8's own heap-limit abort
   # instead (134). 2gb was the real ceiling for shared-cpu-1x — Fly rejected
   # anything higher on that size class (confirmed live: "invalid
@@ -50,7 +55,7 @@ primary_region = "iad" # near the us-east-1 S3 buckets this worker reads from.
   # meaningfully more peak memory than reflectivity alone) — addressed by
   # pulling GRID_STEP_DEG back one more notch (server.ts) to reduce the
   # candidate-cell count and its memory footprint, not by paying for more
-  # RAM. If this still isn't enough headroom, the real fix is switching
+  # RAM. If a mosaic OOM recurs even at 4gb, the real fix is switching
   # per-cell storage from string-keyed Maps to typed arrays (far lower
   # per-entry overhead) — flagged for later, not attempted at this hour.
-  memory = "2048mb"
+  memory = "4096mb"
