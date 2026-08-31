@@ -74,6 +74,12 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
   // chain can legitimately take 10-30s. Reuses the same `.radar-loading` sweep animation already
   // built for the component-bundle loading state, so both loading moments look consistent.
   const [isDataLoading, setIsDataLoading] = useState(false);
+  // Which stations actually made it into the CURRENTLY SHOWN mosaic composite — not just the
+  // configured set for this radar site, the real one, accounting for a station that failed and got
+  // skipped (see server.ts's per-station failure handling). Drives the station-picker's mosaic-
+  // member highlight below. Cleared whenever the view isn't a live mosaic, so stale highlighting
+  // from a previous location/mode never lingers.
+  const [mosaicMemberStations, setMosaicMemberStations] = useState<string[]>([]);
 
   useEffect(() => {
     if (window.L) setLeafletLoaded(true);
@@ -243,14 +249,20 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       for (const station of stations) {
         if (!bounds.contains([station.latitude, station.longitude])) continue;
         const isActive = station.id === location.radarSite;
+        // Andrew's ask, 2026-08-31: show which stations make up the mosaic the user is actually
+        // looking at, not just in a dev console log — a real, visible answer to "what am I seeing
+        // right now." Uses the REAL current composite's station list (mosaicMemberStations, set
+        // from the mosaic response itself), so a station that failed and got skipped never reads
+        // as included just because it's in the configured set for this site.
+        const isMosaicMember = !isActive && mosaicMemberStations.includes(station.id);
         window.L.circleMarker([station.latitude, station.longitude], {
-          color: isActive ? "#18222f" : "#2667b8",
-          fillColor: isActive ? "#ffffff" : "#5b9bf0",
+          color: isActive ? "#18222f" : isMosaicMember ? "#1f7a4d" : "#2667b8",
+          fillColor: isActive ? "#ffffff" : isMosaicMember ? "#4fbb84" : "#5b9bf0",
           fillOpacity: 0.95,
-          weight: isActive ? 2 : 1.5,
-          radius: isActive ? 7 : 5,
+          weight: isActive ? 2 : isMosaicMember ? 2 : 1.5,
+          radius: isActive ? 7 : isMosaicMember ? 6 : 5,
         })
-          .bindTooltip(`${station.name} (${station.id})`, { direction: "auto" })
+          .bindTooltip(`${station.name} (${station.id})${isMosaicMember ? " — in your local mosaic" : ""}`, { direction: "auto" })
           .on("click", (event: any) => { window.L.DomEvent.stopPropagation(event); onStationSelectRef.current?.(station); })
           .addTo(group);
       }
@@ -276,7 +288,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
     loadAndRender();
     map.on("moveend", loadAndRender);
     return () => { active = false; map.off("moveend", loadAndRender); };
-  }, [leafletLoaded, showStationPicker, location.radarSite]);
+  }, [leafletLoaded, showStationPicker, location.radarSite, mosaicMemberStations]);
 
   const opacityRef = useRef(opacity);
   useEffect(() => { opacityRef.current = opacity; radarLayerRef.current?.setOpacity(opacity); }, [opacity]);
@@ -549,6 +561,10 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
               // is exactly which ones got dropped and why worth checking the worker logs.
               if (data.stations?.length) console.log(`[local mosaic] stations: ${data.stations.join(", ")}`);
               if (data.failedStations?.length) console.warn(`[local mosaic] skipped (failed): ${data.failedStations.join(", ")}`);
+              // Drives the station-picker's mosaic-member highlight — the REAL station list that
+              // made it into this composite, not the configured set, so a station that failed and
+              // got skipped is never shown as highlighted when it isn't actually contributing.
+              if (!cancelled) setMosaicMemberStations(data.stations ?? []);
               addGridLayer(data, "mosaic", renderMrmsGridToDataUrl);
               return true;
             })
@@ -556,7 +572,12 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
         : Promise.resolve(false);
 
       tryMosaic.then((mosaicSettled) => {
-        if (mosaicSettled || cancelled) return;
+        if (cancelled) return;
+        if (mosaicSettled) return;
+        // Not showing a mosaic (preference is "station", or the mosaic attempt above failed) —
+        // clear any highlight left over from a previous location/mode so it never lingers on the
+        // wrong stations.
+        setMosaicMemberStations([]);
         fetch(`/api/radar/nexrad?station=${location.radarSite}`)
           .then(async (response) => {
             if (!response.ok) throw new Error("In-house NEXRAD unavailable");
