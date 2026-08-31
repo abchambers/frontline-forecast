@@ -9,6 +9,15 @@ primary_region = "iad" # near the us-east-1 S3 buckets this worker reads from.
 
 [env]
   PORT = "8080"
+  # Node/V8 doesn't automatically raise its own heap ceiling just because the container got more
+  # RAM (2gb -> 4gb, see the [[vm]] memory comment below) -- it defaults to roughly 1.5GB regardless
+  # of what's actually available, and a mosaic request hit exactly that ceiling live 2026-08-31
+  # (confirmed via fly logs: "JavaScript heap out of memory", exit code 134 -- the same abort this
+  # file already documented happening at the 1024mb container tier, just now recurring at 4096mb
+  # because nothing had ever told V8 to use more of it). 3584mb leaves ~500mb of the 4096mb container
+  # for non-heap memory (native buffers, OS overhead, @napi-rs/canvas's image buffers, which live
+  # outside the V8 heap already).
+  NODE_OPTIONS = "--max-old-space-size=3584"
 
 [http_service]
   internal_port = 8080
