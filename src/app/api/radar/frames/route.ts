@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { fetchFromWorker } from "@/lib/radar-worker-client";
+import { mosaicStationSets } from "@/lib/mosaic-station-sets";
 
 // Iowa Environmental Mesonet's NEXRAD mosaic tile cache — the same NWS/MRMS-standard reflectivity
 // color table used on weather.gov, free and keyless. Past frames are exact minute-offsets of the
@@ -52,8 +53,44 @@ export async function GET(request: Request) {
   // tolerance (that risks misattributing a frame to the wrong time); it's to stop forcing the
   // worker's timeline onto a schedule it was never designed to hit. When the worker has enough of
   // its own history, use ITS real timestamps as the timeline directly instead.
-  const station = new URL(request.url).searchParams.get("station")?.trim().toUpperCase();
+  const { searchParams } = new URL(request.url);
+  const station = searchParams.get("station")?.trim().toUpperCase();
+  // Set by the client whenever radarViewPreference is "mosaic" — mirrors /api/radar/mosaic's own
+  // station-set lookup, since the timeline should reflect whichever source the live view is
+  // actually showing. Found and fixed 2026-08-31: once mosaic became the default LIVE source, the
+  // live view stopped calling the single-station endpoint (which is what fed frameHistory), so a
+  // non-preset station's single-station in-house history never crossed MIN_INHOUSE_FRAMES anymore
+  // and the timeline silently reverted to IEM for every slot. The real fix is retention for the
+  // combo actually being shown (radar-worker/src/server.ts's computeMosaic now calls recordFrame
+  // too), not just falling back to single-station less often.
+  const wantsMosaic = searchParams.get("mosaic") === "1";
+
   if (station && STATION_ID_PATTERN.test(station)) {
+    if (wantsMosaic) {
+      const stationIds = mosaicStationSets[station] ?? [station];
+      const sortedIds = [...stationIds].sort();
+      const mosaicHistory = (await fetchFromWorker(`/frames?stations=${sortedIds.join(",")}`)) as { frames?: { time: string }[] } | null;
+      const inHouseMosaicFrames = (mosaicHistory?.frames ?? [])
+        .map((frame) => ({ ...frame, ms: new Date(frame.time).getTime() }))
+        .filter((frame) => !Number.isNaN(frame.ms))
+        .sort((a, b) => a.ms - b.ms);
+      if (inHouseMosaicFrames.length >= MIN_INHOUSE_FRAMES) {
+        const frames = inHouseMosaicFrames.map((frame) => ({
+          time: Math.floor(frame.ms / 1000),
+          tileUrl: tileUrlFor(nearestIemOffset(Math.round((now - frame.ms) / 60_000))),
+          source: "mosaic" as const,
+          inHouseTime: frame.time,
+        }));
+        return NextResponse.json(
+          { provider: "In-house local mosaic", frames, fetchedAt: new Date().toISOString() },
+          { headers: { "Cache-Control": "public, s-maxage=120, stale-while-revalidate=120" } },
+        );
+      }
+      // Falls through to the single-station check below rather than straight to IEM — a station
+      // whose mosaic combo hasn't retained enough history yet (e.g. right after this feature shipped)
+      // may still have single-station history warm from prewarm or an earlier "station" view.
+    }
+
     const history = (await fetchFromWorker(`/frames?station=${station}`)) as { frames?: { time: string; elevationDeg: number }[] } | null;
     const inHouseFrames = (history?.frames ?? [])
       .map((frame) => ({ ...frame, ms: new Date(frame.time).getTime() }))

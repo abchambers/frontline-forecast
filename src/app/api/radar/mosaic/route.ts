@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { mosaicStationSets } from "@/lib/mosaic-station-sets";
-import { fetchMosaicFromWorker } from "@/lib/radar-worker-client";
+import { fetchMosaicFromWorker, fetchFromWorker } from "@/lib/radar-worker-client";
 
 // A mosaic request decodes several stations sequentially on the worker (measured live:
 // ~14-20s/station on the performance-1x worker) — genuinely slow compared to every other route in
@@ -48,6 +48,7 @@ export async function GET(request: Request) {
 
   const { searchParams } = new URL(request.url);
   const station = searchParams.get("station")?.trim().toUpperCase();
+  const time = searchParams.get("time");
   if (!station || !STATION_ID_PATTERN.test(station)) {
     return NextResponse.json({ error: "A valid radar station ID is required, e.g. KFFC." }, { status: 400 });
   }
@@ -56,8 +57,24 @@ export async function GET(request: Request) {
   // never happen for a real WSR-88D site, but a station this app doesn't recognize yet shouldn't
   // 400 — it degrades to a one-station "mosaic", which the worker handles fine).
   const stationIds = mosaicStationSets[station] ?? [station];
+  const sortedIds = [...stationIds].sort();
 
-  const cacheKey = [...stationIds].sort().join(",");
+  // A specific past frame — only ever served from the worker's own retained mosaic-combo history
+  // (radar-worker/src/server.ts's frameHistory, now tracked per station-SET the same way it was
+  // already tracked per single station — see mosaicKey there). No local fallback exists here, same
+  // as /api/radar/nexrad's own past-frame branch: a miss (worker unreachable, this exact combo
+  // never retained a frame at this time, or it's aged out) is a normal, expected case — the client
+  // already knows to fall back to the single-station past frame, then the provider tile, for this
+  // timeline slot.
+  if (time) {
+    const fromWorker = await fetchFromWorker(`/frame?stations=${sortedIds.join(",")}&time=${encodeURIComponent(time)}`);
+    if (fromWorker) {
+      return NextResponse.json(fromWorker, { headers: { "Cache-Control": "public, max-age=300, immutable", "X-Radar-Source": "worker" } });
+    }
+    return NextResponse.json({ error: "That past mosaic frame is not available in-house." }, { status: 404 });
+  }
+
+  const cacheKey = sortedIds.join(",");
   const cached = cache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     return NextResponse.json(cached.data, { headers: { "Cache-Control": "private, max-age=60", "X-Radar-Source": "cache" } });

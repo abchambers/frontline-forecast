@@ -19,13 +19,26 @@ import { renderMrmsGridToDataUrl, renderVelocityGridToDataUrl } from "./render.j
 // can't assume a small fixed station set). Worst case is a small, fixed, predictable
 // ~MAX_STATIONS_TRACKED * MAX_FRAMES_PER_STATION * 2MB (~96MB) regardless of how many distinct
 // stations get requested over the worker's lifetime.
+//
+// Shares this exact same map/eviction pool with mosaic combos (see mosaicKey below) rather than a
+// separate tracked set — a real user is looking at either a single station's history or one mosaic
+// combo's history at a time, never both, so splitting the budget would just make each half smaller
+// for no benefit. A mosaic combo's key can never collide with a plain station ID (it's always
+// several comma-joined IDs, a station ID never contains a comma).
 const MAX_FRAMES_PER_STATION = 12;
 const RETENTION_WINDOW_MS = 2 * 60 * 60 * 1000;
 const MAX_STATIONS_TRACKED = 4;
 
-type FramePayload = { time: string; elevationDeg: number; [key: string]: unknown };
+type FramePayload = { time: string; elevationDeg?: number; [key: string]: unknown };
 const frameHistory = new Map<string, FramePayload[]>();
 const stationLastTouched = new Map<string, number>();
+
+// A mosaic composite has no single elevation angle (each member station contributes its own lowest
+// tilt), so its retained frames just omit elevationDeg (FramePayload above made it optional for
+// exactly this case) rather than inventing a misleading placeholder value.
+function mosaicKey(stations: string[]) {
+  return [...stations].sort().join(",");
+}
 
 function recordFrame(station: string, payload: FramePayload) {
   const now = Date.now();
@@ -404,6 +417,13 @@ async function computeMosaic(stations: string[], cacheKey: string) {
     source: `NEXRAD Level II mosaic (${succeededStations.join(", ")})`,
   };
   setCache(cacheKey, payload, MOSAIC_CACHE_TTL_MS);
+  // Retained under the ORIGINALLY REQUESTED combo (a site's fixed, configured station set), not
+  // succeededStations — that key is stable across requests (matches exactly what the app will ask
+  // for again via mosaicKey), whereas succeededStations can jitter run to run whenever one member
+  // has a transient failure, which would fragment history across many near-duplicate keys and make
+  // it much slower to ever cross MIN_INHOUSE_FRAMES. A frame retained under a transient partial
+  // failure is the same tradeoff the live mosaic already accepts (degrade gracefully, don't refuse).
+  recordFrame(mosaicKey(stations), payload);
   return { status: 200, body: payload, source: "live" as const };
 }
 
@@ -441,14 +461,52 @@ const server = createServer((request, response) => {
     return;
   }
 
+  // /frames and /frame each accept EITHER a single `station` (existing single-station history) OR
+  // a `stations` list (a mosaic combo's retained history, keyed exactly like computeMosaic's own
+  // recordFrame call above via mosaicKey) — special-cased here, ahead of the generic single-station
+  // routing below, for the same reason /mosaic is: a `stations` list can't share that block's
+  // single-ID validation.
+  if (url.pathname === "/frames" || url.pathname === "/frame") {
+    const stationsParam = url.searchParams.get("stations");
+    let key: string;
+    if (stationsParam) {
+      const stations = [...new Set(stationsParam.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean))];
+      if (stations.length === 0) {
+        respondJson(400, { error: "At least one station is required, e.g. ?stations=KFFC,KJGX." });
+        return;
+      }
+      for (const s of stations) {
+        if (!STATION_ID_PATTERN.test(s)) {
+          respondJson(400, { error: `Invalid station ID: ${s}` });
+          return;
+        }
+      }
+      key = mosaicKey(stations);
+    } else {
+      const station = url.searchParams.get("station")?.trim().toUpperCase();
+      if (!station || !STATION_ID_PATTERN.test(station)) {
+        respondJson(400, { error: "A valid radar station ID is required, e.g. KFFC." });
+        return;
+      }
+      key = station;
+    }
+
+    const promise = url.pathname === "/frames" ? handleFrameHistory(key) : handleFrame(key, url.searchParams.get("time"));
+    promise
+      .then((result) => respondJson(result.status, result.body, { "X-Radar-Source": result.source }))
+      .catch((error: unknown) => {
+        console.error(`[${url.pathname}] request failed:`, error);
+        respondJson(502, { error: error instanceof Error ? error.message : "Radar worker request failed." });
+      });
+    return;
+  }
+
   const station = url.searchParams.get("station")?.trim().toUpperCase();
 
   const routes: Record<string, (station: string) => Promise<{ status: number; body: unknown; source: "cache" | "live" }>> = {
     "/reflectivity": (s) => handleReflectivityOrVelocity(s, "reflectivity"),
     "/velocity": (s) => handleReflectivityOrVelocity(s, "velocity"),
     "/severe": (s) => handleSevere(s),
-    "/frames": (s) => handleFrameHistory(s),
-    "/frame": (s) => handleFrame(s, url.searchParams.get("time")),
   };
 
   const handler = routes[url.pathname];
