@@ -16,7 +16,7 @@ type RadarStationSummary = { id: string; name: string; latitude: number; longitu
 // product/tilt/time readout, RadarScope-style, instead of just the color-scale legend.
 export type RadarFrameMeta = { elevationDeg: number | null; observedAt: string | null } | null;
 
-type RadarMapProps = { opacity?: number; showReflectivity?: boolean; moment?: "reflectivity" | "velocity"; showAlerts?: boolean; showOutlook?: boolean; outlookDay?: 1 | 2; showSevereMarkers?: boolean; showStationPicker?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; inHouseFrameTime?: string | null; forceProvider?: boolean; theme?: "light" | "dark"; scrollZoom?: boolean; prefetchTileUrls?: string[]; prefetchNexradTimes?: string[]; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string }; onSourceChange?: (source: "nexrad" | "provider" | null) => void; onFrameMeta?: (meta: RadarFrameMeta) => void; onStationSelect?: (station: RadarStationSummary) => void; onMapClick?: () => void };
+type RadarMapProps = { opacity?: number; showReflectivity?: boolean; moment?: "reflectivity" | "velocity"; showAlerts?: boolean; showOutlook?: boolean; outlookDay?: 1 | 2; showSevereMarkers?: boolean; showStationPicker?: boolean; refreshToken?: number; recenterToken?: number; timelineTileUrl?: string | null; isCurrentFrame?: boolean; inHouseFrameTime?: string | null; forceProvider?: boolean; radarViewMode?: "mosaic" | "station"; theme?: "light" | "dark"; scrollZoom?: boolean; prefetchTileUrls?: string[]; prefetchNexradTimes?: string[]; location: { id: string; name: string; latitude: number; longitude: number; radarSite: string }; onSourceChange?: (source: "nexrad" | "mosaic" | "provider" | null) => void; onFrameMeta?: (meta: RadarFrameMeta) => void; onStationSelect?: (station: RadarStationSummary) => void; onMapClick?: () => void };
 
 // Andrew, live (2026-08-26): CARTO stopped serving these keylessly — tiles still return a normal
 // 200, but every one now has "API KEY REQUIRED" stamped across it (confirmed by downloading a live
@@ -34,7 +34,7 @@ const basemapTiles = {
   dark: { url: `https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png${cartoKeyParam}`, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
 };
 
-export default function RadarMap({ opacity = 0.72, showReflectivity = true, moment = "reflectivity", showAlerts = true, showOutlook = false, outlookDay = 1, showSevereMarkers = false, showStationPicker = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, isCurrentFrame = true, inHouseFrameTime = null, forceProvider = false, theme = "light", scrollZoom = false, prefetchTileUrls, prefetchNexradTimes, location, onSourceChange, onFrameMeta, onStationSelect, onMapClick }: RadarMapProps) {
+export default function RadarMap({ opacity = 0.72, showReflectivity = true, moment = "reflectivity", showAlerts = true, showOutlook = false, outlookDay = 1, showSevereMarkers = false, showStationPicker = false, refreshToken = 0, recenterToken = 0, timelineTileUrl = null, isCurrentFrame = true, inHouseFrameTime = null, forceProvider = false, radarViewMode = "mosaic", theme = "light", scrollZoom = false, prefetchTileUrls, prefetchNexradTimes, location, onSourceChange, onFrameMeta, onStationSelect, onMapClick }: RadarMapProps) {
   const mapElement = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const baseLayerRef = useRef<any>(null);
@@ -384,7 +384,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
     // already invisible the instant the new one settles) — kept short rather than zero only so a
     // stray render in flight has no chance to touch a layer that's mid-removal.
     const CROSSFADE_MS = 50;
-    const settle = (nextLayer: any, source: "nexrad" | "provider", meta: RadarFrameMeta = null) => {
+    const settle = (nextLayer: any, source: "nexrad" | "mosaic" | "provider", meta: RadarFrameMeta = null) => {
       if (settled || cancelled) return;
       settled = true;
       setIsDataLoading(false);
@@ -407,7 +407,9 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
         const attributionControl = mapRef.current.attributionControl;
         const nextAttribution = source === "nexrad"
           ? "Radar: in-house NEXRAD Level II"
-          : 'Radar: <a href="https://mesonet.agron.iastate.edu/" target="_blank">Iowa Environmental Mesonet</a>';
+          : source === "mosaic"
+            ? "Radar: in-house NEXRAD Level II (local mosaic)"
+            : 'Radar: <a href="https://mesonet.agron.iastate.edu/" target="_blank">Iowa Environmental Mesonet</a>';
         if (radarAttributionRef.current !== nextAttribution) {
           if (radarAttributionRef.current) attributionControl.removeAttribution(radarAttributionRef.current);
           attributionControl.addAttribution(nextAttribution);
@@ -453,7 +455,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
     // breaking the map.
     function addGridLayer(
       data: { imageDataUrl?: string; points?: MrmsPoint[]; bounds: MrmsBounds; step: number; elevationDeg?: number; time?: string },
-      source: "nexrad",
+      source: "nexrad" | "mosaic",
       renderer: typeof renderMrmsGridToDataUrl,
     ) {
       const dataUrl = data.imageDataUrl ?? (data.points ? renderer(data.points, data.bounds, data.step) : null);
@@ -525,17 +527,39 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       // just quietly reverts to what was already working. No metered third-party API sits in
       // between anymore — see the in-house-nexrad-radar project notes for why GribStream was
       // dropped entirely rather than kept as a middle fallback.
-      fetch(`/api/radar/nexrad?station=${location.radarSite}`)
-        .then(async (response) => {
-          if (!response.ok) throw new Error("In-house NEXRAD unavailable");
-          const data = await response.json() as { imageDataUrl?: string; points?: MrmsPoint[]; bounds: MrmsBounds; step: number; elevationDeg?: number; time?: string };
-          addGridLayer(data, "nexrad", renderMrmsGridToDataUrl);
-        })
-        .catch(() => { if (!cancelled) addProviderLayer(); });
+      // Andrew's call 2026-08-31: the local mosaic (multi-station composite, radar-worker's
+      // /mosaic) is now the default live view, not the single station. Tried FIRST here, ahead of
+      // the single-station fetch below — on any failure (worker unreachable, cold-start too slow,
+      // no coverage near this location) this falls through to the exact same single-station-then-
+      // provider chain that already existed, unchanged. Deliberately scoped to the live/current
+      // frame only — no scrubbable mosaic timeline exists yet, and won't fire for velocity (no
+      // mosaic equivalent) or the "IEM mosaic" forced-provider preference (a different, existing
+      // concept — an external national composite, not this app's own multi-station render).
+      const tryMosaic = radarViewMode === "mosaic"
+        ? fetch(`/api/radar/mosaic?lat=${location.latitude}&lon=${location.longitude}`)
+            .then(async (response) => {
+              if (!response.ok) throw new Error("Local mosaic unavailable");
+              const data = await response.json() as { imageDataUrl?: string; bounds: MrmsBounds; step: number; time?: string };
+              addGridLayer(data, "mosaic", renderMrmsGridToDataUrl);
+              return true;
+            })
+            .catch(() => false)
+        : Promise.resolve(false);
+
+      tryMosaic.then((mosaicSettled) => {
+        if (mosaicSettled || cancelled) return;
+        fetch(`/api/radar/nexrad?station=${location.radarSite}`)
+          .then(async (response) => {
+            if (!response.ok) throw new Error("In-house NEXRAD unavailable");
+            const data = await response.json() as { imageDataUrl?: string; points?: MrmsPoint[]; bounds: MrmsBounds; step: number; elevationDeg?: number; time?: string };
+            addGridLayer(data, "nexrad", renderMrmsGridToDataUrl);
+          })
+          .catch(() => { if (!cancelled) addProviderLayer(); });
+      });
     }
 
     return () => { cancelled = true; };
-  }, [leafletLoaded, showReflectivity, moment, refreshToken, timelineTileUrl, isCurrentFrame, inHouseFrameTime, forceProvider, location]);
+  }, [leafletLoaded, showReflectivity, moment, refreshToken, timelineTileUrl, isCurrentFrame, inHouseFrameTime, forceProvider, radarViewMode, location]);
 
   return (
     <>

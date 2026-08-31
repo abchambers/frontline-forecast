@@ -74,3 +74,53 @@ function recordFailure() {
     consecutiveFailures = 0;
   }
 }
+
+// Separate timeout + circuit breaker from fetchFromWorker above, on purpose — a mosaic request
+// decodes several stations sequentially in one call (measured live: ~14-20s/station on the
+// performance-1x worker, so a 4-station default mosaic can genuinely take a minute), an entirely
+// different latency budget than a single-station call. Sharing the 15s single-station timeout
+// would make every mosaic request fail before it could ever finish; sharing the same circuit
+// breaker state would let a few slow (not actually broken) mosaic calls incorrectly trip the
+// breaker for ordinary single-station traffic too.
+const MOSAIC_TIMEOUT_MS = 90_000;
+const MOSAIC_FAILURE_THRESHOLD = 3;
+const MOSAIC_COOLDOWN_MS = 60_000;
+let mosaicConsecutiveFailures = 0;
+let mosaicCircuitOpenUntil = 0;
+
+export async function fetchMosaicFromWorker(stations: string[]): Promise<unknown | null> {
+  if (!WORKER_URL) return null;
+  if (Date.now() < mosaicCircuitOpenUntil) return null;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), MOSAIC_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${WORKER_URL}/mosaic?stations=${stations.join(",")}`, {
+      headers: WORKER_API_KEY ? { "x-worker-key": WORKER_API_KEY } : {},
+      signal: controller.signal,
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      console.error(`radar-worker-client: /mosaic returned ${response.status}`);
+      recordMosaicFailure();
+      return null;
+    }
+    mosaicConsecutiveFailures = 0;
+    mosaicCircuitOpenUntil = 0;
+    return await response.json();
+  } catch (error) {
+    console.error(`radar-worker-client: /mosaic failed —`, error instanceof Error ? error.message : error);
+    recordMosaicFailure();
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function recordMosaicFailure() {
+  mosaicConsecutiveFailures += 1;
+  if (mosaicConsecutiveFailures >= MOSAIC_FAILURE_THRESHOLD) {
+    mosaicCircuitOpenUntil = Date.now() + MOSAIC_COOLDOWN_MS;
+    mosaicConsecutiveFailures = 0;
+  }
+}
