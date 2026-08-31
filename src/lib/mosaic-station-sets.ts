@@ -56,7 +56,7 @@ export const mosaicStationSets: Record<string, string[]> = {
   KFCX: ["KFCX", "KRLX", "KRAX", "KJKL"],
   KFDR: ["KFDR", "KTLX", "KDYX", "KFWS"],
   KFDX: ["KFDX", "KAMA", "KLBB", "KHDX"],
-  KFFC: ["KFFC", "KJGX", "KMXX", "KBMX"],
+  KFFC: ["KFFC", "KJGX", "KMXX", "KBMX", "KGSP"],
   KFSD: ["KFSD", "KABR", "KOAX", "KMPX"],
   KFSX: ["KFSX", "KIWA", "KEMX", "KESX"],
   KFTG: ["KFTG", "KPUX", "KCYS", "KGLD"],
