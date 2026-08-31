@@ -13,7 +13,12 @@ import { computeStormRelativeVelocityGrid } from "@/lib/nexrad/level3";
 // URL for manual verification; add a Data-layer picker entry only once
 // someone has actually reviewed the output.
 const GRID_STEP_DEG = 0.01;
-const MAX_RANGE_KM = 230;
+// Matches nexrad/route.ts's own 230km -> 460km increase, 2026-08-31 — see that file's comment for
+// the real cell-count math (~210,000 at this resolution, well under mrms-render.ts's 500,000-cell
+// cap) and radar-worker/src/server.ts for why 460km is the right target (real NEXRAD super-res
+// range). This route is unshipped/unlinked from the UI, so there's no live-traffic urgency, but no
+// reason to leave it on the old, now-inconsistent range either.
+const MAX_RANGE_KM = 460;
 const CACHE_TTL_MS = 90_000;
 
 type CacheEntry = { data: unknown; expiresAt: number };

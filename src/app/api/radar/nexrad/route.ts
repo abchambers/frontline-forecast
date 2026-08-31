@@ -25,12 +25,17 @@ export const maxDuration = 30;
 // needed yet. A streaming worker (radar-worker/) is the planned upgrade path
 // once traffic or latency requirements outgrow this.
 const GRID_STEP_DEG = 0.01; // finer than GribStream's 0.05deg MRMS grid, closer to native Level II resolution.
-// Cropped well inside super-res reflectivity's real ~460km max range — at
-// full range this grid blows past mrms-render.ts's 500,000-cell safety cap
-// and silently fails to render (found live: every request fell back to
-// GribStream because of exactly this). 230km also matches a sensible local
-// "your nearest station" viewing radius rather than the full detection range.
-const MAX_RANGE_KM = 230;
+// Raised 230km -> 460km, 2026-08-31, to match radar-worker/src/server.ts's own range increase (see
+// that file's history) — this route is only the RARE local fallback exercised when the worker
+// itself is unreachable, but a user who happens to hit it shouldn't see a smaller, inconsistent
+// range than the primary path. The old 230km comment here assumed this would "blow past
+// mrms-render.ts's 500,000-cell safety cap" at full range, but that was never actually checked
+// against real numbers: at this route's own GRID_STEP_DEG=0.01 (coarser than the worker's 0.006),
+// 460km's bounding box is ~505 x 415 =~ 210,000 cells — well under the 500k cap, still with real
+// margin. Compute cost at this resolution is a small fraction of the worker's own measured 460km
+// numbers (868ms sample time at 0.006deg — see server.ts), so this stays comfortably inside
+// maxDuration=30 even on a cold request.
+const MAX_RANGE_KM = 460;
 const CACHE_TTL_MS = 90_000; // roughly matches real volume-scan cadence; avoids re-decoding on every request.
 
 type CacheEntry = { data: unknown; expiresAt: number };
