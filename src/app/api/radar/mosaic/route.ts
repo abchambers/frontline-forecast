@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
-import { resolveWeatherDeskLocation } from "@/lib/locations";
-import { getRadarStations, nearestStations } from "@/lib/nexrad-stations";
+import { mosaicStationSets } from "@/lib/mosaic-station-sets";
 import { fetchMosaicFromWorker } from "@/lib/radar-worker-client";
 
 // A mosaic request decodes several stations sequentially on the worker (measured live:
@@ -13,40 +12,46 @@ import { fetchMosaicFromWorker } from "@/lib/radar-worker-client";
 // not to retry a local mosaic build.
 export const maxDuration = 60;
 
-// Default station count for the automatic mosaic view. Andrew's call (2026-08-31): mosaic is now
-// the default for everyone, not an opt-in — that means every cold request pays this cost, so this
-// stays smaller than the worker's own MAX_MOSAIC_STATIONS=8 cap. 4 nearest stations gave a real
-// ~40s cold response in testing; wider coverage is available by asking for more via `count`, but
-// that's a deliberate tradeoff against latency for the automatic default, tunable later.
-const DEFAULT_STATION_COUNT = 4;
-const MAX_STATION_COUNT = 8;
-
+// Andrew's call 2026-08-31: mosaic composition is keyed by radar SITE, not by the requester's raw
+// lat/lon. The app already has an authoritative "which radar site is yours" answer for every
+// location (NWS's own point lookup, see /api/location-lookup and the preset weatherDeskLocations —
+// both resolve a real radarSite already) — this route just looks up THAT site's own configured
+// mosaic station set (src/lib/mosaic-station-sets.ts) rather than re-deriving nearest-by-distance
+// from scratch. Two real advantages over the lat/lon version this replaced: (1) every location
+// resolves through the SAME finite set of 159 real sites, so the station list is hand-editable per
+// site (a Georgia site can deliberately include an Alabama station upstream, even if it isn't the
+// closest by raw distance) instead of being locked to whatever a distance formula produces for an
+// arbitrary point; (2) many different users near the same radar site now request the EXACT same
+// station combination, so they share the worker's cache instead of each producing a slightly
+// different combination that rarely hits the same cache entry.
 const CACHE_TTL_MS = 90_000; // roughly matches the worker's own 5-minute cache with margin to spare, just avoids a redundant network hop on rapid reloads.
 type CacheEntry = { data: unknown; expiresAt: number };
 const cache = new Map<string, CacheEntry>();
+
+const STATION_ID_PATTERN = /^[A-Z0-9]{3,5}$/;
 
 export async function GET(request: Request) {
   const limit = checkRateLimit(request, "radar-mosaic", 10, 60_000);
   if (limit.limited) return rateLimitResponse(limit.retryAfterSeconds);
 
   const { searchParams } = new URL(request.url);
-  const location = resolveWeatherDeskLocation(searchParams);
-  const requestedCount = Number(searchParams.get("count"));
-  const count = Number.isFinite(requestedCount) && requestedCount > 0 ? Math.min(requestedCount, MAX_STATION_COUNT) : DEFAULT_STATION_COUNT;
+  const station = searchParams.get("station")?.trim().toUpperCase();
+  if (!station || !STATION_ID_PATTERN.test(station)) {
+    return NextResponse.json({ error: "A valid radar station ID is required, e.g. KFFC." }, { status: 400 });
+  }
+
+  // Falls back to just the single station alone if it's somehow not in the generated table (should
+  // never happen for a real WSR-88D site, but a station this app doesn't recognize yet shouldn't
+  // 400 — it degrades to a one-station "mosaic", which the worker handles fine).
+  const stationIds = mosaicStationSets[station] ?? [station];
+
+  const cacheKey = [...stationIds].sort().join(",");
+  const cached = cache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return NextResponse.json(cached.data, { headers: { "Cache-Control": "private, max-age=60", "X-Radar-Source": "cache" } });
+  }
 
   try {
-    const allStations = await getRadarStations();
-    const nearest = nearestStations(location.latitude, location.longitude, allStations, count);
-    if (!nearest.length) {
-      return NextResponse.json({ error: "No radar coverage found near this location." }, { status: 404 });
-    }
-    const stationIds = nearest.map((station) => station.id);
-    const cacheKey = [...stationIds].sort().join(",");
-    const cached = cache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
-      return NextResponse.json(cached.data, { headers: { "Cache-Control": "private, max-age=60", "X-Radar-Source": "cache" } });
-    }
-
     const fromWorker = await fetchMosaicFromWorker(stationIds);
     if (!fromWorker) {
       return NextResponse.json({ error: "The local mosaic is unavailable right now." }, { status: 502 });

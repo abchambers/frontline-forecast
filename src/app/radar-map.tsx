@@ -536,7 +536,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       // mosaic equivalent) or the "IEM mosaic" forced-provider preference (a different, existing
       // concept — an external national composite, not this app's own multi-station render).
       const tryMosaic = radarViewMode === "mosaic"
-        ? fetch(`/api/radar/mosaic?lat=${location.latitude}&lon=${location.longitude}`)
+        ? fetch(`/api/radar/mosaic?station=${location.radarSite}`)
             .then(async (response) => {
               if (!response.ok) throw new Error("Local mosaic unavailable");
               const data = await response.json() as { imageDataUrl?: string; bounds: MrmsBounds; step: number; time?: string; stations?: string[] };
