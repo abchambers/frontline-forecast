@@ -82,7 +82,13 @@ function recordFailure() {
 // would make every mosaic request fail before it could ever finish; sharing the same circuit
 // breaker state would let a few slow (not actually broken) mosaic calls incorrectly trip the
 // breaker for ordinary single-station traffic too.
-const MOSAIC_TIMEOUT_MS = 90_000;
+//
+// Raised 2026-08-31 alongside /api/radar/mosaic's maxDuration=200 — this needs to stay BELOW that
+// route timeout so this timeout (which degrades cleanly to a 502 + circuit breaker) is what
+// actually fires on a genuinely slow worker, not Vercel abruptly killing the whole function first.
+// 150s covers the worker's own MAX_MOSAIC_STATIONS=8 cap at ~20s/station (~160s worst case) with a
+// bit of margin; if a site's station set ever grows large enough to need more, raise both together.
+const MOSAIC_TIMEOUT_MS = 150_000;
 const MOSAIC_FAILURE_THRESHOLD = 3;
 const MOSAIC_COOLDOWN_MS = 60_000;
 let mosaicConsecutiveFailures = 0;

@@ -10,7 +10,19 @@ import { fetchMosaicFromWorker } from "@/lib/radar-worker-client";
 // isn't something a single serverless invocation can reasonably build itself, so a worker failure
 // here is a real 502, and the client's job is to fall back to the existing single-station view,
 // not to retry a local mosaic build.
-export const maxDuration = 60;
+//
+// Found and fixed 2026-08-31 while explaining this route's real limits: this was set to 60s
+// assuming Vercel's Hobby-plan ceiling was still short, but Hobby now allows up to 300s (checked
+// live against Vercel's own docs, not assumed) -- and worse, the worker-client's own
+// MOSAIC_TIMEOUT_MS is 90s, LONGER than the 60s this route was giving itself, so Vercel would have
+// killed the whole function before the worker-client's own timeout+circuit-breaker logic ever got
+// a chance to respond cleanly. That was already a real risk at today's 4-station default on a
+// slow/cold request, not something that only mattered if more stations get added later. Set to
+// comfortably exceed MOSAIC_TIMEOUT_MS (radar-worker-client.ts) so THAT timeout is always what
+// actually fires on a genuinely slow worker, not Vercel's own abrupt kill -- keep the two in sync
+// if either changes. Worst case at the worker's own 8-station cap (~20s/station): ~160s: 200s
+// leaves real margin, still well inside Hobby's 300s ceiling.
+export const maxDuration = 200;
 
 // Andrew's call 2026-08-31: mosaic composition is keyed by radar SITE, not by the requester's raw
 // lat/lon. The app already has an authoritative "which radar site is yours" answer for every
