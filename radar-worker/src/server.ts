@@ -345,40 +345,63 @@ async function computeMosaic(stations: string[], cacheKey: string) {
   const t0 = performance.now();
   const merged = new Map<string, number | null>();
   const perStationMs: string[] = [];
+  const succeededStations: string[] = [];
+  const failedStations: string[] = [];
 
   // Sequential, one station in flight at a time — same MAX_CONCURRENT_COMPUTE=1 invariant as every
   // other route, just spread across several stations instead of one. See the block comment above
   // this function for why that's the deliberate, safe choice on the CURRENT small machine.
+  //
+  // Each station is caught individually (2026-08-31, real incident): a single station failing for
+  // ANY reason (a transient NWS metadata timeout, an S3 hiccup, a bad/missing volume) used to fail
+  // the WHOLE mosaic request, even when every other station in the list would have succeeded fine —
+  // found live via a real "Request to .../radar/stations/KMXX timed out after 10000ms" that took
+  // down an otherwise-healthy 4-station mosaic. A multi-station composite has more surface area for
+  // exactly this kind of single-point failure than a single-station request ever did, so it needs
+  // to degrade gracefully: skip the failed station, keep going, and render whatever succeeded.
   for (const station of stations) {
     const stationStart = performance.now();
-    const [site, volume] = await Promise.all([getRadarSite(station), getVolumeCached(station)]);
-    const elevation = extractLowestElevation(volume.radar, "reflectivity");
-    let correlationCoefficient;
     try {
-      correlationCoefficient = extractLowestElevation(volume.radar, "correlationCoefficient");
-    } catch {
-      correlationCoefficient = undefined;
+      const [site, volume] = await Promise.all([getRadarSite(station), getVolumeCached(station)]);
+      const elevation = extractLowestElevation(volume.radar, "reflectivity");
+      let correlationCoefficient;
+      try {
+        correlationCoefficient = extractLowestElevation(volume.radar, "correlationCoefficient");
+      } catch {
+        correlationCoefficient = undefined;
+      }
+      const candidateCells = buildCandidateCells(site, GRID_STEP_DEG, MAX_RANGE_KM);
+      const { grid } = computeReflectivityGrid(elevation, site, GRID_STEP_DEG, MAX_RANGE_KM, correlationCoefficient, candidateCells);
+      mergeReflectivityCells(merged, grid, GRID_STEP_DEG);
+      succeededStations.push(station);
+      perStationMs.push(`${station}=${((performance.now() - stationStart) / 1000).toFixed(1)}s`);
+    } catch (error) {
+      failedStations.push(station);
+      perStationMs.push(`${station}=FAILED(${((performance.now() - stationStart) / 1000).toFixed(1)}s)`);
+      console.error(`[mosaic:${stations.join(",")}] station ${station} failed, continuing with the rest —`, error instanceof Error ? error.message : error);
     }
-    const candidateCells = buildCandidateCells(site, GRID_STEP_DEG, MAX_RANGE_KM);
-    const { grid } = computeReflectivityGrid(elevation, site, GRID_STEP_DEG, MAX_RANGE_KM, correlationCoefficient, candidateCells);
-    mergeReflectivityCells(merged, grid, GRID_STEP_DEG);
-    perStationMs.push(`${station}=${((performance.now() - stationStart) / 1000).toFixed(1)}s`);
   }
+
+  if (!succeededStations.length) throw new Error(`Every station in [${stations.join(",")}] failed — no mosaic coverage available.`);
 
   const mergedPoints = cellsToGrid(merged, GRID_STEP_DEG);
   const bounds = boundsOf(mergedPoints);
   const imageDataUrl = renderMrmsGridToDataUrl(mergedPoints, bounds, GRID_STEP_DEG);
   if (!imageDataUrl) throw new Error(`No mosaic coverage available for [${stations.join(",")}].`);
 
-  console.log(`[mosaic:${stations.join(",")}] ${perStationMs.join(" ")}, total ${((performance.now() - t0) / 1000).toFixed(1)}s`);
+  console.log(`[mosaic:${stations.join(",")}] ${perStationMs.join(" ")}, total ${((performance.now() - t0) / 1000).toFixed(1)}s${failedStations.length ? ` (${failedStations.length} station(s) skipped: ${failedStations.join(",")})` : ""}`);
 
   const payload = {
     time: new Date().toISOString(),
     bounds,
     step: GRID_STEP_DEG,
     imageDataUrl,
-    stations,
-    source: `NEXRAD Level II mosaic (${stations.join(", ")})`,
+    // Reflects what's ACTUALLY in the composite, not the originally-requested list — a caller
+    // relying on this (e.g. the dev console.log of which stations went into a mosaic) should never
+    // be told a station contributed when it silently failed and got skipped.
+    stations: succeededStations,
+    failedStations: failedStations.length ? failedStations : undefined,
+    source: `NEXRAD Level II mosaic (${succeededStations.join(", ")})`,
   };
   setCache(cacheKey, payload, MOSAIC_CACHE_TTL_MS);
   return { status: 200, body: payload, source: "live" as const };

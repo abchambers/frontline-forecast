@@ -539,12 +539,16 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
         ? fetch(`/api/radar/mosaic?station=${location.radarSite}`)
             .then(async (response) => {
               if (!response.ok) throw new Error("Local mosaic unavailable");
-              const data = await response.json() as { imageDataUrl?: string; bounds: MrmsBounds; step: number; time?: string; stations?: string[] };
+              const data = await response.json() as { imageDataUrl?: string; bounds: MrmsBounds; step: number; time?: string; stations?: string[]; failedStations?: string[] };
               // Dev-only visibility into which stations actually went into this composite — Andrew's
               // explicit ask, 2026-08-31: not a site feature, just a way to know what's being pulled
               // in while watching a real storm blend across station boundaries. console.log rather
               // than any UI element on purpose, since it's not meant to ship as a visible feature.
+              // `stations` only ever lists stations that actually succeeded (the worker skips a
+              // failed one rather than failing the whole request) — `failedStations`, when present,
+              // is exactly which ones got dropped and why worth checking the worker logs.
               if (data.stations?.length) console.log(`[local mosaic] stations: ${data.stations.join(", ")}`);
+              if (data.failedStations?.length) console.warn(`[local mosaic] skipped (failed): ${data.failedStations.join(", ")}`);
               addGridLayer(data, "mosaic", renderMrmsGridToDataUrl);
               return true;
             })
