@@ -107,7 +107,21 @@ function recordFrame(station: string, payload: FramePayload) {
 //     way to avoid the library's eager full-volume parse — not another
 //     resolution cut.
 const GRID_STEP_DEG = 0.006;
-const MAX_RANGE_KM = 230;
+// Raised 230km -> 460km, 2026-08-31, after the fly.toml performance-1x + 4096mb upgrade (Andrew's
+// own call, done the same day, see that file's history) removed the two real constraints that had
+// kept this at 230km: shared-cpu-1x's CPU throttling (the actual root cause of the 60-210s
+// severe-weather decode incidents, not raw compute cost — see fly.toml) and the 2GB memory ceiling
+// Fly enforces on that size class. 230km was never a rendering-quality choice, it was "as far as we
+// could safely go on that tier" — real NEXRAD super-res base reflectivity actually resolves out to
+// ~460km (248nm), which is what RadarScope shows (confirmed live: KGSP reaching the Atlantic coast,
+// ~310km away, was invisible here at the old 230km cutoff even though the data exists).
+// Measured real cost of this change on live KGSP data before deploying: candidate cells 455k -> 1.82M
+// (4x, as expected from the range^2 scaling in buildCandidateCells), sample compute 331ms -> 868ms —
+// still well under a second per station, and MOSAIC_TIMEOUT_MS (radar-worker-client.ts, 150s) has
+// enormous headroom even at MAX_MOSAIC_STATIONS=8 stations each paying this cost. If a real OOM
+// recurs at this range even on the upgraded tier (check via fly logs, same as every past incident
+// here), the fix is typed-array cell storage (flagged in fly.toml's own history), not reverting this.
+const MAX_RANGE_KM = 460;
 // Raised alongside level2.ts's VOLUME_CACHE_TTL_MS (90s -> 5min) — same real
 // incident, same reasoning: during active severe weather the volume parse
 // this payload is built from can itself take 60-210+ seconds, independent
