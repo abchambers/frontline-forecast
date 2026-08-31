@@ -25,13 +25,26 @@ primary_region = "iad" # near the us-east-1 S3 buckets this worker reads from.
     path = "/health"
 
 [[vm]]
-  size = "shared-cpu-1x"
+  size = "performance-1x"
+  # Upgraded from shared-cpu-1x 2026-08-31 (Andrew's explicit go-ahead, ~$32.19/mo) specifically to
+  # unblock the /mosaic endpoint (server.ts) — real measurement showed shared-cpu-1x's CPU quota
+  # (5ms per 80ms window, ~6.25% of a core) was the actual cause of the documented 60-210s
+  # severe-weather decode incident below, not that severe volumes are inherently much heavier to
+  # parse (see radar-worker/scripts/severe-weather-latency.ts: real EF4-producing volumes decoded in
+  # 5-9s on unthrottled hardware). A single mosaic request decodes several stations sequentially
+  # within one request, so every one of them needed real CPU, not just more machines — see the app's
+  # own memory/backlog notes for the full cost investigation before changing this again. Scaled the
+  # app down to 1 machine first (a 2nd shared-cpu-1x machine had been running unexplained, providing
+  # no benefit to a single-request-bound workload like this one — more machines don't relieve
+  # per-request CPU throttling).
+  #
+  # Below is the ORIGINAL shared-cpu-1x memory-tuning history, kept for context since the same
+  # constraints (2GB ceiling, velocity's extra peak memory, GRID_STEP_DEG's resolution/memory
+  # tradeoff) still apply at this tier too, just with real CPU behind them now instead of throttled:
   # 512mb got OS-OOM-killed (137), 1024mb hit V8's own heap-limit abort
-  # instead (134). 2gb is the real ceiling for shared-cpu-1x — Fly rejects
-  # anything higher on this size class (confirmed live: "invalid
-  # config.guest.memory_mb, cannot exceed 2048 MiB"); going bigger means
-  # upgrading to a paid `performance` tier, a real recurring cost increase
-  # not authorized to make unilaterally. A genuine OOM recurred on the
+  # instead (134). 2gb was the real ceiling for shared-cpu-1x — Fly rejected
+  # anything higher on that size class (confirmed live: "invalid
+  # config.guest.memory_mb, cannot exceed 2048 MiB"). A genuine OOM recurred on the
   # velocity path at 2gb (anon-rss 1.8GB, killed — velocity holds
   # reflectivity + CC + velocity Map<string,...> structures simultaneously,
   # meaningfully more peak memory than reflectivity alone) — addressed by
