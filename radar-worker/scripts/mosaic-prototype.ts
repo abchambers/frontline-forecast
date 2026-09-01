@@ -16,7 +16,7 @@
 import fs from "node:fs";
 import { getRadarSite } from "../src/site.js";
 import { getVolumeCached, extractLowestElevation } from "../src/level2.js";
-import { computeReflectivityGrid, buildCandidateCells, cellsToGrid, boundsOf, mergeReflectivityCells } from "../src/project.js";
+import { computeReflectivityGrid, buildCandidateCells, boundsOf, mergeReflectivityCells, makeSharedMergeGrid, sharedMergeGridToPoints } from "../src/project.js";
 import { renderMrmsGridToDataUrl } from "../src/render.js";
 import type { MrmsPoint } from "../src/types.js";
 
@@ -49,16 +49,19 @@ async function main() {
     if (rss > peakRss) peakRss = rss;
   }, MEMORY_SAMPLE_MS);
 
-  const merged = new Map<string, number | null>();
   const perStation: { station: string; ms: number; cells: number; rssAfter: number }[] = [];
   const runStart = performance.now();
 
-  for (const station of STATIONS) {
+  const sites = await Promise.all(STATIONS.map((station) => getRadarSite(station)));
+  const merged = makeSharedMergeGrid(sites, GRID_STEP_DEG, MAX_RANGE_KM);
+
+  for (let i = 0; i < STATIONS.length; i++) {
+    const station = STATIONS[i];
+    const site = sites[i];
     const stationStart = performance.now();
     const rssBefore = process.memoryUsage().rss;
     console.log(`[${station}] starting — RSS before: ${mb(rssBefore)}`);
 
-    const site = await getRadarSite(station);
     const { radar } = await getVolumeCached(station);
     const reflectivity = extractLowestElevation(radar, "reflectivity");
     let correlationCoefficient;
@@ -82,7 +85,7 @@ async function main() {
   clearInterval(sampler);
   const totalMs = performance.now() - runStart;
 
-  const mergedPoints: MrmsPoint[] = cellsToGrid(merged, GRID_STEP_DEG);
+  const mergedPoints: MrmsPoint[] = sharedMergeGridToPoints(merged, GRID_STEP_DEG);
   const nonNullCount = mergedPoints.filter((p) => p.dbz !== null).length;
   const bounds = boundsOf(mergedPoints);
 

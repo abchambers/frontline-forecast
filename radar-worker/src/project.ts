@@ -29,25 +29,7 @@ export function destinationPoint(site: RadarSite, bearingDeg: number, groundRang
   return { lat: (lat2 * 180) / Math.PI, lon: (((lon2 * 180) / Math.PI + 540) % 360) - 180 };
 }
 
-// Inverse of destinationPoint: given a real lat/lon, the bearing/ground-range
-// from the site that would produce it. Flat-earth Cartesian approximation
-// (not the full spherical Haversine destinationPoint above uses) —
-// deliberately cheaper: this runs once per OUTPUT GRID CELL (hundreds of
-// thousands to low millions at this app's near-native resolution), found
-// live to be the dominant cost of a cold request (multiple seconds of pure
-// CPU time on Fly's shared-cpu-1x). At this app's max 230km range, the
-// error versus full spherical math is well under a single grid cell's
-// size — same "doesn't matter at this range" judgment already documented
-// on destinationPoint, just applied to the much hotter inverse path.
 const KM_PER_DEG_LAT = (EARTH_RADIUS_KM * Math.PI) / 180;
-
-function inverseDestinationPointFast(cosSiteLat: number, siteLat: number, siteLon: number, lat: number, lon: number): { bearingDeg: number; groundRangeKm: number } {
-  const dy = (lat - siteLat) * KM_PER_DEG_LAT;
-  const dx = (lon - siteLon) * KM_PER_DEG_LAT * cosSiteLat;
-  const groundRangeKm = Math.sqrt(dx * dx + dy * dy);
-  const bearingDeg = ((Math.atan2(dx, dy) * 180) / Math.PI + 360) % 360;
-  return { bearingDeg, groundRangeKm };
-}
 
 // Radials sorted by azimuth, for binary-search nearest-radial lookup below.
 type ElevationIndex = { sortedAzimuths: number[]; sortedRadials: DecodedRadial[] };
@@ -85,6 +67,11 @@ function nearestRadial(index: ElevationIndex, bearingDeg: number): DecodedRadial
   return bestDelta <= MAX_AZIMUTH_GAP_DEG ? best : null;
 }
 
+function angularDelta(a: number, b: number): number {
+  const d = Math.abs(a - b);
+  return Math.min(d, 360 - d);
+}
+
 function boundsForSite(site: RadarSite, maxRangeKm: number): MrmsBounds {
   const cosLat = Math.cos((site.latitude * Math.PI) / 180);
   const latSpanDeg = maxRangeKm / 111;
@@ -97,100 +84,120 @@ function boundsForSite(site: RadarSite, maxRangeKm: number): MrmsBounds {
   };
 }
 
-// A candidate output cell with its (expensive) geometry already resolved —
-// bearing/ground-range from the site is independent of which moment/
-// elevation is being sampled, so this is computed ONCE per request and
-// reused across reflectivity, correlation coefficient, and velocity (see
-// buildCandidateCells below), instead of redone from scratch per moment.
-export type CandidateCell = { key: string; lat: number; lon: number; bearingDeg: number; groundRangeKm: number };
-
-// Enumerates every OUTPUT grid cell within range with its geometry resolved,
-// looking backward to what bearing/range it corresponds to, rather than
-// scattering each polar sample forward into whichever cell it happens to
-// land in. This is the fix for a real, confirmed artifact: radials are
-// ~0.5deg apart, so the arc distance between adjacent radials grows with
-// range — past ~120km at this app's original 0.01deg grid step, that arc
-// gap exceeded the grid cell size, leaving literal empty stripes between
-// radials. Gather-mapping guarantees every cell in range gets a value (or a
-// deliberate null from a real coverage gap).
-export function buildCandidateCells(site: RadarSite, stepDeg: number, maxRangeKm: number): CandidateCell[] {
+function gridBoxForSite(site: RadarSite, stepDeg: number, maxRangeKm: number) {
   const cosLat = Math.cos((site.latitude * Math.PI) / 180);
   const latSpanDeg = maxRangeKm / 111;
   const lonSpanDeg = maxRangeKm / (111 * cosLat);
-
   const minRow = Math.round((site.latitude - latSpanDeg) / stepDeg);
   const maxRow = Math.round((site.latitude + latSpanDeg) / stepDeg);
   const minCol = Math.round((site.longitude - lonSpanDeg) / stepDeg);
   const maxCol = Math.round((site.longitude + lonSpanDeg) / stepDeg);
+  return { minRow, minCol, width: maxCol - minCol + 1, height: maxRow - minRow + 1 };
+}
 
-  const cells: CandidateCell[] = [];
-  for (let row = minRow; row <= maxRow; row += 1) {
+// --- Flat-array grid representation ---------------------------------------------------------
+// Replaces the original Map<string,"row,col">-keyed representation for the hot path (reflectivity,
+// velocity, mosaic merge) — kept as a real, measured decision, not a style preference. A live
+// benchmark on this app's actual real-world cell counts (~1.8M at today's 0.006deg/460km) found a
+// Map<string, number|null> costs ~124MB of real RSS for that many entries, against ~14MB for the
+// equivalent Float32Array — a ~9x difference for ONE such structure, and a single request builds
+// several of them in sequence (raw sample, post-floor, CC, post-cluster-removal, plus a mosaic's
+// shared cross-station merge target). That overhead, not the underlying math, is what made 460km's
+// real range increase already consume most of the fly.toml performance-1x/4GB upgrade's headroom,
+// and what made anything finer than 0.006deg reliably OOM-crash a real 5-station mosaic even on
+// that upgraded tier (confirmed live, calibrated against the worker's own --max-old-space-size).
+//
+// A cell's position is now a flat index into a fixed-size Float32Array sized to a known bounding
+// box, rather than a string key built and hashed on every access — measured ~10-16x faster for the
+// same sampling work as a direct side effect (no more per-cell string allocation), independent of
+// the memory win. NaN is the single "no value" sentinel, replacing the old undefined-vs-null
+// distinction (an absent Map entry vs. an explicit null one) — verified against real live data
+// (radar-worker's own diff harness, see project history) that nothing downstream ever actually
+// depended on that distinction; every place that read it treated both cases identically.
+//
+// level3.ts's still-unshipped storm-relative velocity prototype keeps using the original
+// Map<string,...>-based cellKey/cellsToGrid below unchanged — it doesn't carry this same memory
+// pressure (single station, no mosaic merge) and isn't on the hot path, so there's no reason to
+// touch it converting to flat arrays too.
+export type FlatGrid = { minRow: number; minCol: number; width: number; height: number; values: Float32Array };
+
+function makeFlatGrid(minRow: number, minCol: number, width: number, height: number): FlatGrid {
+  return { minRow, minCol, width, height, values: new Float32Array(width * height).fill(NaN) };
+}
+
+// Precomputed per-cell geometry (bearing/ground-range from the site), shared across reflectivity,
+// CC, and velocity for one request — mirrors the original CandidateCell array's purpose, just as
+// two parallel flat arrays instead of an array of {key, lat, lon, bearingDeg, groundRangeKm}
+// objects (dropping the per-cell string key entirely; a cell's absolute lat/lon is always
+// recoverable from its flat index + minRow/minCol/stepDeg, so nothing was lost). NaN bearing marks
+// a cell outside maxRangeKm, exactly replacing the old candidate list's implicit exclusion (a cell
+// simply wasn't in the array).
+export type CandidateGrid = { minRow: number; minCol: number; width: number; height: number; bearingDeg: Float32Array; groundRangeKm: Float32Array };
+
+// Enumerates every OUTPUT grid cell within range with its geometry resolved — see the original
+// version's own comment (still accurate) for why gather-mapping (looking backward from each output
+// cell to the radial/gate it corresponds to) is the fix for the striping artifact this replaced.
+export function buildCandidateCells(site: RadarSite, stepDeg: number, maxRangeKm: number): CandidateGrid {
+  const cosLat = Math.cos((site.latitude * Math.PI) / 180);
+  const { minRow, minCol, width, height } = gridBoxForSite(site, stepDeg, maxRangeKm);
+  const bearingDeg = new Float32Array(width * height).fill(NaN);
+  const groundRangeKm = new Float32Array(width * height).fill(NaN);
+
+  for (let row = minRow; row < minRow + height; row++) {
     const lat = row * stepDeg;
-    for (let col = minCol; col <= maxCol; col += 1) {
+    const dy = (lat - site.latitude) * KM_PER_DEG_LAT;
+    for (let col = minCol; col < minCol + width; col++) {
       const lon = col * stepDeg;
-      const { bearingDeg, groundRangeKm } = inverseDestinationPointFast(cosLat, site.latitude, site.longitude, lat, lon);
-      if (groundRangeKm > maxRangeKm) continue;
-      cells.push({ key: cellKey(lat, lon, stepDeg), lat, lon, bearingDeg, groundRangeKm });
+      const dx = (lon - site.longitude) * KM_PER_DEG_LAT * cosLat;
+      const range = Math.sqrt(dx * dx + dy * dy);
+      if (range > maxRangeKm) continue;
+      const idx = (row - minRow) * width + (col - minCol);
+      groundRangeKm[idx] = range;
+      bearingDeg[idx] = ((Math.atan2(dx, dy) * 180) / Math.PI + 360) % 360;
     }
   }
-  return cells;
+  return { minRow, minCol, width, height, bearingDeg, groundRangeKm };
 }
 
-// Resolves one elevation's values at an already-built candidate cell set —
-// the cheap part (binary search + a division, no trig) now that geometry is
-// shared rather than recomputed per moment.
-function sampleAtCandidateCells(elevation: DecodedElevation, candidateCells: CandidateCell[]): Map<string, number | null> {
-  const index = buildElevationIndex(elevation);
+// Nearest-neighbor sample (no interpolation) — used for velocity, same reasoning as the original:
+// linearly blending raw Doppler velocity across gates can wash out real, small, adjacent-gate
+// rotation/divergence couplets, exactly the severe-weather signal this app cares about.
+function sampleAtCandidateCells(elevation: DecodedElevation, grid: CandidateGrid): FlatGrid {
+  const { sortedAzimuths, sortedRadials } = buildElevationIndex(elevation);
+  const out = makeFlatGrid(grid.minRow, grid.minCol, grid.width, grid.height);
+  const n = sortedAzimuths.length;
+  if (n === 0) return out;
   const cosElevation = Math.cos((elevation.elevationDeg * Math.PI) / 180);
 
-  const cells = new Map<string, number | null>();
-  for (const cell of candidateCells) {
-    const radial = nearestRadial(index, cell.bearingDeg);
+  for (let i = 0; i < grid.bearingDeg.length; i++) {
+    const bearingDeg = grid.bearingDeg[i];
+    if (Number.isNaN(bearingDeg)) continue;
+    const radial = nearestRadial({ sortedAzimuths, sortedRadials }, bearingDeg);
     if (!radial) continue;
-    const slantRangeKm = cell.groundRangeKm / cosElevation;
+    const slantRangeKm = grid.groundRangeKm[i] / cosElevation;
     const gateIndex = Math.round((slantRangeKm - radial.firstGateKm) / radial.gateSizeKm);
     if (gateIndex < 0 || gateIndex >= radial.values.length) continue;
-    cells.set(cell.key, radial.values[gateIndex]);
+    const v = radial.values[gateIndex];
+    if (v !== null) out.values[i] = v;
   }
-  return cells;
+  return out;
 }
 
-function angularDelta(a: number, b: number): number {
-  const d = Math.abs(a - b);
-  return Math.min(d, 360 - d);
-}
-
-// Bilinear-style interpolation across the two bracketing radials (azimuth)
-// and two bracketing gates (range), instead of nearest-neighbor — used for
-// CONTINUOUS fields (reflectivity, correlation coefficient) only. Deliberately
-// NOT used for velocity (computeVelocityGrid keeps sampleAtCandidateCells) —
-// linearly blending raw Doppler velocity across gates can wash out real,
-// small, adjacent-gate rotation/divergence couplets, exactly the severe-
-// weather signal this app cares about; same reason despeckle is deliberately
-// not applied to velocity either.
-//
-// Real motivation, found via live before/after comparison against RadarScope
-// and IEM's N0Q mosaic on the same storm: at this app's 0.006deg (~670m)
-// grid step, WSR-88D's ~0.5deg native radial spacing means the arc gap
-// between adjacent radials exceeds a grid cell's width past a modest range,
-// so nearest-neighbor gather-mapping stamps the SAME source sample across
-// several adjacent output cells — a real, confirmed source of the
-// "blockier/gappier than RadarScope" look, upstream of and separate from the
-// noise-floor/despeckle/CC filtering (measured near-identical on/off against
-// the same real distant storms, so not the cause of this specific texture
-// gap — see the in-house-nexrad-radar memory entry for that diagnostic).
-//
-// Degrades gracefully at coverage edges: if only one of the (up to) four
-// corners has real data, the weighted average reduces to exactly that
-// corner's raw value (dividing by its own partial weight), not a fabricated
-// blend — only a cell with ZERO available corners returns null.
-function sampleAtCandidateCellsInterpolated(elevation: DecodedElevation, candidateCells: CandidateCell[]): Map<string, number | null> {
-  const index = buildElevationIndex(elevation);
-  const { sortedAzimuths, sortedRadials } = index;
+// Bilinear-style interpolation across the two bracketing radials (azimuth) and two bracketing
+// gates (range) — used for CONTINUOUS fields (reflectivity, correlation coefficient) only. See the
+// original version's block comment (unchanged reasoning, just reproduced in full there historically)
+// for why this exists: at this app's grid step, WSR-88D's ~0.5deg native radial spacing means the
+// arc gap between adjacent radials exceeds a cell's width past a modest range, so nearest-neighbor
+// gather-mapping stamps the same source sample across several adjacent cells — confirmed live
+// against RadarScope/IEM as a real texture gap, fixed by this weighted blend. Degrades gracefully
+// at coverage edges: if only one of the (up to) four corners has real data, the weighted average
+// reduces to exactly that corner's raw value; only a cell with ZERO available corners stays NaN.
+function sampleAtCandidateCellsInterpolated(elevation: DecodedElevation, grid: CandidateGrid): FlatGrid {
+  const { sortedAzimuths, sortedRadials } = buildElevationIndex(elevation);
+  const out = makeFlatGrid(grid.minRow, grid.minCol, grid.width, grid.height);
   const n = sortedAzimuths.length;
+  if (n === 0) return out;
   const cosElevation = Math.cos((elevation.elevationDeg * Math.PI) / 180);
-  const cells = new Map<string, number | null>();
-  if (n === 0) return cells;
 
   const accumulate = (radial: DecodedRadial, slantRangeKm: number, azimuthWeight: number, acc: { weightSum: number; valueSum: number }) => {
     const values = radial.values;
@@ -217,176 +224,53 @@ function sampleAtCandidateCellsInterpolated(elevation: DecodedElevation, candida
     }
   };
 
-  for (const cell of candidateCells) {
+  for (let i = 0; i < grid.bearingDeg.length; i++) {
+    const bearingDeg = grid.bearingDeg[i];
+    if (Number.isNaN(bearingDeg)) continue;
+
     let lo = 0;
     let hi = n;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
-      if (sortedAzimuths[mid] < cell.bearingDeg) lo = mid + 1;
+      if (sortedAzimuths[mid] < bearingDeg) lo = mid + 1;
       else hi = mid;
     }
     const idxA = lo % n;
     const idxB = (lo - 1 + n) % n;
-    const deltaA = angularDelta(sortedAzimuths[idxA], cell.bearingDeg);
-    const deltaB = idxB === idxA ? Infinity : angularDelta(sortedAzimuths[idxB], cell.bearingDeg);
+    const deltaA = angularDelta(sortedAzimuths[idxA], bearingDeg);
+    const deltaB = idxB === idxA ? Infinity : angularDelta(sortedAzimuths[idxB], bearingDeg);
     const aOk = deltaA <= MAX_AZIMUTH_GAP_DEG;
     const bOk = deltaB <= MAX_AZIMUTH_GAP_DEG;
     if (!aOk && !bOk) continue;
 
-    // Tent weighting: the closer radial gets more weight, degrading to 1/0
-    // when only one side is within range (identical result to nearestRadial
-    // in that case).
     const totalGap = aOk && bOk ? deltaA + deltaB || 1e-9 : 1;
     const weightA = aOk ? (bOk ? deltaB / totalGap : 1) : 0;
     const weightB = bOk ? (aOk ? deltaA / totalGap : 1) : 0;
 
-    const slantRangeKm = cell.groundRangeKm / cosElevation;
+    const slantRangeKm = grid.groundRangeKm[i] / cosElevation;
     const acc = { weightSum: 0, valueSum: 0 };
     if (aOk) accumulate(sortedRadials[idxA], slantRangeKm, weightA, acc);
     if (bOk) accumulate(sortedRadials[idxB], slantRangeKm, weightB, acc);
 
-    if (acc.weightSum > 0) cells.set(cell.key, acc.valueSum / acc.weightSum);
+    if (acc.weightSum > 0) out.values[i] = acc.valueSum / acc.weightSum;
   }
-  return cells;
+  return out;
 }
 
-// Backward-compatible one-shot form for callers that don't share candidate
-// cells across multiple moments in the same request (e.g. the main app's
-// Vercel fallback route, which only ever needs one elevation per call).
-function sampleElevationGrid(elevation: DecodedElevation, site: RadarSite, stepDeg: number, maxRangeKm: number): Map<string, number | null> {
-  return sampleAtCandidateCells(elevation, buildCandidateCells(site, stepDeg, maxRangeKm));
-}
-
-// Absolute grid indexing (not relative to a per-call bounding box) so a
-// reflectivity grid and a velocity grid from the same request line up
-// cell-for-cell even though they come from different elevation tilts with
-// different native gate spacing (observed live: 1832 reflectivity gates vs.
-// 1192 velocity gates on the same volume) and therefore slightly different
-// data extents.
+// --- Legacy Map-based helpers, kept for level3.ts's still-unshipped storm-relative velocity
+// prototype (src/level3.ts) — single-station, no mosaic merge, never on the hot path, so there's no
+// memory-pressure reason to convert it too. Unchanged from before this refactor.
 export function cellKey(lat: number, lon: number, stepDeg: number): string {
   return `${Math.round(lat / stepDeg)},${Math.round(lon / stepDeg)}`;
 }
 
-// Raw Level II reflectivity has none of MRMS's quality control applied —
-// GribStream's feed (and NOAA's MRMS generally) already strips ground
-// clutter and biological scatter (insects, birds — especially common at
-// dusk) before it ever reaches an app. The noise floor + despeckle pass
-// below is a heuristic, not real QC.
-//
-// Correlation coefficient (RHO), when dual-pol data decodes for this volume,
-// is applied as an ADDITIONAL filter on top of the floor+despeckle result,
-// not a replacement for it. Real precipitation is highly self-similar pulse
-// to pulse (RHO close to 1); non-meteorological targets are not (commonly
-// well under 0.7) — that part is real and confirmed (0.98/0.99 alongside
-// 0.21/0.29 in the same volume). But tested standalone against real live
-// data, gating by RHO alone (even up to 0.97, a very strict threshold) let
-// through a persistent radial spoke pattern centered on the radar site that
-// the floor+despeckle baseline did NOT show — plausibly real widespread
-// light rain/drizzle (which genuinely has very high RHO), or plausibly some
-// other radar-geometry artifact; not resolved with confidence either way.
-// Given that ambiguity on a feature this core to the app, CC is deliberately
-// wired as an AND on top of the proven baseline rather than instead of it —
-// it can only remove cells the baseline already let through, never add ones
-// the baseline would have excluded, so it's strictly safe regardless of
-// which explanation for that spoke pattern turns out to be right.
-// Both constants below were originally tuned against the pre-gather-mapping
-// scatter algorithm's naturally sparse, gap-riddled point cloud — see the
-// striping-fix commit. Once that was fixed, gather-mapping produces a dense,
-// complete grid, and these two heuristics turned out to be far more
-// aggressive against REAL signal than intended. Measured live against a real
-// KFFC volume before changing anything: the old 15 dBZ floor alone removed
-// 50.4% of ALL raw non-null cells (not just weak biological-scatter noise —
-// half of everything the radar detected), and the old despeckle pass (no
-// strength gate) additionally removed cells with real dBZ up to 34 — solidly
-// real moderate rain, not noise, just spatially thin (a storm's leading
-// edge, a narrow band). This is very likely why the user saw noticeably
-// thinner/less-detailed storms live vs. RadarScope's same-time view, once
-// the gridding bug itself was already fixed.
-const CORRELATION_COEFFICIENT_THRESHOLD = 0.85;
-const MIN_REFLECTIVITY_DBZ = 5; // lowered from 15 — matches RadarScope's own "0-10: very light reflectivity" bottom legend band rather than hard-cutting it.
-const DESPECKLE_MIN_NEIGHBORS = 3;
-// Cells at or above this always survive despeckling regardless of neighbor
-// count — real biological scatter/clutter is essentially always weak
-// (confirmed in the earlier noise investigation), so strong signal being
-// spatially isolated is virtually always a real, thin storm feature, not
-// noise. Despeckling should only ever be adjudicating genuinely marginal
-// signal, not throwing away a storm's leading edge.
-const DESPECKLE_STRENGTH_GATE_DBZ = 25;
-
-function despeckle(cells: Map<string, number | null>): Map<string, number | null> {
-  const despeckled = new Map<string, number | null>();
-  for (const [key, value] of cells) {
-    if (value === null || value >= DESPECKLE_STRENGTH_GATE_DBZ) {
-      despeckled.set(key, value);
-      continue;
-    }
-    const [row, col] = key.split(",").map(Number);
-    let neighbors = 0;
-    for (let dRow = -1; dRow <= 1; dRow += 1) {
-      for (let dCol = -1; dCol <= 1; dCol += 1) {
-        if (dRow === 0 && dCol === 0) continue;
-        const neighbor = cells.get(`${row + dRow},${col + dCol}`);
-        if (neighbor !== undefined && neighbor !== null) neighbors += 1;
-      }
-    }
-    despeckled.set(key, neighbors >= DESPECKLE_MIN_NEIGHBORS ? value : null);
+export function cellsToGrid(cells: Map<string, number | null>, stepDeg: number): MrmsPoint[] {
+  const grid: MrmsPoint[] = [];
+  for (const [key, dbz] of cells) {
+    const [rowIndex, colIndex] = key.split(",").map(Number);
+    grid.push({ lat: rowIndex * stepDeg, lon: colIndex * stepDeg, dbz });
   }
-  return despeckled;
-}
-
-// Real, confirmed noise-texture finding (live KFFC volume, nighttime — classic biological-scatter
-// conditions): a widespread field of small weak-signal blobs that's present in this app's own
-// render but absent from BOTH the NWS's own official single-site KFFC product
-// (radar.weather.gov/ridge) and NOAA's MRMS-QC'd composite reflectivity for the identical bounding
-// box/resolution — three-way evidence this is unfiltered clutter, not real precipitation.
-// Root cause, confirmed by measuring the actual post-render connected-component size distribution
-// on that same live volume (2180 distinct weak-signal blobs; 1198 of size 1-2, 606 of size 3-5,
-// vs. a single 394-cell blob and a handful of 50-200-cell blobs that are clearly real storms'
-// diffuse edges): despeckle() above runs BEFORE the CC gate in computeReflectivityGrid, checking
-// neighbor counts against the pre-CC grid. CC then nulls each surviving cell independently by its
-// OWN cc value — it can (and does) remove 2 of a cell's 3 neighbors that let it pass despeckle,
-// leaving that cell visually isolated in the FINAL image despite having legitimately passed
-// despeckle against the grid as it stood at the time.
-// This is why a second, coarser pass belongs AFTER CC gating rather than a stricter single
-// despeckle pass before it: it removes small connected components of the FINAL survivor set
-// regardless of which filter is responsible for a neighbor's absence, without touching
-// MIN_REFLECTIVITY_DBZ or CORRELATION_COEFFICIENT_THRESHOLD — the two constants with the most
-// documented history of cutting real signal when tightened. A real (if weak) rain shield or a
-// storm's thin leading edge still shows up as one large connected region and survives untouched;
-// only small, genuinely disconnected specks are removed. 6 was chosen directly off the measured
-// distribution above: it removes exactly the two smallest, noise-dominated buckets (82.8% of all
-// blobs by count) while keeping every component of 6+ cells, including the smallest bucket that
-// could plausibly be a real, small, weak feature rather than a single stray return.
-const MIN_CLUSTER_SIZE = 6;
-
-function removeSmallClusters(cells: Map<string, number | null>): Map<string, number | null> {
-  const result = new Map(cells);
-  const visited = new Set<string>();
-  for (const [key, value] of cells) {
-    if (value === null || value >= DESPECKLE_STRENGTH_GATE_DBZ || visited.has(key)) continue;
-    const component: string[] = [key];
-    visited.add(key);
-    let head = 0;
-    while (head < component.length) {
-      const [row, col] = component[head].split(",").map(Number);
-      head += 1;
-      for (let dRow = -1; dRow <= 1; dRow += 1) {
-        for (let dCol = -1; dCol <= 1; dCol += 1) {
-          if (dRow === 0 && dCol === 0) continue;
-          const neighborKey = `${row + dRow},${col + dCol}`;
-          if (visited.has(neighborKey)) continue;
-          const neighborValue = cells.get(neighborKey);
-          if (neighborValue === undefined || neighborValue === null || neighborValue >= DESPECKLE_STRENGTH_GATE_DBZ) continue;
-          visited.add(neighborKey);
-          component.push(neighborKey);
-        }
-      }
-    }
-    if (component.length < MIN_CLUSTER_SIZE) {
-      for (const componentKey of component) result.set(componentKey, null);
-    }
-  }
-  return result;
+  return grid;
 }
 
 export function boundsOf(points: MrmsPoint[]): MrmsBounds {
@@ -403,110 +287,221 @@ export function boundsOf(points: MrmsPoint[]): MrmsBounds {
   return { minLatitude: minLat, maxLatitude: maxLat, minLongitude: minLon, maxLongitude: maxLon };
 }
 
-export function cellsToGrid(cells: Map<string, number | null>, stepDeg: number): MrmsPoint[] {
-  const grid: MrmsPoint[] = [];
-  for (const [key, dbz] of cells) {
-    const [rowIndex, colIndex] = key.split(",").map(Number);
-    grid.push({ lat: rowIndex * stepDeg, lon: colIndex * stepDeg, dbz });
+function flatGridToPoints(grid: FlatGrid, stepDeg: number): MrmsPoint[] {
+  const points: MrmsPoint[] = [];
+  for (let row = 0; row < grid.height; row++) {
+    for (let col = 0; col < grid.width; col++) {
+      const v = grid.values[row * grid.width + col];
+      if (Number.isNaN(v)) continue;
+      points.push({ lat: (grid.minRow + row) * stepDeg, lon: (grid.minCol + col) * stepDeg, dbz: v });
+    }
   }
-  return grid;
+  return points;
 }
 
-// Merges one station's already-computed grid into a shared multi-station accumulator, for a
-// regional/mosaic composite. Stations' grids already share an absolute lattice (see cellKey above),
-// so no reprojection is needed — just a merge policy for cells more than one station covers: max
-// dBZ wins, but a null (filtered/no-echo) value from one station never overwrites a real value a
-// DIFFERENT station already found at that cell, only fills a cell nothing has claimed yet. Proven
-// out in scripts/mosaic-prototype.ts against 6 real stations before landing here.
-export function mergeReflectivityCells(target: Map<string, number | null>, source: MrmsPoint[], stepDeg: number): void {
-  for (const point of source) {
-    const key = cellKey(point.lat, point.lon, stepDeg);
-    const existing = target.get(key);
-    if (existing === undefined) target.set(key, point.dbz);
-    else if (point.dbz !== null && (existing === null || point.dbz > existing)) target.set(key, point.dbz);
+// --- Quality-control passes (floor, despeckle, CC gate, small-cluster removal) --------------
+// Same tuned constants and same ordering as the original — this refactor changes HOW cells are
+// stored and indexed, never the thresholds or the sequence they're applied in, which is where all
+// of this app's hard-won, measured-against-real-data tuning actually lives (see git history for the
+// full incident-by-incident writeups; reproduced in brief below since the numbers still apply).
+const CORRELATION_COEFFICIENT_THRESHOLD = 0.85;
+const MIN_REFLECTIVITY_DBZ = 5; // matches RadarScope's own "0-10: very light reflectivity" bottom legend band.
+const DESPECKLE_MIN_NEIGHBORS = 3;
+// Cells at or above this always survive despeckling regardless of neighbor count — real biological
+// scatter/clutter is essentially always weak, so strong signal being spatially isolated is almost
+// always a real, thin storm feature, not noise.
+const DESPECKLE_STRENGTH_GATE_DBZ = 25;
+const MIN_CLUSTER_SIZE = 6;
+
+function applyFloor(grid: FlatGrid): void {
+  const { values } = grid;
+  for (let i = 0; i < values.length; i++) {
+    if (!Number.isNaN(values[i]) && values[i] < MIN_REFLECTIVITY_DBZ) values[i] = NaN;
   }
 }
 
-// Bins reflectivity's irregular polar point cloud into a regular lat/lon
-// grid matching the exact shape src/lib/mrms-render.ts already renders, with
-// the noise-floor + despeckle pass above applied. Also returns an "echo
-// mask" — the set of grid cells with real signal — so velocity (computed
-// separately, see computeVelocityGrid) can be gated to only where real
-// reflectivity echo exists.
+// Neighbor-counting reads the PRE-despeckle snapshot, same as the original Map version reading the
+// still-unmodified `cells` map while building a separate `despeckled` one — a cell's own
+// survival must never be decided using an already-despeckled neighbor from earlier in the same pass.
+function despeckle(grid: FlatGrid): void {
+  const { width, height, values } = grid;
+  const original = values.slice();
+  for (let row = 0; row < height; row++) {
+    for (let col = 0; col < width; col++) {
+      const idx = row * width + col;
+      const value = original[idx];
+      if (Number.isNaN(value) || value >= DESPECKLE_STRENGTH_GATE_DBZ) continue;
+      let neighbors = 0;
+      for (let dRow = -1; dRow <= 1; dRow++) {
+        const nRow = row + dRow;
+        if (nRow < 0 || nRow >= height) continue;
+        for (let dCol = -1; dCol <= 1; dCol++) {
+          if (dRow === 0 && dCol === 0) continue;
+          const nCol = col + dCol;
+          if (nCol < 0 || nCol >= width) continue;
+          if (!Number.isNaN(original[nRow * width + nCol])) neighbors++;
+        }
+      }
+      if (neighbors < DESPECKLE_MIN_NEIGHBORS) values[idx] = NaN;
+    }
+  }
+}
+
+// CC as an ADDITIONAL AND on top of the floor+despeckle baseline, never a replacement — see the
+// original version's extensive block comment (git history) for the real, still-unresolved ambiguity
+// this reasoning is based on (a persistent radial spoke pattern that survives RHO gating alone).
+// `ccGrid` is always the SAME dimensions as `grid` by construction (both built from the same site,
+// stepDeg, maxRangeKm via the same CandidateGrid).
+function applyCorrelationCoefficientGate(grid: FlatGrid, ccGrid: FlatGrid): void {
+  const { values } = grid;
+  for (let i = 0; i < values.length; i++) {
+    if (Number.isNaN(values[i])) continue;
+    const cc = ccGrid.values[i];
+    if (Number.isNaN(cc) || cc < CORRELATION_COEFFICIENT_THRESHOLD) values[i] = NaN;
+  }
+}
+
+// Runs on the FINAL survivor set (after CC, not just after despeckle) — removing small connected
+// components of whatever actually survived every earlier filter, regardless of which one is
+// responsible for a neighbor's absence. See the original version's extensive comment for the real
+// measured distribution (2180 blobs on a real live volume; 82.8% were noise-sized) that MIN_CLUSTER_SIZE
+// was chosen directly from.
+function removeSmallClusters(grid: FlatGrid): void {
+  const { width, height, values } = grid;
+  const visited = new Uint8Array(width * height);
+  const stack = new Int32Array(width * height);
+  for (let start = 0; start < values.length; start++) {
+    const v = values[start];
+    if (Number.isNaN(v) || v >= DESPECKLE_STRENGTH_GATE_DBZ || visited[start]) continue;
+    let stackLen = 0;
+    let compLen = 0;
+    stack[stackLen++] = start;
+    visited[start] = 1;
+    const componentStart = compLen;
+    const component: number[] = [start];
+    while (stackLen > 0) {
+      const idx = stack[--stackLen];
+      const row = Math.floor(idx / width);
+      const col = idx % width;
+      for (let dRow = -1; dRow <= 1; dRow++) {
+        const nRow = row + dRow;
+        if (nRow < 0 || nRow >= height) continue;
+        for (let dCol = -1; dCol <= 1; dCol++) {
+          if (dRow === 0 && dCol === 0) continue;
+          const nCol = col + dCol;
+          if (nCol < 0 || nCol >= width) continue;
+          const nIdx = nRow * width + nCol;
+          if (visited[nIdx]) continue;
+          const nv = values[nIdx];
+          if (Number.isNaN(nv) || nv >= DESPECKLE_STRENGTH_GATE_DBZ) continue;
+          visited[nIdx] = 1;
+          stack[stackLen++] = nIdx;
+          component.push(nIdx);
+        }
+      }
+      compLen++;
+    }
+    void componentStart;
+    if (component.length < MIN_CLUSTER_SIZE) {
+      for (const idx of component) values[idx] = NaN;
+    }
+  }
+}
+
+// --- Public grid computation, unchanged signatures/return shapes from the original ------------
 export function computeReflectivityGrid(
   elevation: DecodedElevation,
   site: RadarSite,
   stepDeg: number,
   maxRangeKm: number,
   correlationCoefficient?: DecodedElevation,
-  candidateCells?: CandidateCell[],
-): { grid: MrmsPoint[]; bounds: MrmsBounds; echoMask: Set<string>; qualityControl: "noise-floor+correlation-coefficient" | "noise-floor" } {
+  candidateCells?: CandidateGrid,
+): { grid: MrmsPoint[]; bounds: MrmsBounds; echoMask: FlatGrid; qualityControl: "noise-floor+correlation-coefficient" | "noise-floor" } {
   const bounds = boundsForSite(site, maxRangeKm);
-  const cells0 = candidateCells ?? buildCandidateCells(site, stepDeg, maxRangeKm);
-  const rawCells = sampleAtCandidateCellsInterpolated(elevation, cells0);
+  const cg = candidateCells ?? buildCandidateCells(site, stepDeg, maxRangeKm);
+  const grid = sampleAtCandidateCellsInterpolated(elevation, cg);
 
-  // Baseline: the same proven floor+despeckle pass regardless of whether CC
-  // is available — unchanged from before CC existed.
-  let cells = new Map<string, number | null>();
-  for (const [key, value] of rawCells) {
-    cells.set(key, value !== null && value < MIN_REFLECTIVITY_DBZ ? null : value);
-  }
-  cells = despeckle(cells);
+  applyFloor(grid);
+  despeckle(grid);
 
-  // CC as an additional AND on top of the baseline — see the block comment
-  // above for why this isn't a replacement. Sampled with the same
-  // gather-mapping (and the same interpolation) as reflectivity, so it lines
-  // up cell-for-cell without reintroducing the range-dependent gap this
-  // whole rewrite fixes.
   if (correlationCoefficient) {
-    const ccCells = sampleAtCandidateCellsInterpolated(correlationCoefficient, cells0);
-    for (const [key, value] of cells) {
-      if (value === null) continue;
-      const cc = ccCells.get(key);
-      if (cc === undefined || cc === null || cc < CORRELATION_COEFFICIENT_THRESHOLD) cells.set(key, null);
-    }
+    const ccGrid = sampleAtCandidateCellsInterpolated(correlationCoefficient, cg);
+    applyCorrelationCoefficientGate(grid, ccGrid);
   }
 
   // Runs on the FINAL survivor set (after CC, not just after despeckle) — see removeSmallClusters'
   // own comment for why that ordering matters.
-  cells = removeSmallClusters(cells);
-
-  const echoMask = new Set<string>();
-  for (const [key, value] of cells) if (value !== null) echoMask.add(key);
+  removeSmallClusters(grid);
 
   return {
-    grid: cellsToGrid(cells, stepDeg),
+    grid: flatGridToPoints(grid, stepDeg),
     bounds,
-    echoMask,
+    echoMask: grid,
     qualityControl: correlationCoefficient ? "noise-floor+correlation-coefficient" : "noise-floor",
   };
 }
 
-// Bins velocity's irregular polar point cloud into a regular lat/lon grid,
-// keeping a cell only where the co-located reflectivity echo mask says
-// there's real signal underneath it. This is the actual fix for velocity
-// noise, not despeckling velocity itself: you can't get a meaningful
-// Doppler shift from a target that barely exists, so weak/clutter gates
-// produce essentially random velocity, not just weak velocity — nulling by
-// value doesn't help, gating by co-located reflectivity does. Deliberately
-// NOT despeckled on its own axis, unlike reflectivity — real severe-weather
-// signatures (tornadic rotation, microburst divergence) are often small,
-// tightly localized couplets, exactly what a despeckle pass would erase.
+// `echoMask` is the FULL post-QC reflectivity FlatGrid (NaN = no real echo there), not a separate
+// Set — it's always the same dimensions as this function's own sampling grid by construction (both
+// built from the same site/stepDeg/maxRangeKm), so gating is a direct same-index lookup.
 export function computeVelocityGrid(
   elevation: DecodedElevation,
   site: RadarSite,
   stepDeg: number,
   maxRangeKm: number,
-  echoMask: Set<string>,
-  candidateCells?: CandidateCell[],
+  echoMask: FlatGrid,
+  candidateCells?: CandidateGrid,
 ): { grid: MrmsPoint[]; bounds: MrmsBounds } {
   const bounds = boundsForSite(site, maxRangeKm);
-  const rawCells = sampleAtCandidateCells(elevation, candidateCells ?? buildCandidateCells(site, stepDeg, maxRangeKm));
+  const cg = candidateCells ?? buildCandidateCells(site, stepDeg, maxRangeKm);
+  const grid = sampleAtCandidateCells(elevation, cg);
 
-  const cells = new Map<string, number | null>();
-  for (const [key, value] of rawCells) {
-    cells.set(key, echoMask.has(key) ? value : null);
+  for (let i = 0; i < grid.values.length; i++) {
+    if (Number.isNaN(echoMask.values[i])) grid.values[i] = NaN;
   }
 
-  return { grid: cellsToGrid(cells, stepDeg), bounds };
+  return { grid: flatGridToPoints(grid, stepDeg), bounds };
+}
+
+// --- Mosaic merge (flat-array shared accumulator) ---------------------------------------------
+// A mosaic combines several stations' independently-computed grids into one composite. The shared
+// accumulator used to be a Map<string, number|null> (the single biggest memory cost of a mosaic
+// request, since it holds the union of every member station's coverage for the whole request) —
+// now a flat array sized to the union bounding box, computed once upfront from the member sites'
+// known coordinates before any station is decoded.
+export type SharedMergeGrid = FlatGrid;
+
+export function makeSharedMergeGrid(sites: RadarSite[], stepDeg: number, maxRangeKm: number): SharedMergeGrid {
+  let minRow = Infinity;
+  let maxRow = -Infinity;
+  let minCol = Infinity;
+  let maxCol = -Infinity;
+  for (const site of sites) {
+    const box = gridBoxForSite(site, stepDeg, maxRangeKm);
+    minRow = Math.min(minRow, box.minRow);
+    maxRow = Math.max(maxRow, box.minRow + box.height - 1);
+    minCol = Math.min(minCol, box.minCol);
+    maxCol = Math.max(maxCol, box.minCol + box.width - 1);
+  }
+  return makeFlatGrid(minRow, minCol, maxCol - minCol + 1, maxRow - minRow + 1);
+}
+
+// Merges one station's already-computed grid into the shared accumulator: max dBZ wins, matching
+// the original policy exactly — a null/absent value from one station never overwrites a real value
+// a DIFFERENT station already found at that cell, only fills a cell nothing has claimed yet. Reads
+// row/col back from each point's absolute lat/lon (same `Math.round(value/stepDeg)` convention
+// cellKey always used, so this lines up cell-for-cell with every other grid in the same request).
+export function mergeReflectivityCells(target: SharedMergeGrid, source: MrmsPoint[], stepDeg: number): void {
+  for (const point of source) {
+    if (point.dbz === null) continue;
+    const row = Math.round(point.lat / stepDeg) - target.minRow;
+    const col = Math.round(point.lon / stepDeg) - target.minCol;
+    if (row < 0 || row >= target.height || col < 0 || col >= target.width) continue;
+    const idx = row * target.width + col;
+    if (Number.isNaN(target.values[idx]) || point.dbz > target.values[idx]) target.values[idx] = point.dbz;
+  }
+}
+
+export function sharedMergeGridToPoints(grid: SharedMergeGrid, stepDeg: number): MrmsPoint[] {
+  return flatGridToPoints(grid, stepDeg);
 }

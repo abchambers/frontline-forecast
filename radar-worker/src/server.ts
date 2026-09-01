@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { getRadarSite } from "./site.js";
 import { getVolumeCached, extractLowestElevation } from "./level2.js";
-import { computeReflectivityGrid, computeVelocityGrid, buildCandidateCells, cellsToGrid, boundsOf, mergeReflectivityCells } from "./project.js";
+import { computeReflectivityGrid, computeVelocityGrid, buildCandidateCells, boundsOf, mergeReflectivityCells, makeSharedMergeGrid, sharedMergeGridToPoints } from "./project.js";
 import { fetchStormTracks, fetchHailDetections, fetchTvsDetections, fetchMesocycloneDetections } from "./level3-markers.js";
 import { renderMrmsGridToDataUrl, renderVelocityGridToDataUrl } from "./render.js";
 
@@ -98,15 +98,22 @@ function recordFrame(station: string, payload: FramePayload) {
 //     low-level scans) genuinely parses into a bigger object than a routine
 //     VCP does — a cost independent of this app's own GRID_STEP_DEG, and
 //     not something fixable without replacing that library (out of scope
-//     tonight). Pulling resolution back further buys more headroom for MY
-//     OWN sampling/render structures against that variable, sometimes-large
-//     baseline, since shared-cpu-1x's 2GB ceiling can't be raised further
-//     without a paid tier upgrade (a real recurring-cost decision, not made
-//     unilaterally). If OOMs recur even here, the real fix is switching
-//     per-cell storage from string-keyed Maps to typed arrays, or finding a
-//     way to avoid the library's eager full-volume parse — not another
-//     resolution cut.
-const GRID_STEP_DEG = 0.006;
+//     tonight).
+//
+// Raised 0.006 -> 0.004deg, 2026-09-01, now that project.ts's flat-array refactor removed the
+// string-keyed Map overhead that was the real ceiling here (see that file's own history for the
+// full measurement: a Map<string, number|null> cost ~9x the RSS of the equivalent Float32Array at
+// this app's real cell counts). Calibrated against the worker's own --max-old-space-size=3584
+// heap, not guessed: 0.005 and 0.004deg both reliably OOM-crashed a real 5-station mosaic on the
+// OLD Map-based code at this exact ceiling; both complete cleanly on the new flat-array code with
+// real margin left (0.004deg's real 5-station mosaic peaked around 1.6GB, still ~2GB of headroom).
+// 0.0033deg got 4 of 5 stations through cleanly before an unrelated S3 rate-limit interrupted
+// testing — plausibly also safe, but not confirmed to full completion, so left for a later pass
+// rather than shipped without that same standard of evidence. If a real OOM recurs even here
+// (check fly logs, same as every past incident), the next lever is typed per-cell storage
+// (Int16Array with a fixed dBZ scale factor instead of Float32Array) for another ~2x, not another
+// resolution cut — this one was earned with real headroom, not assumed.
+const GRID_STEP_DEG = 0.004;
 // Raised 230km -> 460km, 2026-08-31, after the fly.toml performance-1x + 4096mb upgrade (Andrew's
 // own call, done the same day, see that file's history) removed the two real constraints that had
 // kept this at 230km: shared-cpu-1x's CPU throttling (the actual root cause of the 60-210s
@@ -370,10 +377,32 @@ async function handleMosaic(stationsParam: string) {
 
 async function computeMosaic(stations: string[], cacheKey: string) {
   const t0 = performance.now();
-  const merged = new Map<string, number | null>();
   const perStationMs: string[] = [];
   const succeededStations: string[] = [];
   const failedStations: string[] = [];
+
+  // Sites are resolved UPFRONT now (2026-09-01, flat-array refactor) — the shared merge grid below
+  // needs every member's coordinates before any station is decoded, to size one array covering the
+  // whole mosaic's union bounding box instead of the old per-station-Map-then-merge pattern (see
+  // project.ts's own history for the real memory numbers that motivated this). Promise.allSettled,
+  // not Promise.all: a single station's site lookup failing must NOT take down the others, same
+  // resilience guarantee as the per-station try/catch below already gives the decode step — this is
+  // just that same guarantee extended one step earlier, not a new exception to it.
+  const siteResults = await Promise.allSettled(stations.map((station) => getRadarSite(station)));
+  const resolvedSites: { station: string; site: Awaited<ReturnType<typeof getRadarSite>> }[] = [];
+  siteResults.forEach((result, i) => {
+    if (result.status === "fulfilled") {
+      resolvedSites.push({ station: stations[i], site: result.value });
+    } else {
+      failedStations.push(stations[i]);
+      perStationMs.push(`${stations[i]}=FAILED(site lookup)`);
+      console.error(`[mosaic:${stations.join(",")}] station ${stations[i]} site lookup failed, continuing with the rest —`, result.reason instanceof Error ? result.reason.message : result.reason);
+    }
+  });
+
+  if (!resolvedSites.length) throw new Error(`Every station in [${stations.join(",")}] failed — no mosaic coverage available.`);
+
+  const shared = makeSharedMergeGrid(resolvedSites.map((r) => r.site), GRID_STEP_DEG, MAX_RANGE_KM);
 
   // Sequential, one station in flight at a time — same MAX_CONCURRENT_COMPUTE=1 invariant as every
   // other route, just spread across several stations instead of one. See the block comment above
@@ -386,10 +415,10 @@ async function computeMosaic(stations: string[], cacheKey: string) {
   // down an otherwise-healthy 4-station mosaic. A multi-station composite has more surface area for
   // exactly this kind of single-point failure than a single-station request ever did, so it needs
   // to degrade gracefully: skip the failed station, keep going, and render whatever succeeded.
-  for (const station of stations) {
+  for (const { station, site } of resolvedSites) {
     const stationStart = performance.now();
     try {
-      const [site, volume] = await Promise.all([getRadarSite(station), getVolumeCached(station)]);
+      const volume = await getVolumeCached(station);
       const elevation = extractLowestElevation(volume.radar, "reflectivity");
       let correlationCoefficient;
       try {
@@ -399,7 +428,7 @@ async function computeMosaic(stations: string[], cacheKey: string) {
       }
       const candidateCells = buildCandidateCells(site, GRID_STEP_DEG, MAX_RANGE_KM);
       const { grid } = computeReflectivityGrid(elevation, site, GRID_STEP_DEG, MAX_RANGE_KM, correlationCoefficient, candidateCells);
-      mergeReflectivityCells(merged, grid, GRID_STEP_DEG);
+      mergeReflectivityCells(shared, grid, GRID_STEP_DEG);
       succeededStations.push(station);
       perStationMs.push(`${station}=${((performance.now() - stationStart) / 1000).toFixed(1)}s`);
     } catch (error) {
@@ -411,7 +440,7 @@ async function computeMosaic(stations: string[], cacheKey: string) {
 
   if (!succeededStations.length) throw new Error(`Every station in [${stations.join(",")}] failed — no mosaic coverage available.`);
 
-  const mergedPoints = cellsToGrid(merged, GRID_STEP_DEG);
+  const mergedPoints = sharedMergeGridToPoints(shared, GRID_STEP_DEG);
   const bounds = boundsOf(mergedPoints);
   const imageDataUrl = renderMrmsGridToDataUrl(mergedPoints, bounds, GRID_STEP_DEG);
   if (!imageDataUrl) throw new Error(`No mosaic coverage available for [${stations.join(",")}].`);
