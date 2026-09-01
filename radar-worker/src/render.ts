@@ -1,5 +1,6 @@
 import { createCanvas } from "@napi-rs/canvas";
 import type { MrmsBounds, MrmsPoint } from "./types.js";
+import { DESPECKLE_STRENGTH_GATE_DBZ } from "./project.js";
 
 // Server-side port of src/lib/mrms-render.ts (the main app's browser
 // canvas renderer) — color tables and blur logic kept byte-for-byte
@@ -178,15 +179,18 @@ type Cell = { row: number; col: number; dbz: number };
 // squall-line segment, are rarely thinner than a 3:1 aspect ratio at this grid resolution, while a
 // true 1-2-cell-wide radial streak trivially exceeds it.
 //
-// Honest limitation: every station is in Clear Air Mode as of this measurement (see
-// compute-worker.ts), meaning there's no real live case today of an ACTUAL storm coexisting with a
-// spoke to validate this against directly — the VCP check alone already handles today's real data.
-// This is calibrated from real shape measurements and sound physical reasoning (spokes are radial
-// and thin BY CONSTRUCTION; storms aren't), not from having proven it against the exact scenario it
-// exists for. Revisit the threshold once a real mixed case actually occurs.
+// UPDATE, same day: the "real mixed case" this was flagged as untested against happened within
+// hours — a real ~32 dBZ rain feature off the Georgia coast (plausibly a narrow shower/sea-breeze-
+// convergence line, genuinely common there) measured elongation 6.81 and got incorrectly dimmed.
+// Real weather CAN be this elongated; shape alone was never a fully reliable signal on its own. The
+// fix wasn't lowering confidence in this threshold, it was adding isExemptFromWeakSignal below —
+// real strong signal (>=DESPECKLE_STRENGTH_GATE_DBZ) now always survives regardless of elongation,
+// the same rule project.ts's own despeckle pass already used for this exact reason. This check
+// still does real work for genuinely WEAK elongated clutter; it just can't be the only signal for
+// anything strong enough to plausibly be real.
 const ELONGATION_THRESHOLD = 3;
 
-type ComponentShape = { keys: string[]; size: number; elongation: number };
+type ComponentShape = { keys: string[]; size: number; elongation: number; maxDbz: number };
 
 function findComponents(cells: Cell[]): ComponentShape[] {
   const byKey = new Map<string, Cell>();
@@ -201,10 +205,12 @@ function findComponents(cells: Cell[]): ComponentShape[] {
     let head = 0;
     let sumRow = 0;
     let sumCol = 0;
+    let maxDbz = -Infinity;
     while (head < component.length) {
       const [row, col] = component[head].split(",").map(Number);
       sumRow += row;
       sumCol += col;
+      maxDbz = Math.max(maxDbz, byKey.get(component[head])!.dbz);
       head += 1;
       for (let dRow = -1; dRow <= 1; dRow += 1) {
         for (let dCol = -1; dCol <= 1; dCol += 1) {
@@ -242,24 +248,43 @@ function findComponents(cells: Cell[]): ComponentShape[] {
     const eig2 = Math.max(trace / 2 - discriminant, 1e-6);
     const elongation = Math.sqrt(eig1 / eig2);
 
-    components.push({ keys: component, size: component.length, elongation });
+    components.push({ keys: component, size: component.length, elongation, maxDbz });
   }
   return components;
+}
+
+// Real incident, 2026-09-01: shipped VCP-mode and elongation dimming (both below) without this
+// exemption, and both immediately mis-fired on real, meaningful precipitation the same day — KJGX
+// showed genuine coastal Georgia rain up to 47 dBZ while STILL reporting VCP 35 (Clear Air Mode),
+// disproving the assumption that VCP mode reliably flips the instant real precip exists anywhere in
+// range (it lags real conditions); separately, a real ~32 dBZ rain feature (elongation 6.8, plausibly
+// a narrow shower/sea-breeze-convergence line — genuinely common off the Georgia coast) tripped the
+// elongation check on shape alone. Both are exactly the mistake this app's history already warned
+// against (see MIN_REFLECTIVITY_DBZ/DESPECKLE_STRENGTH_GATE_DBZ's own comments): trusting a proxy
+// for "is this real" over the actual measured strength. project.ts's despeckle/cluster-removal
+// already solved this with one rule — strong signal always survives, regardless of any other
+// heuristic — and neither new mechanism carried that rule over when it should have from the start.
+// Every weak-signal path below is now gated by the SAME rule: a component this strong is real,
+// full stop, no matter how small, how elongated, or what VCP the station claims to be running.
+function isExemptFromWeakSignal(component: ComponentShape): boolean {
+  return component.maxDbz >= DESPECKLE_STRENGTH_GATE_DBZ;
 }
 
 // Same 8-neighbor flood fill as project.ts's removeSmallClusters, but this one tags weak-signal
 // components instead of deleting anything — every cell here already passed that data-integrity
 // pass, this is a purely visual "does this look like real storm shape" question. A component reads
-// as weak signal if it's small (the original check) OR shaped like a thin radial streak rather than
-// a real storm blob, regardless of size (see ELONGATION_THRESHOLD above).
-function findSmallComponentKeys(cells: Cell[]): Set<string> {
-  const smallKeys = new Set<string>();
+// as weak signal if it's small, OR shaped like a thin radial streak, OR the whole frame is Clear Air
+// Mode — UNLESS it's strong enough to be exempt (see isExemptFromWeakSignal above), which always
+// wins regardless of the other three.
+function findWeakSignalKeys(cells: Cell[], isClearAirMode: boolean): Set<string> {
+  const weakKeys = new Set<string>();
   for (const component of findComponents(cells)) {
-    if (component.size < SMALL_COMPONENT_MAX_CELLS || component.elongation >= ELONGATION_THRESHOLD) {
-      for (const componentKey of component.keys) smallKeys.add(componentKey);
+    if (isExemptFromWeakSignal(component)) continue;
+    if (isClearAirMode || component.size < SMALL_COMPONENT_MAX_CELLS || component.elongation >= ELONGATION_THRESHOLD) {
+      for (const componentKey of component.keys) weakKeys.add(componentKey);
     }
   }
-  return smallKeys;
+  return weakKeys;
 }
 
 // No hard cell-count cap here unlike the browser version — @napi-rs/canvas
@@ -298,15 +323,17 @@ function renderGrid(
   // running VCP 35 (Clear Air Mode — see compute-worker.ts's CLEAR_AIR_VCPS), showed the SAME real
   // weak/biological/ground-clutter signal this app's noise-floor pipeline already lets through (see
   // the SMALL_COMPONENT_MAX_CELLS comment above for that history) as a barely-visible, near-white
-  // haze — including a radial spoke pattern with well over 40 connected cells, which the existing
-  // component-SIZE split doesn't catch (a spoke isn't a small isolated blob, it's a long thin
-  // streak, so it was rendering at full PIXEL_ALPHA same as a real storm). Clear Air Mode is a real,
-  // known fact from the volume's own header (not a per-cell heuristic): NEXRAD only runs it when
-  // there is NO active precipitation anywhere in the station's range, by definition — meaning
-  // NOTHING surviving in a Clear-Air-Mode frame is a real storm, regardless of that cell's own
-  // component size or shape. When true, every surviving cell gets the SAME weak-signal treatment
-  // small isolated blobs already get (WEAK_SIGNAL_ALPHA/WEAK_SIGNAL_BLUR_PX), bypassing the size
-  // check entirely — there's no "real storm shape" a Clear-Air frame could contain to protect.
+  // haze. When true, every surviving cell gets the SAME weak-signal treatment small isolated blobs
+  // already get (WEAK_SIGNAL_ALPHA/WEAK_SIGNAL_BLUR_PX), bypassing the size check entirely.
+  //
+  // Corrected same day, real incident: this comment originally claimed Clear Air Mode is an
+  // absolute guarantee ("NOTHING surviving is a real storm") because that's the mode's documented
+  // PURPOSE. Real live data proved that wrong within hours — KJGX showed genuine coastal Georgia
+  // rain up to 47 dBZ while STILL reporting VCP 35, meaning automatic VCP switching lags real
+  // conditions and isn't a hard guarantee. isClearAirMode is now a WEAK-signal-favoring default,
+  // not an absolute override — findWeakSignalKeys still exempts any component strong enough to be
+  // real regardless of what VCP the station claims (see isExemptFromWeakSignal), the same rule
+  // project.ts's own despeckle logic already uses for exactly this reason.
   isClearAirMode: boolean,
 ): string | null {
   const width = Math.round((bounds.maxLongitude - bounds.minLongitude) / step) + 1;
@@ -326,9 +353,7 @@ function renderGrid(
   const compositeContext = composite.getContext("2d");
 
   if (splitBySize) {
-    const smallKeys = isClearAirMode
-      ? new Set(cells.map((c) => `${c.row},${c.col}`))
-      : findSmallComponentKeys(cells);
+    const smallKeys = findWeakSignalKeys(cells, isClearAirMode);
     const small = paintCells(width, height, cells.filter((c) => smallKeys.has(`${c.row},${c.col}`)), colorFor, WEAK_SIGNAL_ALPHA);
     if (small) {
       compositeContext.filter = `blur(${WEAK_SIGNAL_BLUR_PX}px)`;

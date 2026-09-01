@@ -309,8 +309,10 @@ const MIN_REFLECTIVITY_DBZ = 5; // matches RadarScope's own "0-10: very light re
 const DESPECKLE_MIN_NEIGHBORS = 3;
 // Cells at or above this always survive despeckling regardless of neighbor count — real biological
 // scatter/clutter is essentially always weak, so strong signal being spatially isolated is almost
-// always a real, thin storm feature, not noise.
-const DESPECKLE_STRENGTH_GATE_DBZ = 25;
+// always a real, thin storm feature, not noise. Exported: render.ts's VCP-mode and elongation-based
+// weak-signal dimming (2026-09-01) reuse this exact same threshold/reasoning as their own safety
+// net — see that file for the real incident that made reusing it there necessary, not optional.
+export const DESPECKLE_STRENGTH_GATE_DBZ = 25;
 const MIN_CLUSTER_SIZE = 6;
 
 function applyFloor(grid: FlatGrid): void {
