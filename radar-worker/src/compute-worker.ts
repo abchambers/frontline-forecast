@@ -22,6 +22,22 @@ type MosaicRequest = { id: number; kind: "mosaic"; stations: string[] };
 type WorkerRequest = SingleRequest | MosaicRequest;
 type WorkerResponse = { id: number; ok: true; body: unknown } | { id: number; ok: false; error: string };
 
+// Real NEXRAD Volume Coverage Pattern codes for Clear Air surveillance (31 = long-pulse, 35 =
+// short-pulse) — confirmed live, 2026-09-01: pulled the real decoded pattern_number for KFFC, KGSP,
+// KJGX, KBMX, and KMXX simultaneously and all five read 35, exactly matching what RadarScope's own
+// UI showed for the same stations at the same moment ("VCP 35: Clear Air Mode"). A station only
+// runs Clear Air Mode when there is NO active precipitation anywhere in its range — that's the
+// mode's whole purpose (slower scan, better sensitivity to weak returns, run specifically because
+// there's nothing strong to see) — so anything surviving this app's noise-floor pipeline on a
+// Clear-Air-Mode frame is, by definition, not a real storm: weak drizzle, biological scatter, or
+// ground clutter. See render.ts's isClearAirMode parameter for what this actually changes.
+const CLEAR_AIR_VCPS = new Set([31, 35]);
+
+function isClearAirVcp(radar: Awaited<ReturnType<typeof getVolumeCached>>["radar"]): boolean {
+  const pattern = radar.vcp?.record?.pattern_number;
+  return pattern !== undefined && CLEAR_AIR_VCPS.has(pattern);
+}
+
 // Moved verbatim from the previous in-process computeReflectivityOrVelocity — only the
 // cache-write/frame-recording at the end stayed behind in server.ts (that's pure in-memory
 // bookkeeping the HTTP process owns directly, no reason to round-trip it through IPC).
@@ -40,6 +56,7 @@ async function computeSingle(station: string, moment: "reflectivity" | "velocity
 
   const candidateCells = buildCandidateCells(site, GRID_STEP_DEG, MAX_RANGE_KM);
   const t2 = performance.now();
+  const isClearAirMode = isClearAirVcp(radar);
 
   let grid, bounds, elevationDeg, qualityControl;
   if (moment === "velocity") {
@@ -55,7 +72,7 @@ async function computeSingle(station: string, moment: "reflectivity" | "velocity
     elevationDeg = elevation.elevationDeg;
   }
   const tCompute = performance.now();
-  console.log(`[${station}:${moment}] fetch+parse ${(t1 - t0).toFixed(0)}ms, geometry ${(t2 - t1).toFixed(0)}ms, sample ${(tCompute - t2).toFixed(0)}ms, total ${(tCompute - t0).toFixed(0)}ms`);
+  console.log(`[${station}:${moment}] fetch+parse ${(t1 - t0).toFixed(0)}ms, geometry ${(t2 - t1).toFixed(0)}ms, sample ${(tCompute - t2).toFixed(0)}ms, total ${(tCompute - t0).toFixed(0)}ms${moment === "reflectivity" && isClearAirMode ? " (Clear Air Mode — weak-signal dimming applied)" : ""}`);
 
   const hasSignal = grid.some((point) => point.dbz !== null);
   if (!hasSignal) throw new Error(`No ${moment} data available for ${station} in this volume.`);
@@ -63,7 +80,7 @@ async function computeSingle(station: string, moment: "reflectivity" | "velocity
   const imageDataUrl =
     moment === "velocity"
       ? renderVelocityGridToDataUrl(grid, bounds, GRID_STEP_DEG)
-      : renderMrmsGridToDataUrl(grid, bounds, GRID_STEP_DEG);
+      : renderMrmsGridToDataUrl(grid, bounds, GRID_STEP_DEG, isClearAirMode);
   if (!imageDataUrl) throw new Error(`Failed to render ${moment} image for ${station}.`);
   console.log(`[${station}:${moment}] render+encode: ${(performance.now() - tCompute).toFixed(0)}ms, image ~${Math.round((imageDataUrl.length * 0.75) / 1024)}KB`);
 
@@ -100,11 +117,21 @@ async function computeMosaic(stations: string[]) {
   if (!resolvedSites.length) throw new Error(`Every station in [${stations.join(",")}] failed — no mosaic coverage available.`);
 
   const shared = makeSharedMergeGrid(resolvedSites.map((r) => r.site), GRID_STEP_DEG, MAX_RANGE_KM);
+  // Conservative on purpose: only dims the WHOLE composite when EVERY contributing station is in
+  // Clear Air Mode (see render.ts/CLEAR_AIR_VCPS for why that's a real, not-a-storm guarantee). A
+  // mosaic where some member stations see real precipitation elsewhere in their own range while one
+  // station's own clutter spoke persists doesn't get blanket-dimmed here — that's a real gap (see
+  // the shape/density-based component check discussed as the next pass), but a per-cell,
+  // per-contributing-station tag through the merge is real added complexity this first pass
+  // deliberately doesn't take on. Starts true; any non-clear-air OR failed-to-determine station
+  // flips it off for the whole composite, never the other way around — never risk under-dimming.
+  let allClearAir = true;
 
   for (const { station, site } of resolvedSites) {
     const stationStart = performance.now();
     try {
       const volume = await getVolumeCached(station);
+      if (!isClearAirVcp(volume.radar)) allClearAir = false;
       const elevation = extractLowestElevation(volume.radar, "reflectivity");
       let correlationCoefficient;
       try {
@@ -128,10 +155,10 @@ async function computeMosaic(stations: string[]) {
 
   const mergedPoints = sharedMergeGridToPoints(shared, GRID_STEP_DEG);
   const bounds = boundsOf(mergedPoints);
-  const imageDataUrl = renderMrmsGridToDataUrl(mergedPoints, bounds, GRID_STEP_DEG);
+  const imageDataUrl = renderMrmsGridToDataUrl(mergedPoints, bounds, GRID_STEP_DEG, allClearAir);
   if (!imageDataUrl) throw new Error(`No mosaic coverage available for [${stations.join(",")}].`);
 
-  console.log(`[mosaic:${stations.join(",")}] ${perStationMs.join(" ")}, total ${((performance.now() - t0) / 1000).toFixed(1)}s${failedStations.length ? ` (${failedStations.length} station(s) skipped: ${failedStations.join(",")})` : ""}`);
+  console.log(`[mosaic:${stations.join(",")}] ${perStationMs.join(" ")}, total ${((performance.now() - t0) / 1000).toFixed(1)}s${failedStations.length ? ` (${failedStations.length} station(s) skipped: ${failedStations.join(",")})` : ""}${allClearAir ? " (all stations Clear Air Mode — weak-signal dimming applied)" : ""}`);
 
   return {
     time: new Date().toISOString(),

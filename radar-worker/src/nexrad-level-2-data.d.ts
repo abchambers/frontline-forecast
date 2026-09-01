@@ -17,9 +17,16 @@ declare module "nexrad-level-2-data" {
     elevation_number?: number;
   };
 
+  // The volume's Message 5/7 (Volume Coverage Pattern) record, confirmed live 2026-09-01 against a
+  // real decoded volume's actual shape (radar.vcp.record.pattern_number) — not guessed from the
+  // library's docs. pattern_number is the real NEXRAD VCP code (31/35 = clear air, 12/212/215 etc.
+  // = precipitation modes) — see compute-worker.ts's CLEAR_AIR_VCPS for how this app uses it.
+  type VcpInfo = { record?: { pattern_number?: number; pattern_type?: number } };
+
   export class Level2Radar {
     constructor(file: Buffer);
     header: unknown;
+    vcp: VcpInfo;
     listElevations(): number[];
     setElevation(elevation: number): void;
     getScans(): number;

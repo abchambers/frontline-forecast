@@ -204,6 +204,20 @@ function renderGrid(
   // deliberately gets different treatment than reflectivity throughout this pipeline (real severe-
   // weather couplets are themselves small and localized, exactly what this split would blur away).
   splitBySize: boolean,
+  // Andrew, live 2026-09-01: RadarScope's own screenshots at 5 real local stations, all confirmed
+  // running VCP 35 (Clear Air Mode — see compute-worker.ts's CLEAR_AIR_VCPS), showed the SAME real
+  // weak/biological/ground-clutter signal this app's noise-floor pipeline already lets through (see
+  // the SMALL_COMPONENT_MAX_CELLS comment above for that history) as a barely-visible, near-white
+  // haze — including a radial spoke pattern with well over 40 connected cells, which the existing
+  // component-SIZE split doesn't catch (a spoke isn't a small isolated blob, it's a long thin
+  // streak, so it was rendering at full PIXEL_ALPHA same as a real storm). Clear Air Mode is a real,
+  // known fact from the volume's own header (not a per-cell heuristic): NEXRAD only runs it when
+  // there is NO active precipitation anywhere in the station's range, by definition — meaning
+  // NOTHING surviving in a Clear-Air-Mode frame is a real storm, regardless of that cell's own
+  // component size or shape. When true, every surviving cell gets the SAME weak-signal treatment
+  // small isolated blobs already get (WEAK_SIGNAL_ALPHA/WEAK_SIGNAL_BLUR_PX), bypassing the size
+  // check entirely — there's no "real storm shape" a Clear-Air frame could contain to protect.
+  isClearAirMode: boolean,
 ): string | null {
   const width = Math.round((bounds.maxLongitude - bounds.minLongitude) / step) + 1;
   const height = Math.round((bounds.maxLatitude - bounds.minLatitude) / step) + 1;
@@ -222,7 +236,9 @@ function renderGrid(
   const compositeContext = composite.getContext("2d");
 
   if (splitBySize) {
-    const smallKeys = findSmallComponentKeys(cells);
+    const smallKeys = isClearAirMode
+      ? new Set(cells.map((c) => `${c.row},${c.col}`))
+      : findSmallComponentKeys(cells);
     const small = paintCells(width, height, cells.filter((c) => smallKeys.has(`${c.row},${c.col}`)), colorFor, WEAK_SIGNAL_ALPHA);
     if (small) {
       compositeContext.filter = `blur(${WEAK_SIGNAL_BLUR_PX}px)`;
@@ -245,10 +261,13 @@ function renderGrid(
   return `data:image/png;base64,${buffer.toString("base64")}`;
 }
 
-export function renderMrmsGridToDataUrl(points: MrmsPoint[], bounds: MrmsBounds, step: number): string | null {
-  return renderGrid(points, bounds, step, colorForDbz, (v) => v >= NO_ECHO_THRESHOLD_DBZ, true);
+export function renderMrmsGridToDataUrl(points: MrmsPoint[], bounds: MrmsBounds, step: number, isClearAirMode = false): string | null {
+  return renderGrid(points, bounds, step, colorForDbz, (v) => v >= NO_ECHO_THRESHOLD_DBZ, true, isClearAirMode);
 }
 
 export function renderVelocityGridToDataUrl(points: MrmsPoint[], bounds: MrmsBounds, step: number): string | null {
-  return renderGrid(points, bounds, step, colorForVelocity, (v) => Math.abs(v) >= VELOCITY_NEUTRAL_BAND, false);
+  // Deliberately no Clear-Air-Mode dimming here — velocity never had the small-blob/real-shape split
+  // to begin with (splitBySize=false, see above), and there's no live evidence yet that velocity has
+  // the same "harsh noise" problem reflectivity does. Scoped to reflectivity only for this pass.
+  return renderGrid(points, bounds, step, colorForVelocity, (v) => Math.abs(v) >= VELOCITY_NEUTRAL_BAND, false, false);
 }
