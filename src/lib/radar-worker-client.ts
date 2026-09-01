@@ -130,3 +130,39 @@ function recordMosaicFailure() {
     mosaicConsecutiveFailures = 0;
   }
 }
+
+// Phase 1 tile architecture (2026-09-02) — a tile request costs exactly what a mosaic request
+// costs on the worker (it calls the same handleMosaic internally, see server.ts's /tile route,
+// then slices ~15ms of real work on top), so this deliberately shares fetchMosaicFromWorker's own
+// timeout and circuit breaker rather than standing up a third independent one: if the underlying
+// mosaic compute is genuinely broken, retrying via tiles instead of the JSON endpoint wouldn't
+// help either way, and they should back off together. Returns a raw Buffer, not JSON — a tile is
+// a plain image, not a data payload.
+export async function fetchMosaicTileFromWorker(stations: string[], z: number, x: number, y: number): Promise<Buffer | null> {
+  if (!WORKER_URL) return null;
+  if (Date.now() < mosaicCircuitOpenUntil) return null;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), MOSAIC_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${WORKER_URL}/tile/${z}/${x}/${y}.png?stations=${stations.join(",")}`, {
+      headers: WORKER_API_KEY ? { "x-worker-key": WORKER_API_KEY } : {},
+      signal: controller.signal,
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      console.error(`radar-worker-client: /tile returned ${response.status}`);
+      recordMosaicFailure();
+      return null;
+    }
+    mosaicConsecutiveFailures = 0;
+    mosaicCircuitOpenUntil = 0;
+    return Buffer.from(await response.arrayBuffer());
+  } catch (error) {
+    console.error(`radar-worker-client: /tile failed —`, error instanceof Error ? error.message : error);
+    recordMosaicFailure();
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}

@@ -12,36 +12,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createCanvas, loadImage } from "@napi-rs/canvas";
+// Promoted into a real module (src/mercator.ts) once this prototype's own seam-check confirmed
+// the math has no bugs — imported here now instead of keeping a second hand-copied version that
+// could quietly drift from what's actually running in production.
+import { lonToTileX, latToTileY, tileXToLon, tileYToLat, NATIVE_ZOOM, TILE_SIZE } from "../src/mercator.js";
 
 const STATION = process.argv[2] ?? "KFFC";
 const WORKER_URL = process.argv[3] ?? "http://localhost:8099";
 const OUT_DIR = "/tmp/tile-prototype";
-const TILE_SIZE = 256;
-
-// Real NEXRAD Level II resolution at this app's GRID_STEP_DEG=0.006deg is ~668m/pixel at mid
-// latitudes -- measured (not guessed) against Web Mercator's own per-zoom resolution table:
-// zoom 7 = 1019m/px (coarser, loses real detail), zoom 8 = 509m/px (closer, mild upsample), zoom
-// 9 = 255m/px (clearly oversampling). Zoom 8 is the best match and lines up with IEM's own
-// maxNativeZoom: 8 already wired into radar-map.tsx for their tile layer -- not a coincidence,
-// real Level II data has a genuine physical resolution ceiling.
-const NATIVE_ZOOM = 8;
-
-// --- Standard Web Mercator / Slippy Map tile math (well-documented, verified against known
-// reference points below rather than trusted blindly) ---
-function lonToTileX(lon: number, z: number): number {
-  return ((lon + 180) / 360) * Math.pow(2, z);
-}
-function latToTileY(lat: number, z: number): number {
-  const latRad = (lat * Math.PI) / 180;
-  return ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * Math.pow(2, z);
-}
-function tileXToLon(x: number, z: number): number {
-  return (x / Math.pow(2, z)) * 360 - 180;
-}
-function tileYToLat(y: number, z: number): number {
-  const n = Math.PI - (2 * Math.PI * y) / Math.pow(2, z);
-  return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
-}
 
 function verifyProjectionMath() {
   // Tile 0/0/0 at zoom 0 must cover the whole world.

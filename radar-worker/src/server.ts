@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { fetchStormTracks, fetchHailDetections, fetchTvsDetections, fetchMesocycloneDetections } from "./level3-markers.js";
 import { GRID_STEP_DEG, MAX_RANGE_KM } from "./radar-constants.js";
+import { sliceTileFromComposite } from "./tile-slice.js";
+import type { MrmsBounds } from "./types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -409,6 +411,60 @@ const server = createServer((request, response) => {
       .catch((error: unknown) => {
         console.error(`[mosaic] request failed:`, error);
         respondJson(502, { error: error instanceof Error ? error.message : "Mosaic request failed." });
+      });
+    return;
+  }
+
+  // Phase 1 of the tile-based architecture scoped and prototyped 2026-09-01/02 (see
+  // scripts/prototype-mercator-tiles.ts for the real-data seam-check verification this reuses).
+  // Deliberately reuses handleMosaic wholesale for the underlying composite -- same caching,
+  // dedup, per-station graceful degradation, VCP-mode/elongation/strength-exemption QC, all of it
+  // unchanged -- and only adds a slicing step at the very end. A single-station "mosaic" (one
+  // entry in `stations`) is just computeMosaic's own already-handled degenerate case, so there's
+  // no separate single-station tile path to maintain.
+  //
+  // Slices ON DEMAND from the composite's own cache rather than pre-slicing and caching every
+  // tile separately: scripts/prototype-mercator-tiles.ts measured slicing at ~15ms/tile against
+  // real data, negligible next to the composite's own multi-second decode -- a second cache layer
+  // here would be real complexity for a cost that's already cheap enough to just redo per request.
+  const tileMatch = url.pathname.match(/^\/tile\/(\d+)\/(\d+)\/(\d+)\.png$/);
+  if (tileMatch) {
+    const z = Number(tileMatch[1]);
+    const x = Number(tileMatch[2]);
+    const y = Number(tileMatch[3]);
+    const stationsParam = url.searchParams.get("stations") ?? "";
+    const stations = [...new Set(stationsParam.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean))];
+    if (stations.length === 0) {
+      respondJson(400, { error: "At least one station is required, e.g. ?stations=KFFC,KJGX." });
+      return;
+    }
+    for (const s of stations) {
+      if (!STATION_ID_PATTERN.test(s)) {
+        respondJson(400, { error: `Invalid station ID: ${s}` });
+        return;
+      }
+    }
+    handleMosaic(stations.join(","))
+      .then(async (result) => {
+        if (result.status !== 200) {
+          respondJson(result.status, result.body);
+          return;
+        }
+        const body = result.body as { imageDataUrl: string; bounds: MrmsBounds; step: number };
+        const tileBuffer = await sliceTileFromComposite(body.imageDataUrl, body.bounds, body.step, z, x, y);
+        response.writeHead(200, {
+          "Content-Type": "image/png",
+          "X-Radar-Source": result.source,
+          // Tiles are meant to be cached hard at the CDN edge, not just here -- see
+          // src/app/api/radar/tile's own Cache-Control for the real header the browser/CDN sees;
+          // this one only matters for a direct worker request (dev/debugging).
+          "Cache-Control": "public, max-age=60",
+        });
+        response.end(tileBuffer);
+      })
+      .catch((error: unknown) => {
+        console.error(`[tile:${z}/${x}/${y}] request failed:`, error);
+        respondJson(502, { error: error instanceof Error ? error.message : "Tile request failed." });
       });
     return;
   }
