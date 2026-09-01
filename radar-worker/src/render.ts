@@ -138,22 +138,57 @@ function colorForVelocity(velocity: number): [number, number, number] {
 
 type Cell = { row: number; col: number; dbz: number };
 
-// Same 8-neighbor flood fill as project.ts's removeSmallClusters, but this one tags component size
-// instead of deleting anything — every cell here already passed that data-integrity pass, this is a
-// purely visual "how big does this blob actually look" question.
-function findSmallComponentKeys(cells: Cell[]): Set<string> {
+// Andrew, live 2026-09-01: the VCP-based Clear-Air-Mode dimming (see the isClearAirMode parameter
+// below) only fires when the WHOLE frame has no real weather anywhere — it can't help a station
+// that's in Precipitation Mode because there's a real storm somewhere in its range, while a
+// persistent local clutter spoke (ground clutter, biological scatter radiating from the site along
+// a consistent azimuth — see project.ts's own CC-gating history for the same unresolved spoke
+// pattern) keeps showing up near the site itself. A spoke like that is exactly the shape the
+// original SIZE-only check (below) misses: it strings together well over SMALL_COMPONENT_MAX_CELLS
+// cells despite being a thin radial streak, not a blob, so it rendered at full PIXEL_ALPHA same as
+// a real storm.
+//
+// Size alone can't tell the two apart, but SHAPE can, independent of size — real storm cells are
+// roughly blobby (spread out similarly in every direction); a radial streak is stretched along one
+// axis and thin along the other. Measured directly against live KGSP data (a real, visually-
+// confirmed spoke pattern, all 52 of its size>=40 components): PCA elongation (the ratio of the
+// component's two principal-axis eigenvalues, computed from its cells' row/col covariance —
+// orientation-independent, unlike an axis-aligned bounding-box fill ratio, which a diagonal spoke
+// defeats since its axis-aligned bbox looks artificially "chunky") ranged continuously from 1.10
+// (nearly circular) to 7.91 (clearly stretched), with the largest, most visually spoke-like
+// components clustering at 3.2-4.3+. ELONGATION_THRESHOLD=3 catches roughly the most-stretched
+// quarter of today's real large components without touching the more circular majority — a
+// deliberately moderate cut, not a guess: real convective clusters, even elongated ones like a
+// squall-line segment, are rarely thinner than a 3:1 aspect ratio at this grid resolution, while a
+// true 1-2-cell-wide radial streak trivially exceeds it.
+//
+// Honest limitation: every station is in Clear Air Mode as of this measurement (see
+// compute-worker.ts), meaning there's no real live case today of an ACTUAL storm coexisting with a
+// spoke to validate this against directly — the VCP check alone already handles today's real data.
+// This is calibrated from real shape measurements and sound physical reasoning (spokes are radial
+// and thin BY CONSTRUCTION; storms aren't), not from having proven it against the exact scenario it
+// exists for. Revisit the threshold once a real mixed case actually occurs.
+const ELONGATION_THRESHOLD = 3;
+
+type ComponentShape = { keys: string[]; size: number; elongation: number };
+
+function findComponents(cells: Cell[]): ComponentShape[] {
   const byKey = new Map<string, Cell>();
   for (const cell of cells) byKey.set(`${cell.row},${cell.col}`, cell);
 
   const visited = new Set<string>();
-  const smallKeys = new Set<string>();
+  const components: ComponentShape[] = [];
   for (const key of byKey.keys()) {
     if (visited.has(key)) continue;
     const component: string[] = [key];
     visited.add(key);
     let head = 0;
+    let sumRow = 0;
+    let sumCol = 0;
     while (head < component.length) {
       const [row, col] = component[head].split(",").map(Number);
+      sumRow += row;
+      sumCol += col;
       head += 1;
       for (let dRow = -1; dRow <= 1; dRow += 1) {
         for (let dCol = -1; dCol <= 1; dCol += 1) {
@@ -165,8 +200,47 @@ function findSmallComponentKeys(cells: Cell[]): Set<string> {
         }
       }
     }
-    if (component.length < SMALL_COMPONENT_MAX_CELLS) {
-      for (const componentKey of component) smallKeys.add(componentKey);
+
+    const meanRow = sumRow / component.length;
+    const meanCol = sumCol / component.length;
+    let varRow = 0;
+    let varCol = 0;
+    let covar = 0;
+    for (const componentKey of component) {
+      const [row, col] = componentKey.split(",").map(Number);
+      const dRow = row - meanRow;
+      const dCol = col - meanCol;
+      varRow += dRow * dRow;
+      varCol += dCol * dCol;
+      covar += dRow * dCol;
+    }
+    varRow /= component.length;
+    varCol /= component.length;
+    covar /= component.length;
+    // Eigenvalues of the 2x2 covariance matrix [[varRow, covar], [covar, varCol]] — a single-cell
+    // or perfectly uniform component has both eigenvalues near 0, guarded below to avoid a 0/0.
+    const trace = varRow + varCol;
+    const det = varRow * varCol - covar * covar;
+    const discriminant = Math.sqrt(Math.max(0, (trace * trace) / 4 - det));
+    const eig1 = trace / 2 + discriminant;
+    const eig2 = Math.max(trace / 2 - discriminant, 1e-6);
+    const elongation = Math.sqrt(eig1 / eig2);
+
+    components.push({ keys: component, size: component.length, elongation });
+  }
+  return components;
+}
+
+// Same 8-neighbor flood fill as project.ts's removeSmallClusters, but this one tags weak-signal
+// components instead of deleting anything — every cell here already passed that data-integrity
+// pass, this is a purely visual "does this look like real storm shape" question. A component reads
+// as weak signal if it's small (the original check) OR shaped like a thin radial streak rather than
+// a real storm blob, regardless of size (see ELONGATION_THRESHOLD above).
+function findSmallComponentKeys(cells: Cell[]): Set<string> {
+  const smallKeys = new Set<string>();
+  for (const component of findComponents(cells)) {
+    if (component.size < SMALL_COMPONENT_MAX_CELLS || component.elongation >= ELONGATION_THRESHOLD) {
+      for (const componentKey of component.keys) smallKeys.add(componentKey);
     }
   }
   return smallKeys;
