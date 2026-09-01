@@ -100,20 +100,20 @@ function recordFrame(station: string, payload: FramePayload) {
 //     not something fixable without replacing that library (out of scope
 //     tonight).
 //
-// Raised 0.006 -> 0.004deg, 2026-09-01, now that project.ts's flat-array refactor removed the
-// string-keyed Map overhead that was the real ceiling here (see that file's own history for the
-// full measurement: a Map<string, number|null> cost ~9x the RSS of the equivalent Float32Array at
-// this app's real cell counts). Calibrated against the worker's own --max-old-space-size=3584
-// heap, not guessed: 0.005 and 0.004deg both reliably OOM-crashed a real 5-station mosaic on the
-// OLD Map-based code at this exact ceiling; both complete cleanly on the new flat-array code with
-// real margin left (0.004deg's real 5-station mosaic peaked around 1.6GB, still ~2GB of headroom).
-// 0.0033deg got 4 of 5 stations through cleanly before an unrelated S3 rate-limit interrupted
-// testing — plausibly also safe, but not confirmed to full completion, so left for a later pass
-// rather than shipped without that same standard of evidence. If a real OOM recurs even here
-// (check fly logs, same as every past incident), the next lever is typed per-cell storage
-// (Int16Array with a fixed dBZ scale factor instead of Float32Array) for another ~2x, not another
-// resolution cut — this one was earned with real headroom, not assumed.
-const GRID_STEP_DEG = 0.004;
+// Pulled back 0.004 -> 0.006deg, 2026-09-01 (Andrew's explicit call), the morning after shipping
+// 0.004deg: the worker was found unresponsive for hours overnight (/health failing, no known
+// healthy instances) with NO OOM or crash signal anywhere in the logs — the process was alive but
+// stuck, not killed. project.ts's flat-array refactor was verified hard against MEMORY (see that
+// file's history) but never load-tested against sustained concurrent request bursts, and this
+// worker still runs all its heavy decode+compute fully SYNCHRONOUSLY on one thread with no yield
+// points and no timeout (MAX_CONCURRENT_COMPUTE=1's queue has no escape hatch if it backs up) — an
+// already-documented pre-existing risk class (a real 500-second pileup happened before, for a
+// different reason). 0.004deg made every request's compute step genuinely take longer, thinning
+// the safety margin against that exact risk with no new evidence it's actually safe under load.
+// Pulled back to the known-safe value while a real watchdog (moving decode+compute off the main
+// thread with an enforced timeout, so a hang degrades to a 502 instead of taking the whole worker
+// down) gets built — see that work before raising this again.
+const GRID_STEP_DEG = 0.006;
 // Raised 230km -> 460km, 2026-08-31, after the fly.toml performance-1x + 4096mb upgrade (Andrew's
 // own call, done the same day, see that file's history) removed the two real constraints that had
 // kept this at 230km: shared-cpu-1x's CPU throttling (the actual root cause of the 60-210s
