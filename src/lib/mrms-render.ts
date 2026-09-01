@@ -13,9 +13,15 @@ export type MrmsBounds = { minLatitude: number; maxLatitude: number; minLongitud
 // that was never actually checked against a reference and had visibly wrong
 // hues (e.g. no true saturated blue band, a muddy plum instead of magenta at
 // the high end, no pure white core).
+// The bottom two stops (0/5 dBZ, "very light reflectivity") were pulled 55%/45% toward white,
+// 2026-09-01 — see the render.ts copy for the full "blue is harsh" writeup and reasoning. Kept in
+// sync here for the same byte-for-byte-identical reason as the rest of this table; this fallback
+// path doesn't get the VCP-mode or component-elongation dimming render.ts also has (no volume/VCP
+// data reaches this client-side path, and this is a rare worker-down fallback, not the primary
+// live path) — just this color change, scoped to match what was actually asked for.
 const COLOR_STOPS: { dbz: number; rgb: [number, number, number] }[] = [
-  { dbz: 0, rgb: [0, 236, 236] },
-  { dbz: 5, rgb: [1, 160, 246] },
+  { dbz: 0, rgb: [140, 246, 246] },
+  { dbz: 5, rgb: [115, 203, 250] },
   { dbz: 10, rgb: [0, 0, 246] },
   { dbz: 15, rgb: [0, 255, 0] },
   { dbz: 20, rgb: [0, 200, 0] },

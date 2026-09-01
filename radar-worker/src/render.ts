@@ -19,9 +19,25 @@ import type { MrmsBounds, MrmsPoint } from "./types.js";
 // pixels on the map itself to confirm the mapping. Replaces an earlier 12-stop gradient that was
 // never verified against a reference and had visibly wrong hues (no true saturated blue band, a
 // muddy plum instead of magenta at the high end, no pure white core).
+// Andrew, live 2026-09-01: "blue is harsh" — the bottom two stops (0 and 5 dBZ, NWS's own "very
+// light reflectivity" band) were the full-saturation cyan/deep-blue pixel-sampled from a real storm
+// CORE, applied identically to the weakest possible signal this app shows — visually declaring
+// "here's real precipitation" at exactly the band where that's least certain. RadarScope's own
+// clear-air renders (see the VCP-dimming and elongation-check commits above) showed this band as a
+// pale, near-white haze, not saturated color. Blended 55%/45% toward white respectively (55% at 0
+// dBZ since it's the least certain of all, tapering to 45% at 5 dBZ, closer to real signal) —
+// judgment calls from directly reviewing those reference screenshots, NOT a fresh pixel-sampled
+// match like the original stops below were (no live severe-weather RadarScope frame with a real
+// storm's OWN faint leading edge was available to sample the same way). 10 dBZ and above — the
+// start of the "light rain" band, ordinary common weather per this file's own despeckle/component
+// history — are deliberately untouched: this only softens the two bands directly abutting the
+// noise floor, not real precipitation once it's clearly real. Independent of and additive to the
+// alpha-based dimming above (VCP mode, component size, elongation) — a cell can be both low-alpha
+// AND pale-colored, or just pale-colored if it's part of a real storm's own faint edge that survived
+// every other check as legitimate.
 const COLOR_STOPS: { dbz: number; rgb: [number, number, number] }[] = [
-  { dbz: 0, rgb: [0, 236, 236] },
-  { dbz: 5, rgb: [1, 160, 246] },
+  { dbz: 0, rgb: [140, 246, 246] },
+  { dbz: 5, rgb: [115, 203, 250] },
   { dbz: 10, rgb: [0, 0, 246] },
   { dbz: 15, rgb: [0, 255, 0] },
   { dbz: 20, rgb: [0, 200, 0] },
