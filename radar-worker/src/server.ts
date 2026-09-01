@@ -1,9 +1,11 @@
 import { createServer } from "node:http";
-import { getRadarSite } from "./site.js";
-import { getVolumeCached, extractLowestElevation } from "./level2.js";
-import { computeReflectivityGrid, computeVelocityGrid, buildCandidateCells, boundsOf, mergeReflectivityCells, makeSharedMergeGrid, sharedMergeGridToPoints } from "./project.js";
+import { fork, type ChildProcess } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import { fetchStormTracks, fetchHailDetections, fetchTvsDetections, fetchMesocycloneDetections } from "./level3-markers.js";
-import { renderMrmsGridToDataUrl, renderVelocityGridToDataUrl } from "./render.js";
+import { GRID_STEP_DEG, MAX_RANGE_KM } from "./radar-constants.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Ring buffer of this worker's own past renders, so the app can build a real in-house timeline
 // instead of only ever showing "now" and falling back to an external mosaic for every past frame.
@@ -78,57 +80,14 @@ function recordFrame(station: string, payload: FramePayload) {
 // production load times there were measured anywhere from ~0.15s to ~16s for
 // superficially identical requests — see project memory. Same station
 // requested twice in a row here hits a warm parsed volume, not a fresh S3
-// download + binary decode.
+// download + binary decode (the compute worker, not this process, holds that
+// cache now — see COMPUTE_WORKER_PATH below).
 //
-// 0.006deg (~670m) — finer than the main app's own fallback route (still
-// 0.01deg), affordable because this worker renders a PNG server-side
-// (render.ts) instead of shipping raw {lat,lon,dbz} JSON. Pulled back
-// TWICE from more aggressive values, each for a real measured reason:
-//   - 0.0025deg (~278m): ~2.6M candidate cells, multi-hundred-second compute
-//     pileups under concurrent load (a scheduling bug, since fixed by the
-//     request queue below) and disproportionately slow even alone.
-//   - 0.0033/0.004deg (~370-445m): compute was fine in controlled testing,
-//     but real production OOMs kept recurring even after fixing an actual
-//     memory leak (see level2.ts/server.ts cache-eviction comments) — a
-//     FRESH machine, seconds into its life, OOM'd while decoding a real
-//     volume during active severe weather. The likely reason: the
-//     nexrad-level-2-data library eagerly parses the ENTIRE volume (every
-//     elevation/moment) regardless of which single elevation this app
-//     actually uses, so a severe-weather VCP (more tilts, more supplemental
-//     low-level scans) genuinely parses into a bigger object than a routine
-//     VCP does — a cost independent of this app's own GRID_STEP_DEG, and
-//     not something fixable without replacing that library (out of scope
-//     tonight).
+// GRID_STEP_DEG/MAX_RANGE_KM live in radar-constants.ts now, shared with compute-worker.ts (the
+// child process that actually does the decode+compute — see that file and the block comment near
+// COMPUTE_WORKER_PATH below for why this moved out of a single process). See that file for the
+// full history of both values.
 //
-// Pulled back 0.004 -> 0.006deg, 2026-09-01 (Andrew's explicit call), the morning after shipping
-// 0.004deg: the worker was found unresponsive for hours overnight (/health failing, no known
-// healthy instances) with NO OOM or crash signal anywhere in the logs — the process was alive but
-// stuck, not killed. project.ts's flat-array refactor was verified hard against MEMORY (see that
-// file's history) but never load-tested against sustained concurrent request bursts, and this
-// worker still runs all its heavy decode+compute fully SYNCHRONOUSLY on one thread with no yield
-// points and no timeout (MAX_CONCURRENT_COMPUTE=1's queue has no escape hatch if it backs up) — an
-// already-documented pre-existing risk class (a real 500-second pileup happened before, for a
-// different reason). 0.004deg made every request's compute step genuinely take longer, thinning
-// the safety margin against that exact risk with no new evidence it's actually safe under load.
-// Pulled back to the known-safe value while a real watchdog (moving decode+compute off the main
-// thread with an enforced timeout, so a hang degrades to a 502 instead of taking the whole worker
-// down) gets built — see that work before raising this again.
-const GRID_STEP_DEG = 0.006;
-// Raised 230km -> 460km, 2026-08-31, after the fly.toml performance-1x + 4096mb upgrade (Andrew's
-// own call, done the same day, see that file's history) removed the two real constraints that had
-// kept this at 230km: shared-cpu-1x's CPU throttling (the actual root cause of the 60-210s
-// severe-weather decode incidents, not raw compute cost — see fly.toml) and the 2GB memory ceiling
-// Fly enforces on that size class. 230km was never a rendering-quality choice, it was "as far as we
-// could safely go on that tier" — real NEXRAD super-res base reflectivity actually resolves out to
-// ~460km (248nm), which is what RadarScope shows (confirmed live: KGSP reaching the Atlantic coast,
-// ~310km away, was invisible here at the old 230km cutoff even though the data exists).
-// Measured real cost of this change on live KGSP data before deploying: candidate cells 455k -> 1.82M
-// (4x, as expected from the range^2 scaling in buildCandidateCells), sample compute 331ms -> 868ms —
-// still well under a second per station, and MOSAIC_TIMEOUT_MS (radar-worker-client.ts, 150s) has
-// enormous headroom even at MAX_MOSAIC_STATIONS=8 stations each paying this cost. If a real OOM
-// recurs at this range even on the upgraded tier (check via fly logs, same as every past incident
-// here), the fix is typed-array cell storage (flagged in fly.toml's own history), not reverting this.
-const MAX_RANGE_KM = 460;
 // Raised alongside level2.ts's VOLUME_CACHE_TTL_MS (90s -> 5min) — same real
 // incident, same reasoning: during active severe weather the volume parse
 // this payload is built from can itself take 60-210+ seconds, independent
@@ -205,6 +164,83 @@ async function withComputeSlot<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+// Real incident, 2026-09-01: the actual decode+compute work (compute-worker.ts) used to run
+// in THIS process, inline. A genuinely stuck computation — no crash, no OOM, just stuck — left the
+// worker unresponsive for HOURS (no known healthy instances, /health failing) because Node's single
+// event-loop thread can't do anything else, including answer /health, while synchronous JS is
+// running, and nothing here had a way to notice or recover from that. withComputeSlot above already
+// serializes this correctly (one job at a time); the piece that was missing is a way to actually
+// KILL a job that's taking too long, which is only possible if that job runs in a different OS
+// process — a stuck synchronous loop can't even see a SIGTERM (its own event loop is what's stuck),
+// only the OS killing the process from outside actually works.
+//
+// A single persistent worker (not a per-request fork) keeps the existing "warm parsed-volume cache
+// across requests" benefit (level2.ts's getVolumeCached cache now lives in the worker process, not
+// here) for the common case, and is only ever replaced when something actually goes wrong.
+const COMPUTE_WORKER_PATH = path.join(__dirname, "compute-worker.js");
+// Generous on purpose: level2.ts documents a real volume parse alone taking 60-210+ seconds during
+// severe weather, independent of anything this app's own code does. This timeout exists to bound a
+// genuine HANG to a few minutes instead of indefinitely, not to cut off a legitimately slow (but
+// working) severe-weather request before it would have succeeded on its own — set comfortably
+// above that documented worst case.
+const COMPUTE_TIMEOUT_MS = Number(process.env.COMPUTE_TIMEOUT_MS ?? 240_000);
+
+type ComputeWorkerJob = { kind: "single"; station: string; moment: "reflectivity" | "velocity" } | { kind: "mosaic"; stations: string[] };
+type ComputeWorkerRequest = ComputeWorkerJob & { id: number };
+type ComputeWorkerResponse = { id: number; ok: true; body: unknown } | { id: number; ok: false; error: string };
+
+let computeWorker: ChildProcess | null = null;
+let nextComputeRequestId = 1;
+const pendingComputeJobs = new Map<number, { resolve: (body: unknown) => void; reject: (error: Error) => void; timeout: NodeJS.Timeout }>();
+
+function spawnComputeWorker(): ChildProcess {
+  const child = fork(COMPUTE_WORKER_PATH, [], { stdio: ["ignore", "inherit", "inherit", "ipc"] });
+  child.on("message", (message: ComputeWorkerResponse) => {
+    const job = pendingComputeJobs.get(message.id);
+    if (!job) return;
+    pendingComputeJobs.delete(message.id);
+    clearTimeout(job.timeout);
+    if (message.ok) job.resolve(message.body);
+    else job.reject(new Error(message.error));
+  });
+  child.on("exit", (code, signal) => {
+    console.error(`[compute-worker] exited unexpectedly (code=${code}, signal=${signal}) — respawning on next request`);
+    // Whatever was in flight on this worker can never get an answer now — fail it rather than hang
+    // its caller forever. MAX_CONCURRENT_COMPUTE=1 means there's at most one such job.
+    for (const [id, job] of pendingComputeJobs) {
+      clearTimeout(job.timeout);
+      job.reject(new Error("Compute worker exited unexpectedly."));
+      pendingComputeJobs.delete(id);
+    }
+    if (computeWorker === child) computeWorker = null;
+  });
+  return child;
+}
+
+function getComputeWorker(): ChildProcess {
+  if (!computeWorker) computeWorker = spawnComputeWorker();
+  return computeWorker;
+}
+
+function runInComputeWorker(request: ComputeWorkerJob): Promise<unknown> {
+  const id = nextComputeRequestId++;
+  const child = getComputeWorker();
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      pendingComputeJobs.delete(id);
+      console.error(`[compute-worker] job ${id} (${request.kind}) exceeded ${COMPUTE_TIMEOUT_MS / 1000}s — killing and respawning the worker`);
+      // SIGKILL, not SIGTERM: if this job is genuinely stuck in synchronous JS, the worker's event
+      // loop is what's stuck, so it can never see or act on a graceful SIGTERM either — only the OS
+      // forcibly tearing down the process actually works.
+      child.kill("SIGKILL");
+      if (computeWorker === child) computeWorker = null;
+      reject(new Error(`Compute timed out after ${COMPUTE_TIMEOUT_MS / 1000}s.`));
+    }, COMPUTE_TIMEOUT_MS);
+    pendingComputeJobs.set(id, { resolve, reject, timeout });
+    child.send({ id, ...request } as ComputeWorkerRequest);
+  });
+}
+
 // In-flight request de-duplication — if the exact same station+moment is
 // already being computed (e.g. two browser tabs, or a client retry landing
 // while the first attempt is still running), share that one computation
@@ -230,61 +266,12 @@ async function handleReflectivityOrVelocity(station: string, moment: "reflectivi
 }
 
 async function computeReflectivityOrVelocity(station: string, moment: "reflectivity" | "velocity", cacheKey: string) {
-  const t0 = performance.now();
-  const [site, volume] = await Promise.all([getRadarSite(station), getVolumeCached(station)]);
-  const { radar } = volume;
-  const t1 = performance.now();
-
-  let correlationCoefficient;
-  try {
-    correlationCoefficient = extractLowestElevation(radar, "correlationCoefficient");
-  } catch {
-    correlationCoefficient = undefined;
-  }
-
-  // Geometry (bearing/range per output cell) is independent of which moment
-  // is being sampled — built once here and shared across reflectivity, CC,
-  // and velocity below instead of each redoing the same expensive trig pass.
-  const candidateCells = buildCandidateCells(site, GRID_STEP_DEG, MAX_RANGE_KM);
-  const t2 = performance.now();
-
-  let grid, bounds, elevationDeg, qualityControl;
-  if (moment === "velocity") {
-    const reflElevation = extractLowestElevation(radar, "reflectivity");
-    const velElevation = extractLowestElevation(radar, "velocity");
-    const { echoMask, qualityControl: qc } = computeReflectivityGrid(reflElevation, site, GRID_STEP_DEG, MAX_RANGE_KM, correlationCoefficient, candidateCells);
-    ({ grid, bounds } = computeVelocityGrid(velElevation, site, GRID_STEP_DEG, MAX_RANGE_KM, echoMask, candidateCells));
-    elevationDeg = velElevation.elevationDeg;
-    qualityControl = qc;
-  } else {
-    const elevation = extractLowestElevation(radar, "reflectivity");
-    ({ grid, bounds, qualityControl } = computeReflectivityGrid(elevation, site, GRID_STEP_DEG, MAX_RANGE_KM, correlationCoefficient, candidateCells));
-    elevationDeg = elevation.elevationDeg;
-  }
-  const tCompute = performance.now();
-  console.log(`[${station}:${moment}] fetch+parse ${(t1 - t0).toFixed(0)}ms, geometry ${(t2 - t1).toFixed(0)}ms, sample ${(tCompute - t2).toFixed(0)}ms, total ${(tCompute - t0).toFixed(0)}ms`);
-
-  const hasSignal = grid.some((point) => point.dbz !== null);
-  if (!hasSignal) throw new Error(`No ${moment} data available for ${station} in this volume.`);
-
-  // Rendered server-side rather than shipping raw points — see the
-  // GRID_STEP_DEG comment above for why this matters at this resolution.
-  const imageDataUrl =
-    moment === "velocity"
-      ? renderVelocityGridToDataUrl(grid, bounds, GRID_STEP_DEG)
-      : renderMrmsGridToDataUrl(grid, bounds, GRID_STEP_DEG);
-  if (!imageDataUrl) throw new Error(`Failed to render ${moment} image for ${station}.`);
-  console.log(`[${station}:${moment}] render+encode: ${(performance.now() - tCompute).toFixed(0)}ms, image ~${Math.round((imageDataUrl.length * 0.75) / 1024)}KB`);
-
-  const payload = {
-    time: volume.lastModified,
-    bounds,
-    step: GRID_STEP_DEG,
-    imageDataUrl,
-    elevationDeg,
-    qualityControl,
-    source: `NEXRAD Level II (${station}, ${moment})`,
-  };
+  // The actual fetch+decode+geometry+sample+render work all happens in compute-worker.ts now — see
+  // that file and the COMPUTE_WORKER_PATH comment above for why. This function's own job shrinks to
+  // "delegate, then own the parts that must stay in this process" (the payload cache and the
+  // in-house frame-history ring buffer, both pure in-memory bookkeeping the HTTP-facing routes below
+  // read directly and synchronously, with no reason to round-trip through IPC).
+  const payload = await runInComputeWorker({ kind: "single", station, moment }) as FramePayload;
   setCache(cacheKey, payload, PAYLOAD_CACHE_TTL_MS);
   if (moment === "reflectivity") recordFrame(station, payload);
   return { status: 200, body: payload, source: "live" as const };
@@ -376,96 +363,18 @@ async function handleMosaic(stationsParam: string) {
 }
 
 async function computeMosaic(stations: string[], cacheKey: string) {
-  const t0 = performance.now();
-  const perStationMs: string[] = [];
-  const succeededStations: string[] = [];
-  const failedStations: string[] = [];
-
-  // Sites are resolved UPFRONT now (2026-09-01, flat-array refactor) — the shared merge grid below
-  // needs every member's coordinates before any station is decoded, to size one array covering the
-  // whole mosaic's union bounding box instead of the old per-station-Map-then-merge pattern (see
-  // project.ts's own history for the real memory numbers that motivated this). Promise.allSettled,
-  // not Promise.all: a single station's site lookup failing must NOT take down the others, same
-  // resilience guarantee as the per-station try/catch below already gives the decode step — this is
-  // just that same guarantee extended one step earlier, not a new exception to it.
-  const siteResults = await Promise.allSettled(stations.map((station) => getRadarSite(station)));
-  const resolvedSites: { station: string; site: Awaited<ReturnType<typeof getRadarSite>> }[] = [];
-  siteResults.forEach((result, i) => {
-    if (result.status === "fulfilled") {
-      resolvedSites.push({ station: stations[i], site: result.value });
-    } else {
-      failedStations.push(stations[i]);
-      perStationMs.push(`${stations[i]}=FAILED(site lookup)`);
-      console.error(`[mosaic:${stations.join(",")}] station ${stations[i]} site lookup failed, continuing with the rest —`, result.reason instanceof Error ? result.reason.message : result.reason);
-    }
-  });
-
-  if (!resolvedSites.length) throw new Error(`Every station in [${stations.join(",")}] failed — no mosaic coverage available.`);
-
-  const shared = makeSharedMergeGrid(resolvedSites.map((r) => r.site), GRID_STEP_DEG, MAX_RANGE_KM);
-
-  // Sequential, one station in flight at a time — same MAX_CONCURRENT_COMPUTE=1 invariant as every
-  // other route, just spread across several stations instead of one. See the block comment above
-  // this function for why that's the deliberate, safe choice on the CURRENT small machine.
-  //
-  // Each station is caught individually (2026-08-31, real incident): a single station failing for
-  // ANY reason (a transient NWS metadata timeout, an S3 hiccup, a bad/missing volume) used to fail
-  // the WHOLE mosaic request, even when every other station in the list would have succeeded fine —
-  // found live via a real "Request to .../radar/stations/KMXX timed out after 10000ms" that took
-  // down an otherwise-healthy 4-station mosaic. A multi-station composite has more surface area for
-  // exactly this kind of single-point failure than a single-station request ever did, so it needs
-  // to degrade gracefully: skip the failed station, keep going, and render whatever succeeded.
-  for (const { station, site } of resolvedSites) {
-    const stationStart = performance.now();
-    try {
-      const volume = await getVolumeCached(station);
-      const elevation = extractLowestElevation(volume.radar, "reflectivity");
-      let correlationCoefficient;
-      try {
-        correlationCoefficient = extractLowestElevation(volume.radar, "correlationCoefficient");
-      } catch {
-        correlationCoefficient = undefined;
-      }
-      const candidateCells = buildCandidateCells(site, GRID_STEP_DEG, MAX_RANGE_KM);
-      const { grid } = computeReflectivityGrid(elevation, site, GRID_STEP_DEG, MAX_RANGE_KM, correlationCoefficient, candidateCells);
-      mergeReflectivityCells(shared, grid, GRID_STEP_DEG);
-      succeededStations.push(station);
-      perStationMs.push(`${station}=${((performance.now() - stationStart) / 1000).toFixed(1)}s`);
-    } catch (error) {
-      failedStations.push(station);
-      perStationMs.push(`${station}=FAILED(${((performance.now() - stationStart) / 1000).toFixed(1)}s)`);
-      console.error(`[mosaic:${stations.join(",")}] station ${station} failed, continuing with the rest —`, error instanceof Error ? error.message : error);
-    }
-  }
-
-  if (!succeededStations.length) throw new Error(`Every station in [${stations.join(",")}] failed — no mosaic coverage available.`);
-
-  const mergedPoints = sharedMergeGridToPoints(shared, GRID_STEP_DEG);
-  const bounds = boundsOf(mergedPoints);
-  const imageDataUrl = renderMrmsGridToDataUrl(mergedPoints, bounds, GRID_STEP_DEG);
-  if (!imageDataUrl) throw new Error(`No mosaic coverage available for [${stations.join(",")}].`);
-
-  console.log(`[mosaic:${stations.join(",")}] ${perStationMs.join(" ")}, total ${((performance.now() - t0) / 1000).toFixed(1)}s${failedStations.length ? ` (${failedStations.length} station(s) skipped: ${failedStations.join(",")})` : ""}`);
-
-  const payload = {
-    time: new Date().toISOString(),
-    bounds,
-    step: GRID_STEP_DEG,
-    imageDataUrl,
-    // Reflects what's ACTUALLY in the composite, not the originally-requested list — a caller
-    // relying on this (e.g. the dev console.log of which stations went into a mosaic) should never
-    // be told a station contributed when it silently failed and got skipped.
-    stations: succeededStations,
-    failedStations: failedStations.length ? failedStations : undefined,
-    source: `NEXRAD Level II mosaic (${succeededStations.join(", ")})`,
-  };
+  // Same split as computeReflectivityOrVelocity above — the actual per-station decode+compute+merge
+  // work (including the per-station graceful-degradation try/catch, 2026-08-31's real fix) now lives
+  // in compute-worker.ts. This function keeps only the cache write and frame-history recording.
+  const payload = await runInComputeWorker({ kind: "mosaic", stations }) as FramePayload;
   setCache(cacheKey, payload, MOSAIC_CACHE_TTL_MS);
   // Retained under the ORIGINALLY REQUESTED combo (a site's fixed, configured station set), not
-  // succeededStations — that key is stable across requests (matches exactly what the app will ask
-  // for again via mosaicKey), whereas succeededStations can jitter run to run whenever one member
-  // has a transient failure, which would fragment history across many near-duplicate keys and make
-  // it much slower to ever cross MIN_INHOUSE_FRAMES. A frame retained under a transient partial
-  // failure is the same tradeoff the live mosaic already accepts (degrade gracefully, don't refuse).
+  // whatever subset actually succeeded — that key is stable across requests (matches exactly what
+  // the app will ask for again via mosaicKey), whereas the succeeded-subset can jitter run to run
+  // whenever one member has a transient failure, which would fragment history across many
+  // near-duplicate keys and make it much slower to ever cross MIN_INHOUSE_FRAMES. A frame retained
+  // under a transient partial failure is the same tradeoff the live mosaic already accepts (degrade
+  // gracefully, don't refuse).
   recordFrame(mosaicKey(stations), payload);
   return { status: 200, body: payload, source: "live" as const };
 }
