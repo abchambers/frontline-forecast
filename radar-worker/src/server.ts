@@ -496,6 +496,24 @@ server.listen(PORT, () => {
 // Athens/Atlanta/Gainesville, KBMX covers Birmingham) — update both places
 // together if the app's preset locations ever change.
 const PREWARM_STATIONS = ["KFFC", "KBMX"];
+// Real incident, 2026-09-01: mosaic is the default LIVE view for every visitor, but until now
+// nothing kept its cache warm — only real requests did, and the mosaic cache TTL (5 min) is short
+// enough that anyone arriving more than 5 minutes after the last visitor paid the FULL cold cost
+// (measured live: a cold 4-station combo took 40.6s; the same combo warm from a recent request
+// answered in 0.18s). Extending the existing single-station prewarm to also cover the mosaic
+// combos actually shown by default closes that gap the same safe way the single-station prewarm
+// already does — same self-rescheduling loop, same shared compute slot, no new mechanism.
+//
+// Hardcoded rather than looked up from src/lib/mosaic-station-sets.ts (the main app's table): this
+// worker deliberately has no station-coordinate database to look combos up from (see handleMosaic's
+// own comment for why — that logic belongs in the app, not here), so this is a hand-synced copy of
+// just the two combos that matter: the ones covering this app's actual preset locations
+// (weatherDeskLocations all resolve to KFFC or KBMX, same reasoning as PREWARM_STATIONS above).
+// Update this alongside mosaic-station-sets.ts if either preset's station set ever changes.
+const PREWARM_MOSAIC_COMBOS: string[][] = [
+  ["KFFC", "KJGX", "KMXX", "KBMX", "KGSP"],
+  ["KBMX", "KMXX", "KGWX", "KHTX"],
+];
 // Originally 80s (just under the 90s cache TTL, to never let it expire) —
 // found live via fly logs this was too aggressive: each station's cold
 // compute takes ~15-25s, so 2 stations back to back can occupy ~30-50s of
@@ -538,6 +556,18 @@ async function prewarm() {
       await handleReflectivityOrVelocity(station, "reflectivity");
     } catch (error) {
       console.error(`[prewarm:${station}] failed —`, error instanceof Error ? error.message : error);
+    }
+  }
+  // Runs AFTER the single-station loop above, deliberately: KFFC/KBMX's own parsed-volume cache
+  // (level2.ts's getVolumeCached, shared across every route regardless of single-station vs mosaic)
+  // is already warm by the time these run, so each combo only pays a fresh decode for its OTHER
+  // members — e.g. KFFC's combo only needs KJGX/KMXX/KGSP fresh, not all 5. The two combos also
+  // share KMXX/KBMX with each other, so running KFFC's combo first warms part of KBMX's combo too.
+  for (const combo of PREWARM_MOSAIC_COMBOS) {
+    try {
+      await handleMosaic(combo.join(","));
+    } catch (error) {
+      console.error(`[prewarm:mosaic:${combo.join(",")}] failed —`, error instanceof Error ? error.message : error);
     }
   }
   setTimeout(prewarm, PREWARM_INTERVAL_MS);
