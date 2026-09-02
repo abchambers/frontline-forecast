@@ -23,23 +23,22 @@ import { DESPECKLE_STRENGTH_GATE_DBZ } from "./project.js";
 // Andrew, live 2026-09-01: "blue is harsh" — the bottom two stops (0 and 5 dBZ, NWS's own "very
 // light reflectivity" band) were the full-saturation cyan/deep-blue pixel-sampled from a real storm
 // CORE, applied identically to the weakest possible signal this app shows — visually declaring
-// "here's real precipitation" at exactly the band where that's least certain. RadarScope's own
-// clear-air renders (see the VCP-dimming and elongation-check commits above) showed this band as a
-// pale, near-white haze, not saturated color. Blended 55%/45% toward white respectively (55% at 0
-// dBZ since it's the least certain of all, tapering to 45% at 5 dBZ, closer to real signal) —
-// judgment calls from directly reviewing those reference screenshots, NOT a fresh pixel-sampled
-// match like the original stops below were (no live severe-weather RadarScope frame with a real
-// storm's OWN faint leading edge was available to sample the same way). 10 dBZ and above — the
-// start of the "light rain" band, ordinary common weather per this file's own despeckle/component
-// history — are deliberately untouched: this only softens the two bands directly abutting the
-// noise floor, not real precipitation once it's clearly real. Independent of and additive to the
-// alpha-based dimming above (VCP mode, component size, elongation) — a cell can be both low-alpha
-// AND pale-colored, or just pale-colored if it's part of a real storm's own faint edge that survived
-// every other check as legitimate.
+// "here's real precipitation" at exactly the band where that's least certain.
+//
+// SUPERSEDED, 2026-09-02: the 55%/45%-toward-white blend below was a judgment call, not a measured
+// match, and a fresh live comparison (RadarScope screenshots at KFFC/KMPX, real storms, same
+// moment) showed our blue still reading brighter/more saturated than either RadarScope or a live
+// NWS radar.weather.gov legend — pixel-sampled directly off that legend's own canvas (getImageData
+// across its color ramp), not eyeballed: the 0-10 dBZ band there is a muted, cool gray drifting
+// into a desaturated navy blue, nothing near our previous bright cyan. Re-picked 0/5/10 dBZ from
+// that real sample (dBZ position on the ramp estimated from its labeled -20..70 span, since exact
+// tick pixel positions weren't separately measured — open to a tighter recalibration if a direct
+// side-by-side still looks off). 15+ dBZ stays untouched, same reasoning as before: this only
+// softens the noise-floor-adjacent bands, not real precipitation once it's clearly real.
 const COLOR_STOPS: { dbz: number; rgb: [number, number, number] }[] = [
-  { dbz: 0, rgb: [140, 246, 246] },
-  { dbz: 5, rgb: [115, 203, 250] },
-  { dbz: 10, rgb: [0, 0, 246] },
+  { dbz: 0, rgb: [150, 158, 168] },
+  { dbz: 5, rgb: [105, 120, 165] },
+  { dbz: 10, rgb: [75, 100, 160] },
   { dbz: 15, rgb: [0, 255, 0] },
   { dbz: 20, rgb: [0, 200, 0] },
   { dbz: 25, rgb: [0, 144, 0] },
@@ -97,6 +96,17 @@ const SMALL_COMPONENT_MAX_CELLS = 40;
 const WEAK_SIGNAL_BLUR_PX = 1.2;
 const SOFT_BLUR_PX = 0.6;
 const WEAK_SIGNAL_ALPHA = 65;
+// Real comparison, 2026-09-02: a live KFFC-area mosaic (all 5 member stations confirmed VCP 35)
+// sat right next to the same moment on RadarScope. Both showed the same persistent KFFC clutter
+// spoke (elongation-gated, unaffected by this constant), but everywhere else RadarScope went
+// almost fully black while this app stayed scattered with visible speckle across multiple states.
+// Root cause: isClearAirMode shared WEAK_SIGNAL_ALPHA with the small-component/elongation cases,
+// even though it carries a much stronger guarantee -- when EVERY member station reports Clear Air
+// Mode, nothing in the frame is real weather, full stop (isExemptFromWeakSignal still protects any
+// cell strong enough to be real regardless). There's no real-storm risk being hedged against here,
+// so there's no reason to share the same moderate alpha used for "this one small blob might be
+// real" -- that's a fundamentally less certain case. Given its own, much lower alpha instead.
+const CLEAR_AIR_ALPHA = 16;
 // Mirrors a real fix in src/lib/mrms-render.ts — was 235/255 (~92%), which
 // stacked multiplicatively with the separate user-facing opacity slider
 // (defaults to 72%), making the real on-screen strength ~66% even though the
@@ -276,15 +286,25 @@ function isExemptFromWeakSignal(component: ComponentShape): boolean {
 // as weak signal if it's small, OR shaped like a thin radial streak, OR the whole frame is Clear Air
 // Mode — UNLESS it's strong enough to be exempt (see isExemptFromWeakSignal above), which always
 // wins regardless of the other three.
-function findWeakSignalKeys(cells: Cell[], isClearAirMode: boolean): Set<string> {
-  const weakKeys = new Set<string>();
+//
+// Clear Air Mode gets its own bucket (clearAirKeys), separate from the small/elongated case
+// (otherWeakKeys) — see CLEAR_AIR_ALPHA's comment for why the two deserve different treatment, not
+// just different bookkeeping. When the whole frame is Clear Air, every non-exempt component
+// already qualifies via that path alone; checking size/elongation on top of it would only ever
+// reclassify cells that are already going in the (more aggressive) clear-air bucket, so the other
+// checks only run when isClearAirMode is false.
+function findWeakSignalKeys(cells: Cell[], isClearAirMode: boolean): { clearAirKeys: Set<string>; otherWeakKeys: Set<string> } {
+  const clearAirKeys = new Set<string>();
+  const otherWeakKeys = new Set<string>();
   for (const component of findComponents(cells)) {
     if (isExemptFromWeakSignal(component)) continue;
-    if (isClearAirMode || component.size < SMALL_COMPONENT_MAX_CELLS || component.elongation >= ELONGATION_THRESHOLD) {
-      for (const componentKey of component.keys) weakKeys.add(componentKey);
+    if (isClearAirMode) {
+      for (const componentKey of component.keys) clearAirKeys.add(componentKey);
+    } else if (component.size < SMALL_COMPONENT_MAX_CELLS || component.elongation >= ELONGATION_THRESHOLD) {
+      for (const componentKey of component.keys) otherWeakKeys.add(componentKey);
     }
   }
-  return weakKeys;
+  return { clearAirKeys, otherWeakKeys };
 }
 
 // No hard cell-count cap here unlike the browser version — @napi-rs/canvas
@@ -353,13 +373,18 @@ function renderGrid(
   const compositeContext = composite.getContext("2d");
 
   if (splitBySize) {
-    const smallKeys = findWeakSignalKeys(cells, isClearAirMode);
-    const small = paintCells(width, height, cells.filter((c) => smallKeys.has(`${c.row},${c.col}`)), colorFor, WEAK_SIGNAL_ALPHA);
+    const { clearAirKeys, otherWeakKeys } = findWeakSignalKeys(cells, isClearAirMode);
+    const clearAir = paintCells(width, height, cells.filter((c) => clearAirKeys.has(`${c.row},${c.col}`)), colorFor, CLEAR_AIR_ALPHA);
+    if (clearAir) {
+      compositeContext.filter = `blur(${WEAK_SIGNAL_BLUR_PX}px)`;
+      compositeContext.drawImage(clearAir, 0, 0);
+    }
+    const small = paintCells(width, height, cells.filter((c) => otherWeakKeys.has(`${c.row},${c.col}`)), colorFor, WEAK_SIGNAL_ALPHA);
     if (small) {
       compositeContext.filter = `blur(${WEAK_SIGNAL_BLUR_PX}px)`;
       compositeContext.drawImage(small, 0, 0);
     }
-    const large = paintCells(width, height, cells.filter((c) => !smallKeys.has(`${c.row},${c.col}`)), colorFor, PIXEL_ALPHA);
+    const large = paintCells(width, height, cells.filter((c) => !clearAirKeys.has(`${c.row},${c.col}`) && !otherWeakKeys.has(`${c.row},${c.col}`)), colorFor, PIXEL_ALPHA);
     if (large) {
       compositeContext.filter = `blur(${SOFT_BLUR_PX}px)`;
       compositeContext.drawImage(large, 0, 0);
