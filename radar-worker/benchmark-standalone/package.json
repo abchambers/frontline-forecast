@@ -1,0 +1,10 @@
+{
+  "name": "radar-decode-benchmark",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Standalone NEXRAD decode-speed benchmark, copy this whole folder to any machine and run.",
+  "dependencies": {
+    "nexrad-level-2-data": "^2.4.3"
+  }
+}
