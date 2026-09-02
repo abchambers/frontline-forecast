@@ -582,7 +582,35 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
               // made it into this composite, not the configured set, so a station that failed and
               // got skipped is never shown as highlighted when it isn't actually contributing.
               if (!cancelled) setMosaicMemberStations(data.stations ?? []);
-              addGridLayer(data, "mosaic", renderMrmsGridToDataUrl);
+
+              // Phase 1 tile architecture (2026-09-02): this metadata fetch still gates "is a
+              // mosaic even available here" exactly as before (same fallback chain, same
+              // reliability guarantee) — what changed is the VISUAL layer itself, now real XYZ
+              // tiles (/api/radar/tile, verified end-to-end against production: zero seams across
+              // 56 independently-fetched real tiles, CDN-cached at Vercel's edge) instead of one
+              // big imageOverlay. Reuses getOrCreateProviderLayer completely unchanged — its
+              // maxNativeZoom:8 was tuned for IEM's own tiles but happens to exactly match this
+              // app's own real GRID_STEP_DEG-derived native zoom too (see radar-worker/src/
+              // mercator.ts), so there was nothing IEM-specific left to generalize.
+              //
+              // The cache-busting `v` param is a WALL-CLOCK time bucket (changes every 90s,
+              // matching the tile route's own s-maxage), not this component's own refreshToken —
+              // refreshToken increments once per browser session on its own 5-minute timer, so two
+              // users' tokens are unrelated to each other at any real moment; keying on one would
+              // fragment the CDN cache per-VISITOR instead of per-time-window, defeating the whole
+              // reason tiles share a cache across users in the first place.
+              const tileCacheBucket = Math.floor(Date.now() / 90_000);
+              const tileUrlTemplate = `/api/radar/tile/${location.radarSite}/{z}/{x}/{y}?v=${tileCacheBucket}`;
+              const nextLayer = getOrCreateProviderLayer(tileUrlTemplate);
+              if (!mapRef.current) throw new Error("Map unmounted");
+              const wasAlreadyMounted = mapRef.current.hasLayer(nextLayer);
+              if (!wasAlreadyMounted) nextLayer.addTo(mapRef.current);
+              const finish = () => settle(nextLayer, "mosaic", { elevationDeg: null, observedAt: data.time ?? null });
+              nextLayer.once("load", finish);
+              // Freshly-computed tiles (not IEM's own pre-rendered ones), so a longer grace window
+              // than addProviderLayer's 700ms before settling anyway — a reused/cached bucket still
+              // settles fast via the wasAlreadyMounted path.
+              window.setTimeout(finish, wasAlreadyMounted ? 60 : 2000);
               return true;
             })
             .catch(() => false)
