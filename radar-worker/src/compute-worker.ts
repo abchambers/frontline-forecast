@@ -127,10 +127,36 @@ async function computeMosaic(stations: string[]) {
   // flips it off for the whole composite, never the other way around — never risk under-dimming.
   let allClearAir = true;
 
-  for (const { station, site } of resolvedSites) {
+  // Real evidence, 2026-09-02 (fly logs): each station's own "fetch+parse" time (13-25s in calm
+  // weather) is logged as ONE number, but fetchLatestVolume's S3 download is genuine network I/O —
+  // it overlaps fine across stations even on a single JS thread — while only the actual
+  // `new Level2Radar(buffer)` parse afterward is synchronous CPU work that has to serialize. The old
+  // code awaited getVolumeCached one station at a time, so station 2's download never even started
+  // until station 1's ENTIRE fetch+parse+compute+merge had finished — paying the sum of every
+  // station's time (a 5-station mosaic measured 54-71s total, live) instead of roughly the slowest
+  // one. Firing every station's getVolumeCached concurrently fixes that for the network-bound part.
+  // This does NOT fix the worst case: during active severe weather the decode ITSELF (not the
+  // network wait) has separately measured 60-210+s per volume (see level2.ts/this file's own header
+  // comment) — a nexrad-level-2-data library constraint (it eagerly parses every elevation/moment,
+  // no partial-decode option), not a scheduling one, and concurrency across a single JS thread can't
+  // parallelize that part. Out of scope here; the real fix for that case is a harder, separate task
+  // (patching/replacing the decoder, or more CPU — the latter is a cost decision, not mine to make).
+  const volumeFetchStart = performance.now();
+  const volumeResults = await Promise.allSettled(resolvedSites.map(({ station }) => getVolumeCached(station)));
+  console.log(`[mosaic:${stations.join(",")}] volume fetch+parse (concurrent, ${resolvedSites.length} stations): ${((performance.now() - volumeFetchStart) / 1000).toFixed(1)}s`);
+
+  for (let i = 0; i < resolvedSites.length; i += 1) {
+    const { station, site } = resolvedSites[i];
+    const volumeResult = volumeResults[i];
     const stationStart = performance.now();
+    if (volumeResult.status === "rejected") {
+      failedStations.push(station);
+      perStationMs.push(`${station}=FAILED(volume fetch)`);
+      console.error(`[mosaic:${stations.join(",")}] station ${station} failed, continuing with the rest —`, volumeResult.reason instanceof Error ? volumeResult.reason.message : volumeResult.reason);
+      continue;
+    }
     try {
-      const volume = await getVolumeCached(station);
+      const volume = volumeResult.value;
       if (!isClearAirVcp(volume.radar)) allClearAir = false;
       const elevation = extractLowestElevation(volume.radar, "reflectivity");
       let correlationCoefficient;
