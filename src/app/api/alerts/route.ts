@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { weatherDeskLocation } from "@/lib/locations";
+import { resolveWeatherDeskLocation } from "@/lib/locations";
 import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 type NwsAlertFeature = {
@@ -65,7 +65,14 @@ export async function GET(request: Request) {
   const limit = checkRateLimit(request, "alerts", 60, 60_000);
   if (limit.limited) return rateLimitResponse(limit.retryAfterSeconds);
   try {
-    const location = weatherDeskLocation(new URL(request.url).searchParams.get("location"));
+    // Real bug found live, 2026-09-02: this used to be weatherDeskLocation(id), which only
+    // recognizes the 4 hardcoded preset ids and silently falls back to Athens, GA for anything
+    // else — including every custom-searched or station-picker location (ids like
+    // "custom-radar-kmpx"), see radar-map.tsx's alert fetch below. That meant every location
+    // outside the 4 presets silently got Athens, GA's severe weather alerts with no error surfaced
+    // anywhere — a real safety-relevant miss, not just a display bug. resolveWeatherDeskLocation is
+    // the same lat/lon-aware helper every other weather-data route already uses for exactly this.
+    const location = resolveWeatherDeskLocation(new URL(request.url).searchParams);
     const response = await fetch(`https://api.weather.gov/alerts/active?point=${location.latitude},${location.longitude}`, {
       headers: { "User-Agent": "Frontline Forecast weather application" },
       next: { revalidate: 120 },

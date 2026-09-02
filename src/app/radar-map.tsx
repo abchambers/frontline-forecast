@@ -137,7 +137,13 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
     alertLayerRef.current = null;
     if (!showAlerts) return;
     let active = true;
-    fetch(`/api/alerts?location=${encodeURIComponent(location.id)}`)
+    // Real bug found live, 2026-09-02: this used to send only `location=<id>`, which the route
+    // resolved via the preset-only weatherDeskLocation() lookup — silently falling back to Athens,
+    // GA for any custom (searched or station-picked) location, since ids like "custom-radar-kmpx"
+    // don't match any of the 4 hardcoded presets. Sending lat/lon directly (the same
+    // resolveWeatherDeskLocation contract every other weather-data fetch in this app already
+    // uses) makes this work for every real location, not just the 4 presets.
+    fetch(`/api/alerts?lat=${location.latitude}&lon=${location.longitude}&id=${encodeURIComponent(location.id)}&name=${encodeURIComponent(location.name)}`)
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "NWS alert overlay unavailable");
@@ -153,7 +159,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       })
       .catch(() => undefined);
     return () => { active = false; };
-  }, [leafletLoaded, showAlerts, location.id]);
+  }, [leafletLoaded, showAlerts, location.latitude, location.longitude, location.id]);
 
   useEffect(() => {
     if (!leafletLoaded || !mapRef.current || !window.L) return;
