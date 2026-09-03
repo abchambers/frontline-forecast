@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Standalone NEXRAD decode-speed benchmark, copy this whole folder to any machine and run.",
   "dependencies": {
-    "nexrad-level-2-data": "^2.4.3"
+    "nexrad-level-2-data": "^2.4.3",
+    "@napi-rs/canvas": "^1.0.3"
   }
 }

@@ -53,3 +53,17 @@ By default it checks KFFC, KBMX, and KMPX. To test different ones:
 ```
 node benchmark.mjs KTLX KOUN
 ```
+
+## Canvas/render test
+
+The decode benchmark above only tests the NEXRAD decoder. The real radar-worker also needs
+`@napi-rs/canvas` (a native, compiled library, not pure JS) to actually paint the radar image —
+that's a separate thing to verify before assuming a machine could run the real worker. Run:
+
+```
+node canvas-test.mjs
+```
+
+It saves `canvas-test-output.png` in this folder — open it and confirm it actually looks right (a
+green circle with a soft blurred edge, a solid orange circle, and white text on a dark background),
+not just that the command didn't error.
