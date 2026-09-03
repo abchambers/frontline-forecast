@@ -74,10 +74,10 @@ async function runVolumes(volumes: { station: string; key: string; event: string
     console.log(`[${station}] parse complete in ${((t2 - t1) / 1000).toFixed(1)}s`);
 
     const site = await getRadarSite(station);
-    const reflectivity = extractLowestElevation(radar, "reflectivity");
+    const reflectivity = await extractLowestElevation(radar, "reflectivity", station);
     let correlationCoefficient;
     try {
-      correlationCoefficient = extractLowestElevation(radar, "correlationCoefficient");
+      correlationCoefficient = await extractLowestElevation(radar, "correlationCoefficient", station);
     } catch {
       correlationCoefficient = undefined;
     }

@@ -18,12 +18,12 @@ async function main() {
   console.log(`  age: ${ageMinutes.toFixed(1)} minutes`);
 
   console.log("Decoding lowest reflectivity elevation...");
-  const reflectivity = extractLowestElevation(radar, "reflectivity");
+  const reflectivity = await extractLowestElevation(radar, "reflectivity", STATION_ID);
   console.log(`  elevation ${reflectivity.elevationDeg.toFixed(2)}deg, ${reflectivity.radials.length} radials`);
 
   let correlationCoefficient;
   try {
-    correlationCoefficient = extractLowestElevation(radar, "correlationCoefficient");
+    correlationCoefficient = await extractLowestElevation(radar, "correlationCoefficient", STATION_ID);
     console.log(`  correlation coefficient present: ${correlationCoefficient.radials.length} radials`);
   } catch {
     console.log("  correlation coefficient not present in this volume");

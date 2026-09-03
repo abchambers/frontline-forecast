@@ -1,6 +1,18 @@
 import pkg from "nexrad-level-2-data";
 import { fetchWithTimeout } from "./fetch-with-timeout.js";
+import { parsePartialVolume } from "./partial-level2-parser.js";
 const { Level2Radar } = pkg;
+
+// Real evidence, 2026-09-03 (radar-worker/scripts/verify-elevation-order.mjs,
+// verify-vcp-message-position.mjs, run against real KFFC/KBMX/KMPX volumes across three different
+// VCPs): the lowest elevation alone is only 6-11% of a volume's total records, the lowest two only
+// 12-25% — decoding the full 12-17 elevations most volumes carry wastes 75%+ of the decode work
+// this app never uses (extractLowestElevation only ever needs the first 1-2). VCP metadata (what
+// Clear-Air-Mode detection depends on) appears once, at ~1-2% through the file in all three real
+// cases — always captured well before this cutoff. 3 is a deliberately conservative margin above
+// the 1-2 elevations actually needed, not the tightest possible cut — see extractLowestElevation's
+// own fallback below for what happens on the rare/theoretical case this margin isn't enough.
+const MAX_ELEVATION_FOR_PARTIAL_DECODE = 3;
 
 // Fetches the latest complete assembled volume from Unidata's public S3
 // archive per request — a stateless model that fits this route's serverless
@@ -167,6 +179,25 @@ function evictExcessNonPresetVolumes(incomingStation: string) {
   }
 }
 
+// Tags the constructed Level2Radar with whether its underlying parse actually hit the early-exit
+// (true) versus ran to natural completion because the whole volume had <= MAX_ELEVATION_FOR_PARTIAL_DECODE
+// elevations anyway (false — nothing was skipped, there's no fuller volume to fall back to).
+// extractLowestElevation reads this to decide whether a retry-with-full-decode could possibly help.
+type PartiallyDecodedRadar = InstanceType<typeof Level2Radar> & { __partialStoppedEarly?: boolean };
+
+async function decodeVolumePartial(buffer: Buffer): Promise<PartiallyDecodedRadar> {
+  const partial = parsePartialVolume(buffer, MAX_ELEVATION_FOR_PARTIAL_DECODE, { logger: false });
+  const radar = (await new Level2Radar(partial as any)) as PartiallyDecodedRadar;
+  radar.__partialStoppedEarly = partial.stoppedEarly;
+  return radar;
+}
+
+async function decodeVolumeFull(buffer: Buffer): Promise<PartiallyDecodedRadar> {
+  const radar = (await new Level2Radar(buffer)) as PartiallyDecodedRadar;
+  radar.__partialStoppedEarly = false;
+  return radar;
+}
+
 export async function getVolumeCached(
   stationId: string,
 ): Promise<{ radar: InstanceType<typeof Level2Radar>; key: string; lastModified: string }> {
@@ -175,11 +206,23 @@ export async function getVolumeCached(
   if (cached && cached.expiresAt > Date.now()) return cached;
   evictExcessNonPresetVolumes(stationId);
   const { buffer, key, lastModified } = await fetchLatestVolume(stationId);
-  const radar = await new Level2Radar(buffer);
+  const radar = await decodeVolumePartial(buffer);
   const ttl = PRESET_STATIONS.has(stationId) ? VOLUME_CACHE_TTL_MS : NON_PRESET_VOLUME_TTL_MS;
   const entry = { radar, key, lastModified, expiresAt: Date.now() + ttl };
   volumeCache.set(stationId, entry);
   return entry;
+}
+
+// The fallback path for extractLowestElevation below: re-fetches (cheap, real evidence shows this
+// is the smaller cost — see compute-worker.ts's own fetch-vs-decode timing breakdown) and fully
+// decodes a station whose cached partial decode didn't have what was asked for, then replaces the
+// cache entry so subsequent calls for the same station within the TTL don't repeat the fallback.
+async function refetchAndDecodeFully(stationId: string): Promise<InstanceType<typeof Level2Radar>> {
+  const { buffer, key, lastModified } = await fetchLatestVolume(stationId);
+  const radar = await decodeVolumeFull(buffer);
+  const ttl = PRESET_STATIONS.has(stationId) ? VOLUME_CACHE_TTL_MS : NON_PRESET_VOLUME_TTL_MS;
+  volumeCache.set(stationId, { radar, key, lastModified, expiresAt: Date.now() + ttl });
+  return radar;
 }
 
 export type Moment = "reflectivity" | "velocity" | "correlationCoefficient";
@@ -198,7 +241,7 @@ export type Moment = "reflectivity" | "velocity" | "correlationCoefficient";
 // (all 720 entries populated, matching getHeader's values exactly). Worked
 // around by fetching the whole-elevation array once per elevation and
 // indexing into it, rather than calling per-scan like the other two moments.
-export function extractLowestElevation(radar: InstanceType<typeof Level2Radar>, moment: Moment): DecodedElevation {
+function extractLowestElevationOnce(radar: InstanceType<typeof Level2Radar>, moment: Moment): DecodedElevation | null {
   for (const elevation of radar.listElevations()) {
     radar.setElevation(elevation);
     const scans = radar.getScans();
@@ -233,5 +276,37 @@ export function extractLowestElevation(radar: InstanceType<typeof Level2Radar>, 
       return { elevationDeg: header.elevation_angle ?? elevation, radials };
     }
   }
+  return null;
+}
+
+// `stationId` is optional and only used for the partial-decode fallback below — every existing
+// caller that doesn't pass one keeps its exact original behavior (throws immediately, same as
+// before this file started partially decoding volumes).
+//
+// Real safety net for the partial decode in getVolumeCached above, not a correctness gamble: if a
+// requested moment genuinely isn't found AND the radar's underlying parse actually hit its early
+// exit (__partialStoppedEarly === true — meaning there's more of the real volume we didn't read),
+// re-fetch and fully decode this station once, then retry. If __partialStoppedEarly is false, the
+// "partial" decode already WAS the complete volume (a short VCP with <= MAX_ELEVATION_FOR_PARTIAL_DECODE
+// elevations total) — there's nothing fuller to fall back to, so this throws immediately exactly
+// like the pre-partial-decode code always did. Real evidence (see level2.ts's own comment on
+// MAX_ELEVATION_FOR_PARTIAL_DECODE) says this fallback should be unreachable in ordinary operation;
+// it exists so a VCP variant this app hasn't seen yet degrades to "one slightly slower request"
+// instead of a silent wrong answer.
+export async function extractLowestElevation(
+  radar: InstanceType<typeof Level2Radar> & { __partialStoppedEarly?: boolean },
+  moment: Moment,
+  stationId?: string,
+): Promise<DecodedElevation> {
+  const result = extractLowestElevationOnce(radar, moment);
+  if (result) return result;
+
+  if (stationId && radar.__partialStoppedEarly) {
+    console.warn(`[${stationId}] partial decode didn't contain ${moment} within the first ${MAX_ELEVATION_FOR_PARTIAL_DECODE} elevations — falling back to a full decode (this should be rare; if it's not, MAX_ELEVATION_FOR_PARTIAL_DECODE needs raising).`);
+    const fullRadar = await refetchAndDecodeFully(stationId);
+    const retryResult = extractLowestElevationOnce(fullRadar, moment);
+    if (retryResult) return retryResult;
+  }
+
   throw new Error(`No elevation in this volume carries ${moment} data.`);
 }

@@ -26,10 +26,10 @@ async function main() {
   const { radar } = await getVolumeCached(STATION_ID);
   heapSnapshot("after decode (raw Level2Radar object alive)");
 
-  const elevation = extractLowestElevation(radar, "reflectivity");
+  const elevation = await extractLowestElevation(radar, "reflectivity", STATION_ID);
   let correlationCoefficient;
   try {
-    correlationCoefficient = extractLowestElevation(radar, "correlationCoefficient");
+    correlationCoefficient = await extractLowestElevation(radar, "correlationCoefficient", STATION_ID);
   } catch {
     correlationCoefficient = undefined;
   }

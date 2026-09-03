@@ -63,10 +63,10 @@ async function main() {
     console.log(`[${station}] starting — RSS before: ${mb(rssBefore)}`);
 
     const { radar } = await getVolumeCached(station);
-    const reflectivity = extractLowestElevation(radar, "reflectivity");
+    const reflectivity = await extractLowestElevation(radar, "reflectivity", station);
     let correlationCoefficient;
     try {
-      correlationCoefficient = extractLowestElevation(radar, "correlationCoefficient");
+      correlationCoefficient = await extractLowestElevation(radar, "correlationCoefficient", station);
     } catch {
       correlationCoefficient = undefined;
     }

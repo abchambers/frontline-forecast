@@ -49,7 +49,7 @@ async function computeSingle(station: string, moment: "reflectivity" | "velocity
 
   let correlationCoefficient;
   try {
-    correlationCoefficient = extractLowestElevation(radar, "correlationCoefficient");
+    correlationCoefficient = await extractLowestElevation(radar, "correlationCoefficient", station);
   } catch {
     correlationCoefficient = undefined;
   }
@@ -60,14 +60,14 @@ async function computeSingle(station: string, moment: "reflectivity" | "velocity
 
   let grid, bounds, elevationDeg, qualityControl;
   if (moment === "velocity") {
-    const reflElevation = extractLowestElevation(radar, "reflectivity");
-    const velElevation = extractLowestElevation(radar, "velocity");
+    const reflElevation = await extractLowestElevation(radar, "reflectivity", station);
+    const velElevation = await extractLowestElevation(radar, "velocity", station);
     const { echoMask, qualityControl: qc } = computeReflectivityGrid(reflElevation, site, GRID_STEP_DEG, MAX_RANGE_KM, correlationCoefficient, candidateCells);
     ({ grid, bounds } = computeVelocityGrid(velElevation, site, GRID_STEP_DEG, MAX_RANGE_KM, echoMask, candidateCells));
     elevationDeg = velElevation.elevationDeg;
     qualityControl = qc;
   } else {
-    const elevation = extractLowestElevation(radar, "reflectivity");
+    const elevation = await extractLowestElevation(radar, "reflectivity", station);
     ({ grid, bounds, qualityControl } = computeReflectivityGrid(elevation, site, GRID_STEP_DEG, MAX_RANGE_KM, correlationCoefficient, candidateCells));
     elevationDeg = elevation.elevationDeg;
   }
@@ -191,10 +191,10 @@ async function computeMosaic(stations: string[]) {
     try {
       const volume = volumeResult.value;
       if (!isClearAirVcp(volume.radar)) allClearAir = false;
-      const elevation = extractLowestElevation(volume.radar, "reflectivity");
+      const elevation = await extractLowestElevation(volume.radar, "reflectivity", station);
       let correlationCoefficient;
       try {
-        correlationCoefficient = extractLowestElevation(volume.radar, "correlationCoefficient");
+        correlationCoefficient = await extractLowestElevation(volume.radar, "correlationCoefficient", station);
       } catch {
         correlationCoefficient = undefined;
       }

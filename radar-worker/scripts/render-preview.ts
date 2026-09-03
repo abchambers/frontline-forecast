@@ -17,10 +17,10 @@ const MAX_RANGE_KM = 230;
 async function main() {
   const site = await getRadarSite(STATION_ID);
   const { radar } = await getVolumeCached(STATION_ID);
-  const reflectivity = extractLowestElevation(radar, "reflectivity");
+  const reflectivity = await extractLowestElevation(radar, "reflectivity", STATION_ID);
   let correlationCoefficient;
   try {
-    correlationCoefficient = extractLowestElevation(radar, "correlationCoefficient");
+    correlationCoefficient = await extractLowestElevation(radar, "correlationCoefficient", STATION_ID);
   } catch {
     correlationCoefficient = undefined;
   }
