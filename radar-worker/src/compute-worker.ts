@@ -166,11 +166,23 @@ async function computeMosaic(stations: string[]) {
   // itself sitting at ~2.26GB at rest on this 4GB machine (barely 1.7GB of headroom before any
   // concurrent decode even started) — not concurrency being inherently unsafe. Shipping the partial
   // NEXRAD decode (level2.ts/partial-level2-parser.ts) cut that same steady-state floor to ~1.04GB,
-  // confirmed live via SSH immediately after deploy — roughly half. That changes the actual math
-  // this reverted-to-1 decision was based on, so re-verifying concurrency here rather than assuming
-  // it's still unsafe. Re-enabling full concurrency (no batch cap) and watching real RSS live during
-  // an actual cycle before trusting it — see git log for whether that verification passed.
-  const VOLUME_FETCH_BATCH_SIZE = resolvedSites.length;
+  // confirmed live via SSH immediately after deploy — roughly half. Re-enabled full per-job
+  // concurrency (no batch cap) and verified it live under real overlap — memory-wise, that was fine.
+  //
+  // THIRD REAL INCIDENT, same day, right after shipping Phase 3: full per-job concurrency was only
+  // ever verified against a world with 2 hardcoded prewarm combos, where at most 2 DISTINCT jobs
+  // could ever be in flight. Phase 3's tile-native station selection means a single page load can
+  // trigger MANY distinct combos at once (confirmed live: 13 different combos from one viewport,
+  // since adjacent tiles can each resolve to a different closest-5 set) — with
+  // MAX_CONCURRENT_COMPUTE=2 and unbounded per-job fetch concurrency, that's up to 10 simultaneous
+  // outbound connections from one machine, not the ~5 this was tuned for. Real symptom in fly logs:
+  // BOTH S3 and api.weather.gov (two unrelated external services) started timing out en masse at
+  // the same moment — not an external outage, this machine's own outbound capacity got saturated —
+  // causing real missing tiles in production (Andrew's own live report, side-by-side against
+  // RadarScope). Capping per-job fetch concurrency bounds the worst case to
+  // MAX_CONCURRENT_COMPUTE x this value regardless of how many distinct combos Phase 3 ever needs
+  // at once, trading away some of the latency win for not saturating the machine outright.
+  const VOLUME_FETCH_BATCH_SIZE = Math.min(2, resolvedSites.length);
   const volumeFetchStart = performance.now();
   const volumeResults: PromiseSettledResult<Awaited<ReturnType<typeof getVolumeCached>>>[] = [];
   for (let batchStart = 0; batchStart < resolvedSites.length; batchStart += VOLUME_FETCH_BATCH_SIZE) {
