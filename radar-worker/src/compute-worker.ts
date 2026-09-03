@@ -152,12 +152,23 @@ async function computeMosaic(stations: string[]) {
   // worker"). That eviction only trims the long-lived cache Map on insert — it does nothing to stop
   // firing all 5 stations' fetch+decode simultaneously in the first place, so a 5-station mosaic
   // (2 presets + 3 non-preset, like the KFFC combo) could have all 5 ~800MB decoded volumes alive at
-  // once mid-flight, before any of them ever reached the point eviction runs. Batching to
-  // VOLUME_FETCH_BATCH_SIZE keeps most of the real latency win (still real overlap within each
-  // batch) while capping peak simultaneous decoded volumes to a small, fixed number again — the
-  // same spirit as MAX_NON_PRESET_STATIONS, just applied to the in-flight window too, not only the
-  // steady-state cache.
-  const VOLUME_FETCH_BATCH_SIZE = 2;
+  // once mid-flight, before any of them ever reached the point eviction runs.
+  //
+  // SECOND REAL INCIDENT, same night, same day: batching to 2 at a time was the first fix, and it
+  // DID work as designed — this time the kernel's OOM killer only took the isolated compute-worker
+  // child (confirmed live: SSH'd in and watched its RSS climb 2.26GB -> 3.17GB in real time, then
+  // the exact fly logs line "Out of memory: Killed process 688 ... anon-rss:3134940kB" matching that
+  // peak), and the existing watchdog respawned it and self-healed within ~15s -- a real, contained
+  // recovery instead of a full machine reboot. But it's still a live crash, twice in one night from
+  // this same change. The real number that matters: the steady-state cache floor alone (2 presets +
+  // 1 resident non-preset, per MAX_NON_PRESET_STATIONS) already sits around ~2.26GB at REST on this
+  // 4GB machine, measured live -- there's barely 1.7GB of real headroom before ANY new concurrent
+  // decode even starts, which any batch size greater than 1 can burn through. Reverting to fully
+  // sequential (batch size 1, i.e. the pre-tonight behavior) until either the steady-state cache
+  // footprint itself comes down or the machine gets more real memory -- the latter is a cost
+  // decision, not mine to make unilaterally. Gives up tonight's latency win entirely for now in
+  // exchange for not crashing production twice more while this gets sorted out properly.
+  const VOLUME_FETCH_BATCH_SIZE = 1;
   const volumeFetchStart = performance.now();
   const volumeResults: PromiseSettledResult<Awaited<ReturnType<typeof getVolumeCached>>>[] = [];
   for (let batchStart = 0; batchStart < resolvedSites.length; batchStart += VOLUME_FETCH_BATCH_SIZE) {
