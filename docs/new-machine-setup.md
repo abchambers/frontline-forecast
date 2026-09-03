@@ -106,9 +106,8 @@ copying from there. Get them from the source instead:
   ```bash
   openssl rand -hex 32
   ```
-- **`OPENWEATHER_API_KEY`, `GRIBSTREAM_API_KEY`, `GRIBSTREAM_DISABLED`,
-  `COMPANY_HQ_CONFIG_URL`** — leave blank, all optional/retired features that degrade
-  gracefully.
+- **`OPENWEATHER_API_KEY`, `COMPANY_HQ_CONFIG_URL`** — leave blank, both optional
+  features that degrade gracefully.
 
 Never paste real secret values into a chat with an AI assistant, even one helping you
 set this up.
