@@ -160,15 +160,17 @@ async function computeMosaic(stations: string[]) {
   // the exact fly logs line "Out of memory: Killed process 688 ... anon-rss:3134940kB" matching that
   // peak), and the existing watchdog respawned it and self-healed within ~15s -- a real, contained
   // recovery instead of a full machine reboot. But it's still a live crash, twice in one night from
-  // this same change. The real number that matters: the steady-state cache floor alone (2 presets +
-  // 1 resident non-preset, per MAX_NON_PRESET_STATIONS) already sits around ~2.26GB at REST on this
-  // 4GB machine, measured live -- there's barely 1.7GB of real headroom before ANY new concurrent
-  // decode even starts, which any batch size greater than 1 can burn through. Reverting to fully
-  // sequential (batch size 1, i.e. the pre-tonight behavior) until either the steady-state cache
-  // footprint itself comes down or the machine gets more real memory -- the latter is a cost
-  // decision, not mine to make unilaterally. Gives up tonight's latency win entirely for now in
-  // exchange for not crashing production twice more while this gets sorted out properly.
-  const VOLUME_FETCH_BATCH_SIZE = 1;
+  // this same change. Reverted to fully sequential (batch size 1) at the time.
+  //
+  // REVISITED, 2026-09-03, same day: the real blocker back then was the steady-state cache floor
+  // itself sitting at ~2.26GB at rest on this 4GB machine (barely 1.7GB of headroom before any
+  // concurrent decode even started) — not concurrency being inherently unsafe. Shipping the partial
+  // NEXRAD decode (level2.ts/partial-level2-parser.ts) cut that same steady-state floor to ~1.04GB,
+  // confirmed live via SSH immediately after deploy — roughly half. That changes the actual math
+  // this reverted-to-1 decision was based on, so re-verifying concurrency here rather than assuming
+  // it's still unsafe. Re-enabling full concurrency (no batch cap) and watching real RSS live during
+  // an actual cycle before trusting it — see git log for whether that verification passed.
+  const VOLUME_FETCH_BATCH_SIZE = resolvedSites.length;
   const volumeFetchStart = performance.now();
   const volumeResults: PromiseSettledResult<Awaited<ReturnType<typeof getVolumeCached>>>[] = [];
   for (let batchStart = 0; batchStart < resolvedSites.length; batchStart += VOLUME_FETCH_BATCH_SIZE) {
