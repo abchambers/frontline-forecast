@@ -141,9 +141,31 @@ async function computeMosaic(stations: string[]) {
   // no partial-decode option), not a scheduling one, and concurrency across a single JS thread can't
   // parallelize that part. Out of scope here; the real fix for that case is a harder, separate task
   // (patching/replacing the decoder, or more CPU — the latter is a cost decision, not mine to make).
+  //
+  // REAL INCIDENT, 2026-09-03: shipping the line above as unbounded Promise.allSettled over every
+  // station caused a genuine full-VM OOM reboot within hours (fly logs: "Out of memory: Killed
+  // process" / Firecracker restart, not just the isolated compute-worker child getting SIGKILLed the
+  // way the watchdog is designed to contain). Root cause, from level2.ts's own documented history:
+  // each parsed volume measures ~800MB+ RSS, and MAX_NON_PRESET_STATIONS=1 exists specifically to
+  // bound "how many distinct non-preset stations' volumes can be alive at once" after an earlier,
+  // near-identical incident ("requesting 5 distinct stations in quick succession... OOM'd this
+  // worker"). That eviction only trims the long-lived cache Map on insert — it does nothing to stop
+  // firing all 5 stations' fetch+decode simultaneously in the first place, so a 5-station mosaic
+  // (2 presets + 3 non-preset, like the KFFC combo) could have all 5 ~800MB decoded volumes alive at
+  // once mid-flight, before any of them ever reached the point eviction runs. Batching to
+  // VOLUME_FETCH_BATCH_SIZE keeps most of the real latency win (still real overlap within each
+  // batch) while capping peak simultaneous decoded volumes to a small, fixed number again — the
+  // same spirit as MAX_NON_PRESET_STATIONS, just applied to the in-flight window too, not only the
+  // steady-state cache.
+  const VOLUME_FETCH_BATCH_SIZE = 2;
   const volumeFetchStart = performance.now();
-  const volumeResults = await Promise.allSettled(resolvedSites.map(({ station }) => getVolumeCached(station)));
-  console.log(`[mosaic:${stations.join(",")}] volume fetch+parse (concurrent, ${resolvedSites.length} stations): ${((performance.now() - volumeFetchStart) / 1000).toFixed(1)}s`);
+  const volumeResults: PromiseSettledResult<Awaited<ReturnType<typeof getVolumeCached>>>[] = [];
+  for (let batchStart = 0; batchStart < resolvedSites.length; batchStart += VOLUME_FETCH_BATCH_SIZE) {
+    const batch = resolvedSites.slice(batchStart, batchStart + VOLUME_FETCH_BATCH_SIZE);
+    const batchResults = await Promise.allSettled(batch.map(({ station }) => getVolumeCached(station)));
+    volumeResults.push(...batchResults);
+  }
+  console.log(`[mosaic:${stations.join(",")}] volume fetch+parse (batches of ${VOLUME_FETCH_BATCH_SIZE}, ${resolvedSites.length} stations): ${((performance.now() - volumeFetchStart) / 1000).toFixed(1)}s`);
 
   for (let i = 0; i < resolvedSites.length; i += 1) {
     const { station, site } = resolvedSites[i];
