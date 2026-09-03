@@ -589,15 +589,22 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
               // got skipped is never shown as highlighted when it isn't actually contributing.
               if (!cancelled) setMosaicMemberStations(data.stations ?? []);
 
-              // Phase 1 tile architecture (2026-09-02): this metadata fetch still gates "is a
-              // mosaic even available here" exactly as before (same fallback chain, same
-              // reliability guarantee) — what changed is the VISUAL layer itself, now real XYZ
-              // tiles (/api/radar/tile, verified end-to-end against production: zero seams across
-              // 56 independently-fetched real tiles, CDN-cached at Vercel's edge) instead of one
-              // big imageOverlay. Reuses getOrCreateProviderLayer completely unchanged — its
+              // Phase 1 tile architecture (2026-09-02): the visual layer is real XYZ tiles
+              // (/api/radar/tile, verified end-to-end against production: zero seams across 56
+              // independently-fetched real tiles, CDN-cached at Vercel's edge) instead of one big
+              // imageOverlay. Reuses getOrCreateProviderLayer completely unchanged — its
               // maxNativeZoom:8 was tuned for IEM's own tiles but happens to exactly match this
               // app's own real GRID_STEP_DEG-derived native zoom too (see radar-worker/src/
               // mercator.ts), so there was nothing IEM-specific left to generalize.
+              //
+              // Phase 3 (2026-09-03): the tile URL no longer includes a station at all — each tile
+              // resolves its own real covering stations geometrically (tile-station-resolver.ts),
+              // not from this location's hardcoded mosaicStationSets combo. The metadata fetch
+              // above (data.stations) still drives the station-picker highlight for THIS location's
+              // nearest-station view, but the actual rendered tiles are independent of it now; any
+              // tile anywhere in the country resolves the same way, not just locations with a
+              // configured combo. See radar-worker/scripts/prototype-tile-station-matching.ts for
+              // the real-data validation this is based on.
               //
               // The cache-busting `v` param is a WALL-CLOCK time bucket (changes every 90s,
               // matching the tile route's own s-maxage), not this component's own refreshToken —
@@ -606,7 +613,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
               // fragment the CDN cache per-VISITOR instead of per-time-window, defeating the whole
               // reason tiles share a cache across users in the first place.
               const tileCacheBucket = Math.floor(Date.now() / 90_000);
-              const tileUrlTemplate = `/api/radar/tile/${location.radarSite}/{z}/{x}/{y}?v=${tileCacheBucket}`;
+              const tileUrlTemplate = `/api/radar/tile/{z}/{x}/{y}?v=${tileCacheBucket}`;
               const nextLayer = getOrCreateProviderLayer(tileUrlTemplate);
               if (!mapRef.current) throw new Error("Map unmounted");
               const wasAlreadyMounted = mapRef.current.hasLayer(nextLayer);
