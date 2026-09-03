@@ -22,7 +22,14 @@ type S3Object = { key: string; lastModified: string };
 
 async function listVolumes(prefix: string): Promise<S3Object[]> {
   const url = `${ARCHIVE_BUCKET}/?list-type=2&prefix=${encodeURIComponent(prefix)}`;
-  const response = await fetchWithTimeout(url, { cache: "no-store" });
+  // Real evidence, 2026-09-03: since compute-worker.ts started firing every mosaic station's
+  // getVolumeCached concurrently (see that file's own comment), this list call started tripping the
+  // generic 10s default under real contention -- fly logs showed repeated "timed out after 10000ms"
+  // failures here that weren't happening before, on what's normally a small, fast XML response.
+  // Matches fetchLatestVolume's own download call below, which already uses an explicit 20s
+  // allowance for the same reason: 4-5 simultaneous connections to the same bucket from one Fly box
+  // genuinely take longer per-request than one at a time, even for a lightweight list.
+  const response = await fetchWithTimeout(url, { cache: "no-store" }, 20_000);
   if (!response.ok) throw new Error(`S3 list failed for ${prefix} (${response.status})`);
   const xml = await response.text();
   const objects: S3Object[] = [];
