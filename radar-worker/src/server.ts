@@ -148,7 +148,22 @@ function setCache(key: string, data: unknown, ttlMs: number) {
 // once turns that unbounded pileup into bounded, predictable serialization —
 // same total work, but it can never compound into the kind of runaway
 // backlog that starved health checks.
-const MAX_CONCURRENT_COMPUTE = 1;
+//
+// Raised 1 -> 2, 2026-09-03: real problem found while prototyping Phase 3 (tile-native station
+// selection) — an on-demand request for a combo outside the 2 continuously-running prewarm cycles
+// had to queue behind whatever prewarm job was already running, and total round-trip (queue wait +
+// real compute) occasionally exceeded what the client connection would tolerate, failing outright
+// even though the server-side computation itself succeeded every time (confirmed live in fly logs).
+// Phase 3's whole point is many more one-off, non-prewarmed combos, so this queue depth of 1 was
+// about to become a real bottleneck, not just an inconvenience.
+//
+// This does NOT mean true CPU parallelism -- there's still only ONE persistent compute-worker
+// child process (single JS thread), so two jobs' own synchronous decode work still can't run at
+// the exact same instant. What it buys: two jobs' ASYNC work (S3 fetches, same mechanism already
+// proven safe for concurrent fetches WITHIN one mosaic job) can genuinely interleave instead of one
+// job blocking the other's fetch phase from even starting. Verified live before trusting this —
+// see git history for the real RSS numbers watched during an actual overlap.
+const MAX_CONCURRENT_COMPUTE = 2;
 let activeCompute = 0;
 const computeQueue: (() => void)[] = [];
 
