@@ -597,14 +597,22 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
               // app's own real GRID_STEP_DEG-derived native zoom too (see radar-worker/src/
               // mercator.ts), so there was nothing IEM-specific left to generalize.
               //
-              // Phase 3 (2026-09-03): the tile URL no longer includes a station at all — each tile
-              // resolves its own real covering stations geometrically (tile-station-resolver.ts),
-              // not from this location's hardcoded mosaicStationSets combo. The metadata fetch
-              // above (data.stations) still drives the station-picker highlight for THIS location's
-              // nearest-station view, but the actual rendered tiles are independent of it now; any
-              // tile anywhere in the country resolves the same way, not just locations with a
-              // configured combo. See radar-worker/scripts/prototype-tile-station-matching.ts for
-              // the real-data validation this is based on.
+              // Phase 3 attempted, then REVERTED same day, real live incident: switched this to a
+              // station-less tile URL where each tile resolves its own covering stations
+              // geometrically (tile-station-resolver.ts) instead of this location's hardcoded
+              // mosaicStationSets combo. Real problem, caught via Andrew's own live comparison
+              // against RadarScope (missing tiles): a single viewport can need many DISTINCT
+              // station combos at once (confirmed live: 13 different combos from one page load,
+              // since adjacent tiles can each resolve differently) — something Phase 1's one-combo-
+              // per-location design never had to handle. Bounding per-job fetch concurrency fixed
+              // the resulting network saturation (fly logs: S3/api.weather.gov timeouts stopped)
+              // but pushed total mosaic time to 70-120s per job, queued behind everything else —
+              // dangerously close to real timeout ceilings, and tiles were still failing. This is
+              // an architectural mismatch (too many distinct combos for what this worker can serve
+              // at once), not a tunable parameter — reverted to the proven-stable per-location
+              // route (mosaicStationSets, one combo per viewport) while Phase 3 gets redesigned
+              // with real coalescing (a coarser shared region per combo, not per-native-tile),
+              // rather than leave live users seeing broken tiles while that gets sorted out.
               //
               // The cache-busting `v` param is a WALL-CLOCK time bucket (changes every 90s,
               // matching the tile route's own s-maxage), not this component's own refreshToken —
@@ -613,7 +621,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
               // fragment the CDN cache per-VISITOR instead of per-time-window, defeating the whole
               // reason tiles share a cache across users in the first place.
               const tileCacheBucket = Math.floor(Date.now() / 90_000);
-              const tileUrlTemplate = `/api/radar/tile/{z}/{x}/{y}?v=${tileCacheBucket}`;
+              const tileUrlTemplate = `/api/radar/tile/${location.radarSite}/{z}/{x}/{y}?v=${tileCacheBucket}`;
               const nextLayer = getOrCreateProviderLayer(tileUrlTemplate);
               if (!mapRef.current) throw new Error("Map unmounted");
               const wasAlreadyMounted = mapRef.current.hasLayer(nextLayer);
