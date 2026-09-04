@@ -310,6 +310,35 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
   const onFrameMetaRef = useRef(onFrameMeta);
   useEffect(() => { onFrameMetaRef.current = onFrameMeta; }, [onFrameMeta]);
 
+  // A tile that fails once (our own worker still queued behind other work, a transient network
+  // hiccup) stays permanently blank otherwise — Leaflet doesn't retry on tileerror, it just drops
+  // the tile. Real production evidence (radar quality pass, 2026-09-03/04): a cold multi-station
+  // mosaic combo can legitimately take up to ~90s to compute under worker contention, and the
+  // response is otherwise idempotent and gets CDN-cached once it succeeds — so retrying with
+  // backoff turns a real but transient failure into a short delay instead of a permanent gap.
+  // Capped at 3 attempts so a genuine no-coverage tile (404 — a real gap in NEXRAD coverage, e.g.
+  // open ocean) gives up and stays blank rather than retrying forever; a 404 and a transient 502
+  // both surface as the same <img> onerror, so this can't tell them apart, but a few bounded
+  // retries on a 404 cost little.
+  const TILE_RETRY_DELAYS_MS = [4000, 10000, 20000];
+  function attachTileRetry(layer: any) {
+    const attempts = new Map<string, number>();
+    layer.on("tileerror", (event: any) => {
+      const { coords, tile } = event;
+      const key = `${coords.x}:${coords.y}:${coords.z}`;
+      const attempt = attempts.get(key) ?? 0;
+      if (attempt >= TILE_RETRY_DELAYS_MS.length) return;
+      attempts.set(key, attempt + 1);
+      window.setTimeout(() => {
+        if (!tile?.isConnected) return; // pruned/replaced since (pan, zoom, layer swap) -- nothing to retry
+        tile.src = layer.getTileUrl(coords);
+      }, TILE_RETRY_DELAYS_MS[attempt]);
+    });
+    layer.on("tileload", (event: any) => {
+      attempts.delete(`${event.coords.x}:${event.coords.y}:${event.coords.z}`);
+    });
+  }
+
   // Bounded well above the ~12-frame timeline this ever actually sees — eviction is a safety net,
   // not a real limit in normal operation.
   const PROVIDER_CACHE_LIMIT = 16;
@@ -326,6 +355,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
       className: "radar-frame-layer",
       // No `attribution` option here on purpose — see radarAttributionRef below for why.
     });
+    attachTileRetry(layer);
     cache.set(url, layer);
     if (cache.size > PROVIDER_CACHE_LIMIT) {
       const oldestKey = cache.keys().next().value;
