@@ -158,12 +158,23 @@ function setCache(key: string, data: unknown, ttlMs: number) {
 // about to become a real bottleneck, not just an inconvenience.
 //
 // This does NOT mean true CPU parallelism -- there's still only ONE persistent compute-worker
-// child process (single JS thread), so two jobs' own synchronous decode work still can't run at
-// the exact same instant. What it buys: two jobs' ASYNC work (S3 fetches, same mechanism already
-// proven safe for concurrent fetches WITHIN one mosaic job) can genuinely interleave instead of one
-// job blocking the other's fetch phase from even starting. Verified live before trusting this —
-// see git history for the real RSS numbers watched during an actual overlap.
-const MAX_CONCURRENT_COMPUTE = 2;
+// child process (single JS thread), so jobs' own synchronous decode work still can't run at the
+// exact same instant. What it buys: jobs' ASYNC work (S3 fetches, same mechanism already proven
+// safe for concurrent fetches WITHIN one mosaic job) can genuinely interleave instead of one job
+// blocking another's fetch phase from even starting. Verified live before trusting this — see git
+// history for the real RSS numbers watched during an actual overlap.
+//
+// Raised 2 -> 3, 2026-09-04, real evidence from the Phase 3 redesign's own live verification: a
+// single coalesced viewport can legitimately need 2 brand-new cold combos at once (crossing a
+// region boundary), and with a live prewarm cycle also possibly active, 2 slots meant a realistic
+// case was already queuing behind itself. Chose 3, not more, from the real memory math on record:
+// steady-state floor ~1.04GB (post partial-decode), one active job ~1.5-1.6GB peak, two concurrent
+// verified at ~2.04GB peak (~0.5-0.6GB per additional concurrent job) — three should land near
+// ~2.5-2.6GB, still a real ~0.5GB+ margin below the ~3.1-3.2GB level that caused the two real OOMs
+// this project has already had. Verify live (SSH + /proc/<pid>/status, real concurrent jobs) before
+// trusting this number, same discipline as every previous change to this constant — do not raise
+// again without doing that first.
+const MAX_CONCURRENT_COMPUTE = 3;
 let activeCompute = 0;
 const computeQueue: (() => void)[] = [];
 
