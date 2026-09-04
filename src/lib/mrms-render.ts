@@ -13,17 +13,20 @@ export type MrmsBounds = { minLatitude: number; maxLatitude: number; minLongitud
 // that was never actually checked against a reference and had visibly wrong
 // hues (e.g. no true saturated blue band, a muddy plum instead of magenta at
 // the high end, no pure white core).
-// The bottom three stops (0/5/10 dBZ, "very light reflectivity") were re-picked 2026-09-02 from a
-// live NWS radar.weather.gov legend, pixel-sampled directly (not eyeballed) — see the render.ts
-// copy for the full "blue is harsh" writeup and reasoning. Kept in sync here for the same
-// byte-for-byte-identical reason as the rest of this table; this fallback path doesn't get the
-// VCP-mode or component-elongation dimming render.ts also has (no volume/VCP data reaches this
-// client-side path, and this is a rare worker-down fallback, not the primary live path) — just
-// this color change, scoped to match what was actually asked for.
+// The bottom three stops (0/5/10 dBZ, "very light reflectivity") were re-picked 2026-09-04 by
+// triangulating THREE real, independent sources (Py-ART/NWS's own canonical colormap, GRLevel3's
+// actual .pal file, and a visual read of RadarScope's own legend) — see
+// radar-worker/docs/reflectivity-color-references.md and the render.ts copy for the full research.
+// A single live NWS radar.weather.gov sample used previously turned out to be the outlier against
+// all three of those, not the reference. Kept in sync here for the same byte-for-byte-identical
+// reason as the rest of this table; this fallback path doesn't get the VCP-mode or
+// component-elongation dimming render.ts also has (no volume/VCP data reaches this client-side
+// path, and this is a rare worker-down fallback, not the primary live path) — just this color
+// change, scoped to match what was actually asked for.
 const COLOR_STOPS: { dbz: number; rgb: [number, number, number] }[] = [
-  { dbz: 0, rgb: [150, 158, 168] },
-  { dbz: 5, rgb: [105, 120, 165] },
-  { dbz: 10, rgb: [75, 100, 160] },
+  { dbz: 0, rgb: [114, 114, 160] },
+  { dbz: 5, rgb: [139, 139, 207] },
+  { dbz: 10, rgb: [164, 164, 255] },
   { dbz: 15, rgb: [0, 255, 0] },
   { dbz: 20, rgb: [0, 200, 0] },
   { dbz: 25, rgb: [0, 144, 0] },

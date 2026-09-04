@@ -29,16 +29,25 @@ import { DESPECKLE_STRENGTH_GATE_DBZ } from "./project.js";
 // match, and a fresh live comparison (RadarScope screenshots at KFFC/KMPX, real storms, same
 // moment) showed our blue still reading brighter/more saturated than either RadarScope or a live
 // NWS radar.weather.gov legend — pixel-sampled directly off that legend's own canvas (getImageData
-// across its color ramp), not eyeballed: the 0-10 dBZ band there is a muted, cool gray drifting
-// into a desaturated navy blue, nothing near our previous bright cyan. Re-picked 0/5/10 dBZ from
-// that real sample (dBZ position on the ramp estimated from its labeled -20..70 span, since exact
-// tick pixel positions weren't separately measured — open to a tighter recalibration if a direct
-// side-by-side still looks off). 15+ dBZ stays untouched, same reasoning as before: this only
-// softens the noise-floor-adjacent bands, not real precipitation once it's clearly real.
+// across its color ramp), not eyeballed. Re-picked 0/5/10 dBZ from that sample.
+//
+// SUPERSEDED AGAIN, 2026-09-04: the radar.weather.gov sample above turned out to be an outlier, not
+// the reference — see radar-worker/docs/reflectivity-color-references.md for the full real
+// research this superseded it. Checked THREE more independent sources: Py-ART/NWS's own canonical
+// colormap (real published RGB, not a screenshot — and it matches THIS table's own 15-65 dBZ stops
+// to 3 decimal places, real confirmation that range was already right), GRLevel3/GR2Analyst's
+// actual `.pal` file (a separate, independently-popular professional standard), and a visual read
+// of RadarScope's own legend (Andrew's real screenshot — not pixel-sampled, the file wasn't
+// accessible this session, treat as lower-confidence than the other two). All three show REAL BLUE
+// in this range, not the muted gray-tan the radar.weather.gov sample suggested — that sample was
+// the outlier, not the other three. Re-picked 0/5/10 dBZ by interpolating along GRLevel3's own
+// real -10/10/20 dBZ anchors specifically (not Py-ART's) since GRLevel3's version is muted/pastel
+// rather than fully-saturated — matching Andrew's original, real complaint that the FULLY-saturated
+// bright cyan/blue read as harsh, while still keeping real, visible blue rather than muting to gray.
 const COLOR_STOPS: { dbz: number; rgb: [number, number, number] }[] = [
-  { dbz: 0, rgb: [150, 158, 168] },
-  { dbz: 5, rgb: [105, 120, 165] },
-  { dbz: 10, rgb: [75, 100, 160] },
+  { dbz: 0, rgb: [114, 114, 160] },
+  { dbz: 5, rgb: [139, 139, 207] },
+  { dbz: 10, rgb: [164, 164, 255] },
   { dbz: 15, rgb: [0, 255, 0] },
   { dbz: 20, rgb: [0, 200, 0] },
   { dbz: 25, rgb: [0, 144, 0] },
