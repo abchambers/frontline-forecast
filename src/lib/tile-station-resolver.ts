@@ -1,4 +1,4 @@
-// Phase 3 of the tile-based radar architecture, 2026-09-03: resolves which real stations back a
+// Phase 3 of the tile-based radar architecture, 2026-09-03/04: resolves which real stations back a
 // given map tile GEOMETRICALLY (closest real stations by distance) instead of a hardcoded
 // per-location table (mosaic-station-sets.ts) — the tile itself decides its own coverage, so any
 // tile anywhere in the country works the same way, not just the locations someone thought to add
@@ -7,8 +7,34 @@
 // reproduces today's hand-curated combos almost exactly — Atlanta 4/5 match, Minneapolis a
 // near-exact match to the existing prewarm combo) and prototype-station-pins.ts (the manual
 // override mechanism below).
+//
+// REAL INCIDENT, first ship attempt, 2026-09-03: resolving independently PER NATIVE TILE meant a
+// single viewport (a real ~4x3 grid of visible tiles, confirmed live) could trigger up to 13
+// DISTINCT station combos at once, each needing its own mosaic computation — something Phase 1's
+// one-combo-per-location design never had to handle. That saturated the worker's outbound
+// connections (fly logs: both S3 and api.weather.gov timing out simultaneously) and caused real,
+// visible missing tiles in production. Reverted the live client the same night.
+//
+// THE FIX: coalesce station selection to a shared REGION (COALESCE_ZOOM, coarser than the native
+// tile zoom) instead of resolving per native tile — every native tile inside the same region shares
+// one combo, so a typical viewport resolves to 1-2 distinct combos instead of a dozen, matching
+// Phase 1's own request pattern. This does NOT reintroduce the earlier "coarse super-region"
+// mistake (which over-included 23-38 stations per region by checking "is any station's range
+// within reach of ANY point in this big box") — that bug was in the FILTER, not the coarsening
+// idea itself. The closest-N-by-center-distance ranking already built for the native-tile version
+// is independent of how big the region is; applying it to a coarser region still yields exactly
+// MAX_STATIONS_PER_TILE stations, just shared across more tiles. Verified this directly (see
+// radar-worker/scripts/simulate-viewport-load.ts) against a real captured viewport tile pattern
+// before wiring this back into the live client.
 import { getRadarStations } from "./nexrad-stations";
 import { tileBounds, distanceToBoundsKm, haversineKm } from "./tile-geometry";
+
+// Zoom 6 tiles are ~625km wide at the equator — real evidence from tonight's own network logs: a
+// typical viewport shows roughly a 4x3 grid of native (zoom 8) tiles, which span a similar real
+// area. Coarsening to zoom 6 means most/all of one viewport's tiles fall inside the SAME region,
+// sharing one combo — only tiles right at a region boundary (much rarer than every native tile
+// boundary) risk a different, adjacent combo.
+const COALESCE_ZOOM = 6;
 
 // Must match radar-worker/src/radar-constants.ts's own MAX_RANGE_KM — the worker won't have real
 // data for a station beyond this range anyway, so there's no point selecting one that far out.
@@ -36,14 +62,31 @@ const MAX_STATIONS_PER_TILE = 5;
 // closest-5 dropped KGSP (lost to KHTX by raw distance) — the Alabama stations (KMXX, KBMX) were
 // already naturally selected, so only KGSP needed forcing in. KJAX ("maybe Jacksonville," his own
 // hedge) is deliberately left out for now — add it to mustInclude below whenever that's a firm yes.
+// radiusKm real finding, 2026-09-04, while verifying the coalesced (region-based) redesign: 150km
+// was calibrated back when resolution happened per NATIVE tile (~156km wide, so a region's center
+// was always close to anything inside it). Now that resolution coalesces to COALESCE_ZOOM=6
+// regions (~625km wide), a region's CENTER can be up to ~440km from a station that's still well
+// within that same region — confirmed live, the Atlanta-viewport region's center measured 295km
+// from KFFC itself. radiusKm needs to scale with whatever region size is actually in use, not stay
+// fixed at the old native-tile-era value, or pins silently stop firing for the exact areas they
+// were written for.
 type StationPin = { anchorStationId: string; anchorLat: number; anchorLon: number; radiusKm: number; mustInclude: string[] };
 const STATION_PINS: StationPin[] = [
-  { anchorStationId: "KFFC", anchorLat: 33.3633, anchorLon: -84.5658, radiusKm: 150, mustInclude: ["KFFC", "KMXX", "KBMX", "KGSP"] },
+  { anchorStationId: "KFFC", anchorLat: 33.3633, anchorLon: -84.5658, radiusKm: 350, mustInclude: ["KFFC", "KMXX", "KBMX", "KGSP"] },
 ];
+
+// Maps a native tile down to the coarser coalescing region it falls inside — every native tile
+// with the same regionX/regionY shares one combo. z must be >= COALESCE_ZOOM (always true here,
+// COALESCE_ZOOM=6 is well below this app's real native zoom of 8).
+function coalesceRegion(z: number, x: number, y: number): { rz: number; rx: number; ry: number } {
+  const scale = Math.pow(2, z - COALESCE_ZOOM);
+  return { rz: COALESCE_ZOOM, rx: Math.floor(x / scale), ry: Math.floor(y / scale) };
+}
 
 export async function resolveStationsForTile(z: number, x: number, y: number): Promise<string[]> {
   const stations = await getRadarStations();
-  const bounds = tileBounds(z, x, y);
+  const { rz, rx, ry } = coalesceRegion(z, x, y);
+  const bounds = tileBounds(rz, rx, ry);
   const centerLat = (bounds.minLatitude + bounds.maxLatitude) / 2;
   const centerLon = (bounds.minLongitude + bounds.maxLongitude) / 2;
 
