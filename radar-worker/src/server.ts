@@ -164,17 +164,40 @@ function setCache(key: string, data: unknown, ttlMs: number) {
 // blocking another's fetch phase from even starting. Verified live before trusting this — see git
 // history for the real RSS numbers watched during an actual overlap.
 //
-// Raised 2 -> 3, 2026-09-04, real evidence from the Phase 3 redesign's own live verification: a
-// single coalesced viewport can legitimately need 2 brand-new cold combos at once (crossing a
-// region boundary), and with a live prewarm cycle also possibly active, 2 slots meant a realistic
-// case was already queuing behind itself. Chose 3, not more, from the real memory math on record:
-// steady-state floor ~1.04GB (post partial-decode), one active job ~1.5-1.6GB peak, two concurrent
-// verified at ~2.04GB peak (~0.5-0.6GB per additional concurrent job) — three should land near
-// ~2.5-2.6GB, still a real ~0.5GB+ margin below the ~3.1-3.2GB level that caused the two real OOMs
-// this project has already had. Verify live (SSH + /proc/<pid>/status, real concurrent jobs) before
-// trusting this number, same discipline as every previous change to this constant — do not raise
-// again without doing that first.
-const MAX_CONCURRENT_COMPUTE = 3;
+// Tried raising 2 -> 3, 2026-09-04, REVERTED same night after real live testing found a worse
+// problem than the one it was meant to fix. Reasoning for trying it: a single coalesced Phase 3
+// viewport can legitimately need 2 brand-new cold combos at once (crossing a region boundary), and
+// with a live prewarm cycle also active, 2 slots meant a realistic case was already queuing behind
+// itself.
+//
+// What actually happened at 3, verified live by firing 3 genuinely non-overlapping combos (12-14
+// stations total) at once directly at /mosaic: real memory climbed to at least ~2.3GB (monitoring
+// gap right at the tail end means the true peak wasn't even fully captured) — but memory was NOT
+// the failure mode. Three jobs' concurrent fetch phases (each already running its own
+// VOLUME_FETCH_BATCH_SIZE=2 concurrent S3 fetches, so 6 simultaneous outbound connections) saturated
+// real outbound network capacity: fly logs showed multiple stations across multiple combos failing
+// with real S3 timeouts (KARX/KFSD/KDLH from one combo, KBMX/KCAE from another) -- the same
+// network-saturation signature as the original Phase 3 incident, now reproduced by pure compute
+// concurrency instead of too many distinct resolved combos. Combos that "succeeded" did so with
+// silently dropped stations (a materially degraded, gap-having mosaic, not just a slow one) and much
+// slower totals (122-148s vs the 60-90s baseline at 2 concurrent).
+//
+// Worse and decisive: three plain `curl` clients hitting /mosaic directly got ZERO response for
+// over 17 MINUTES (1052s, then failed with a bare connection error, no HTTP status at all) even
+// though the server-side computation for all three completed successfully within ~2-3 minutes per
+// the fly logs. Whatever sits between a real client and this worker (Fly's edge, the OS/network
+// stack, or both) does not reliably hold a connection open that long even when the server eventually
+// has a good answer -- this is the same "client connection tolerance" risk flagged once before (see
+// the 2 -> ... wait for it -> 2026-09-01 MAX_CONCURRENT_COMPUTE=1->2 note in git history), now shown
+// to be much more severe than previously measured.
+//
+// Conclusion: 2 remains the safe, verified value. Going higher trades a bounded, understood problem
+// (a fresh combo queues briefly, worst case) for an unbounded one (dropped stations and multi-minute
+// silent hangs). If more real concurrency is ever needed, the actual bottleneck to address first is
+// outbound fetch capacity (VOLUME_FETCH_BATCH_SIZE, or the S3/api.weather.gov concurrency ceiling
+// this container can sustain), not this slot count -- raising this number alone just moves the
+// contention from the compute queue to the network, where it's worse and harder to see coming.
+const MAX_CONCURRENT_COMPUTE = 2;
 let activeCompute = 0;
 const computeQueue: (() => void)[] = [];
 
