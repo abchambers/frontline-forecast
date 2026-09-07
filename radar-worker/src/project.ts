@@ -488,19 +488,53 @@ export function makeSharedMergeGrid(sites: RadarSite[], stepDeg: number, maxRang
   return makeFlatGrid(minRow, minCol, maxCol - minCol + 1, maxRow - minRow + 1);
 }
 
+// Absolute grid-cell key, independent of any one grid's own row/col origin offset — lets two
+// different SharedMergeGrid/render-time grids (each windowed to their own bounds, so their row 0
+// means different real latitudes) agree on "the same cell" purely from lat/lon + step. Used to carry
+// per-cell provenance (see clearAirKeys below) from the merge step, where cells are indexed relative
+// to the mosaic's own bounding box, through to render.ts, which re-derives its own row/col relative
+// to ITS bounds — the two would collide/misalign if compared directly without this.
+export function absoluteCellKey(lat: number, lon: number, stepDeg: number): string {
+  return `${Math.round(lat / stepDeg)}:${Math.round(lon / stepDeg)}`;
+}
+
 // Merges one station's already-computed grid into the shared accumulator: max dBZ wins, matching
 // the original policy exactly — a null/absent value from one station never overwrites a real value
 // a DIFFERENT station already found at that cell, only fills a cell nothing has claimed yet. Reads
 // row/col back from each point's absolute lat/lon (same `Math.round(value/stepDeg)` convention
 // cellKey always used, so this lines up cell-for-cell with every other grid in the same request).
-export function mergeReflectivityCells(target: SharedMergeGrid, source: MrmsPoint[], stepDeg: number): void {
+//
+// `isStationClearAir` + `clearAirKeys`, added 2026-09-07 — real bug found comparing a live mosaic
+// against RadarScope: the mosaic's Clear-Air weak-signal dimming used to be all-or-nothing across
+// every member station (see compute-worker.ts's old `allClearAir`), so ONE station with real
+// precipitation nearby (a real, correct, NOT-dimmed VCP) silently cancelled the dimming for every
+// OTHER station in the same mosaic that was legitimately clear-air on its own — exactly what made a
+// 5-station Atlanta mosaic look far noisier than any single member station's own RadarScope view.
+// Fix: track clear-air status PER CELL, following whichever station currently "wins" that cell (the
+// same max-dBZ-wins policy the value itself already uses) — a cell added here whenever its winning
+// contributor is clear-air, removed if a later, non-clear-air station's value wins that same cell
+// instead, so this always reflects the CURRENT winning station's status, never a stale one.
+export function mergeReflectivityCells(
+  target: SharedMergeGrid,
+  source: MrmsPoint[],
+  stepDeg: number,
+  isStationClearAir = false,
+  clearAirKeys?: Set<string>,
+): void {
   for (const point of source) {
     if (point.dbz === null) continue;
     const row = Math.round(point.lat / stepDeg) - target.minRow;
     const col = Math.round(point.lon / stepDeg) - target.minCol;
     if (row < 0 || row >= target.height || col < 0 || col >= target.width) continue;
     const idx = row * target.width + col;
-    if (Number.isNaN(target.values[idx]) || point.dbz > target.values[idx]) target.values[idx] = point.dbz;
+    if (Number.isNaN(target.values[idx]) || point.dbz > target.values[idx]) {
+      target.values[idx] = point.dbz;
+      if (clearAirKeys) {
+        const key = absoluteCellKey(point.lat, point.lon, stepDeg);
+        if (isStationClearAir) clearAirKeys.add(key);
+        else clearAirKeys.delete(key);
+      }
+    }
   }
 }
 

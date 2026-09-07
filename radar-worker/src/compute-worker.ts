@@ -117,15 +117,16 @@ async function computeMosaic(stations: string[]) {
   if (!resolvedSites.length) throw new Error(`Every station in [${stations.join(",")}] failed — no mosaic coverage available.`);
 
   const shared = makeSharedMergeGrid(resolvedSites.map((r) => r.site), GRID_STEP_DEG, MAX_RANGE_KM);
-  // Conservative on purpose: only dims the WHOLE composite when EVERY contributing station is in
-  // Clear Air Mode (see render.ts/CLEAR_AIR_VCPS for why that's a real, not-a-storm guarantee). A
-  // mosaic where some member stations see real precipitation elsewhere in their own range while one
-  // station's own clutter spoke persists doesn't get blanket-dimmed here — that's a real gap (see
-  // the shape/density-based component check discussed as the next pass), but a per-cell,
-  // per-contributing-station tag through the merge is real added complexity this first pass
-  // deliberately doesn't take on. Starts true; any non-clear-air OR failed-to-determine station
-  // flips it off for the whole composite, never the other way around — never risk under-dimming.
-  let allClearAir = true;
+  // PER-CELL now, not all-or-nothing — real bug found 2026-09-07 comparing a live Atlanta mosaic
+  // against RadarScope: the old all-or-nothing `allClearAir` flag meant ONE member station with
+  // real precipitation nearby (a real, correct, non-dimmed VCP) silently cancelled the weak-signal
+  // dimming for every OTHER station in the same mosaic that was legitimately clear-air on its own —
+  // confirmed live, that exact night: KFFC/KMXX/KBMX individually clear-air, KGSP/KCAE not (real
+  // storms near Greenwood/Columbia), and the whole 5-station composite rendered undimmed because of
+  // just those two. clearAirCellKeys (see project.ts's mergeReflectivityCells) tracks this per cell
+  // instead, following whichever station currently wins that cell — see render.ts's findWeakSignal
+  // Keys for how a per-cell set changes the component-level dimming decision.
+  const clearAirCellKeys = new Set<string>();
 
   // Real evidence, 2026-09-02 (fly logs): each station's own "fetch+parse" time (13-25s in calm
   // weather) is logged as ONE number, but fetchLatestVolume's S3 download is genuine network I/O —
@@ -204,7 +205,7 @@ async function computeMosaic(stations: string[]) {
     }
     try {
       const volume = volumeResult.value;
-      if (!isClearAirVcp(volume.radar)) allClearAir = false;
+      const stationIsClearAir = isClearAirVcp(volume.radar);
       const elevation = await extractLowestElevation(volume.radar, "reflectivity", station);
       let correlationCoefficient;
       try {
@@ -214,7 +215,7 @@ async function computeMosaic(stations: string[]) {
       }
       const candidateCells = buildCandidateCells(site, GRID_STEP_DEG, MAX_RANGE_KM);
       const { grid } = computeReflectivityGrid(elevation, site, GRID_STEP_DEG, MAX_RANGE_KM, correlationCoefficient, candidateCells);
-      mergeReflectivityCells(shared, grid, GRID_STEP_DEG);
+      mergeReflectivityCells(shared, grid, GRID_STEP_DEG, stationIsClearAir, clearAirCellKeys);
       succeededStations.push(station);
       perStationMs.push(`${station}=${((performance.now() - stationStart) / 1000).toFixed(1)}s`);
     } catch (error) {
@@ -228,10 +229,10 @@ async function computeMosaic(stations: string[]) {
 
   const mergedPoints = sharedMergeGridToPoints(shared, GRID_STEP_DEG);
   const bounds = boundsOf(mergedPoints);
-  const imageDataUrl = renderMrmsGridToDataUrl(mergedPoints, bounds, GRID_STEP_DEG, allClearAir);
+  const imageDataUrl = renderMrmsGridToDataUrl(mergedPoints, bounds, GRID_STEP_DEG, clearAirCellKeys);
   if (!imageDataUrl) throw new Error(`No mosaic coverage available for [${stations.join(",")}].`);
 
-  console.log(`[mosaic:${stations.join(",")}] ${perStationMs.join(" ")}, total ${((performance.now() - t0) / 1000).toFixed(1)}s${failedStations.length ? ` (${failedStations.length} station(s) skipped: ${failedStations.join(",")})` : ""}${allClearAir ? " (all stations Clear Air Mode — weak-signal dimming applied)" : ""}`);
+  console.log(`[mosaic:${stations.join(",")}] ${perStationMs.join(" ")}, total ${((performance.now() - t0) / 1000).toFixed(1)}s${failedStations.length ? ` (${failedStations.length} station(s) skipped: ${failedStations.join(",")})` : ""}${clearAirCellKeys.size ? ` (${clearAirCellKeys.size} cell(s) dimmed via per-station Clear Air Mode)` : ""}`);
 
   return {
     time: new Date().toISOString(),

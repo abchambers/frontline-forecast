@@ -1,6 +1,6 @@
 import { createCanvas } from "@napi-rs/canvas";
 import type { MrmsBounds, MrmsPoint } from "./types.js";
-import { DESPECKLE_STRENGTH_GATE_DBZ } from "./project.js";
+import { DESPECKLE_STRENGTH_GATE_DBZ, absoluteCellKey } from "./project.js";
 
 // Server-side port of src/lib/mrms-render.ts (the main app's browser
 // canvas renderer) — color tables and blur logic kept byte-for-byte
@@ -172,7 +172,10 @@ function colorForVelocity(velocity: number): [number, number, number] {
   ];
 }
 
-type Cell = { row: number; col: number; dbz: number };
+// absKey is independent of this render's own bounds/origin (see project.ts's absoluteCellKey) —
+// only populated/used when isClearAirMode is a per-cell Set rather than a plain boolean (the mosaic
+// case); a single-station render never needs it since there's only one contributor either way.
+type Cell = { row: number; col: number; dbz: number; absKey: string };
 
 // Andrew, live 2026-09-01: the VCP-based Clear-Air-Mode dimming (see the isClearAirMode parameter
 // below) only fires when the WHOLE frame has no real weather anywhere — it can't help a station
@@ -209,7 +212,7 @@ type Cell = { row: number; col: number; dbz: number };
 // anything strong enough to plausibly be real.
 const ELONGATION_THRESHOLD = 3;
 
-type ComponentShape = { keys: string[]; size: number; elongation: number; maxDbz: number };
+type ComponentShape = { keys: string[]; absKeys: string[]; size: number; elongation: number; maxDbz: number };
 
 function findComponents(cells: Cell[]): ComponentShape[] {
   const byKey = new Map<string, Cell>();
@@ -267,7 +270,8 @@ function findComponents(cells: Cell[]): ComponentShape[] {
     const eig2 = Math.max(trace / 2 - discriminant, 1e-6);
     const elongation = Math.sqrt(eig1 / eig2);
 
-    components.push({ keys: component, size: component.length, elongation, maxDbz });
+    const absKeys = component.map((componentKey) => byKey.get(componentKey)!.absKey);
+    components.push({ keys: component, absKeys, size: component.length, elongation, maxDbz });
   }
   return components;
 }
@@ -302,15 +306,43 @@ function isExemptFromWeakSignal(component: ComponentShape): boolean {
 // already qualifies via that path alone; checking size/elongation on top of it would only ever
 // reclassify cells that are already going in the (more aggressive) clear-air bucket, so the other
 // checks only run when isClearAirMode is false.
-function findWeakSignalKeys(cells: Cell[], isClearAirMode: boolean): { clearAirKeys: Set<string>; otherWeakKeys: Set<string> } {
+//
+// isClearAirMode also accepts a per-cell Set<string> (absolute cell keys, see project.ts's
+// absoluteCellKey) for the mosaic case, 2026-09-07 — a plain boolean can only mean "the WHOLE frame
+// is clear air," which a multi-station mosaic can't honestly claim the moment even one member
+// station has real precipitation elsewhere in ITS range (see compute-worker.ts's clearAirCellKeys
+// for the real incident this fixes).
+//
+// First version of this per-cell logic required EVERY cell in a connected component to be
+// clear-air-sourced before dimming any of it — measured directly against real live data (pixel-
+// sampled before/after alpha in a real Atlanta mosaic) and found too conservative to fix the actual
+// complaint: widespread weak noise/AP clutter often forms ONE large connected blob spanning several
+// stations' territory (nothing stops adjacent stations' weak-signal footprints from touching), so a
+// single non-clear-air cell anywhere in a sprawling component disqualified the whole thing — average
+// alpha only dropped ~71.6 -> ~56.3 in that sample, far short of CLEAR_AIR_ALPHA. The real per-
+// station guarantee ("this station individually confirmed no precip anywhere in ITS range") is
+// inherently a PER-CELL claim, not a per-component one, so this now checks each cell independently:
+// a cell whose own absKey is in the set always gets the strong clear-air dimming regardless of its
+// neighbors; a cell that isn't falls back to that component's existing shape-based (size/elongation)
+// classification, unchanged. isExemptFromWeakSignal above still runs first and skips the WHOLE
+// component if any cell in it is strong enough to be real — that's what keeps this safe: a real
+// storm cell that happens to touch clear-air-sourced clutter is protected by strength, not by
+// requiring dimming to prove itself against every neighboring cell's provenance too.
+function findWeakSignalKeys(cells: Cell[], isClearAirMode: boolean | Set<string>): { clearAirKeys: Set<string>; otherWeakKeys: Set<string> } {
   const clearAirKeys = new Set<string>();
   const otherWeakKeys = new Set<string>();
+  const clearAirCellSet = typeof isClearAirMode === "boolean" ? null : isClearAirMode;
   for (const component of findComponents(cells)) {
     if (isExemptFromWeakSignal(component)) continue;
-    if (isClearAirMode) {
+    if (!clearAirCellSet && isClearAirMode === true) {
       for (const componentKey of component.keys) clearAirKeys.add(componentKey);
-    } else if (component.size < SMALL_COMPONENT_MAX_CELLS || component.elongation >= ELONGATION_THRESHOLD) {
-      for (const componentKey of component.keys) otherWeakKeys.add(componentKey);
+      continue;
+    }
+    const isSmallOrElongated = component.size < SMALL_COMPONENT_MAX_CELLS || component.elongation >= ELONGATION_THRESHOLD;
+    for (let i = 0; i < component.keys.length; i++) {
+      const key = component.keys[i];
+      if (clearAirCellSet && clearAirCellSet.has(component.absKeys[i])) clearAirKeys.add(key);
+      else if (isSmallOrElongated) otherWeakKeys.add(key);
     }
   }
   return { clearAirKeys, otherWeakKeys };
@@ -363,7 +395,7 @@ function renderGrid(
   // not an absolute override — findWeakSignalKeys still exempts any component strong enough to be
   // real regardless of what VCP the station claims (see isExemptFromWeakSignal), the same rule
   // project.ts's own despeckle logic already uses for exactly this reason.
-  isClearAirMode: boolean,
+  isClearAirMode: boolean | Set<string>,
 ): string | null {
   const width = Math.round((bounds.maxLongitude - bounds.minLongitude) / step) + 1;
   const height = Math.round((bounds.maxLatitude - bounds.minLatitude) / step) + 1;
@@ -375,7 +407,7 @@ function renderGrid(
     const col = Math.round((point.lon - bounds.minLongitude) / step);
     const row = Math.round((bounds.maxLatitude - point.lat) / step);
     if (col < 0 || col >= width || row < 0 || row >= height) continue;
-    cells.push({ row, col, dbz: point.dbz });
+    cells.push({ row, col, dbz: point.dbz, absKey: absoluteCellKey(point.lat, point.lon, step) });
   }
 
   const composite = createCanvas(width, height);
@@ -410,7 +442,7 @@ function renderGrid(
   return `data:image/png;base64,${buffer.toString("base64")}`;
 }
 
-export function renderMrmsGridToDataUrl(points: MrmsPoint[], bounds: MrmsBounds, step: number, isClearAirMode = false): string | null {
+export function renderMrmsGridToDataUrl(points: MrmsPoint[], bounds: MrmsBounds, step: number, isClearAirMode: boolean | Set<string> = false): string | null {
   return renderGrid(points, bounds, step, colorForDbz, (v) => v >= NO_ECHO_THRESHOLD_DBZ, true, isClearAirMode);
 }
 
