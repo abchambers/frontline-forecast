@@ -313,14 +313,16 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
   // A tile that fails once (our own worker still queued behind other work, a transient network
   // hiccup) stays permanently blank otherwise — Leaflet doesn't retry on tileerror, it just drops
   // the tile. Real production evidence (radar quality pass, 2026-09-03/04): a cold multi-station
-  // mosaic combo can legitimately take up to ~90s to compute under worker contention, and the
-  // response is otherwise idempotent and gets CDN-cached once it succeeds — so retrying with
-  // backoff turns a real but transient failure into a short delay instead of a permanent gap.
-  // Capped at 3 attempts so a genuine no-coverage tile (404 — a real gap in NEXRAD coverage, e.g.
-  // open ocean) gives up and stays blank rather than retrying forever; a 404 and a transient 502
-  // both surface as the same <img> onerror, so this can't tell them apart, but a few bounded
-  // retries on a 404 cost little.
-  const TILE_RETRY_DELAYS_MS = [4000, 10000, 20000];
+  // mosaic combo queued behind other work has taken up to ~120-150s to compute under worker
+  // contention, and the response is otherwise idempotent and gets CDN-cached once it succeeds — so
+  // retrying with backoff turns a real but transient failure into a delay instead of a permanent
+  // gap. Sized to cover that real worst case (cumulative ~127s across 5 attempts), not just the
+  // ~90s typical case — a shorter window (originally 3 attempts / 34s, tried first) gave up before
+  // a genuinely queued-but-succeeding combo ever got the chance to return. Capped at 5 attempts so a
+  // genuine no-coverage tile (404 — a real gap in NEXRAD coverage, e.g. open ocean) still gives up
+  // and stays blank rather than retrying forever; a 404 and a transient 502 both surface as the same
+  // <img> onerror, so this can't tell them apart, but a few bounded retries on a 404 cost little.
+  const TILE_RETRY_DELAYS_MS = [5000, 10000, 20000, 35000, 57000];
   function attachTileRetry(layer: any) {
     const attempts = new Map<string, number>();
     layer.on("tileerror", (event: any) => {
