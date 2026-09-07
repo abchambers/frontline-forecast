@@ -629,23 +629,26 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
               // app's own real GRID_STEP_DEG-derived native zoom too (see radar-worker/src/
               // mercator.ts), so there was nothing IEM-specific left to generalize.
               //
-              // Phase 3, done correctly, re-enabled 2026-09-07: station-less tile URL where each
-              // tile resolves its own covering stations geometrically (tile-station-resolver.ts)
-              // instead of this location's hardcoded mosaicStationSets combo. First attempt caused
-              // a real live incident (see radar quality pass notes, 2026-09-03): resolving PER
-              // NATIVE TILE meant one viewport could need 13 distinct station combos at once,
-              // saturating the worker's outbound connections. Fixed by coalescing resolution to a
-              // shared coarser region (COALESCE_ZOOM=6) so a typical viewport needs only 1-2 combos,
-              // matching Phase 1's own request pattern — verified correct via clean, isolated
-              // testing of the real resolver (concurrent/sequential/concurrent again, zero
-              // variance). Held off re-enabling the client until two more things were true, both
-              // confirmed live the same day: the tile-retry-with-backoff fix below (getOrCreate
-              // ProviderLayer/attachTileRetry) covers the real worst-case queuing delay (~127s), and
-              // a genuine worst-case test (2 brand-new, fully non-overlapping combos fired at once,
-              // e.g. crossing a region boundary) completes successfully within that window with
-              // healthy memory margin (peaked ~2.1GB, well under the ~3.1-3.2GB OOM level) — a
-              // meaningfully safer load than the 3-concurrent-job case that caused real station
-              // drops and 17-minute client hangs when MAX_CONCURRENT_COMPUTE was briefly tried at 3.
+              // Phase 3 re-enabled 2026-09-07, REVERTED again the same day — real live incident,
+              // second one from this exact feature. The redesign (coalesced regions,
+              // tile-station-resolver.ts) is genuinely correct — verified in isolation (a single
+              // browser's worst case: 2 fresh non-overlapping combos at once, completed fine with
+              // healthy memory margin). What that verification COULDN'T see: this is a real public
+              // site, and Phase 3 resolves a DIFFERENT combo per geographic REGION rather than
+              // reusing Phase 1's small, shared mosaicStationSets table. Real, organically diverse
+              // visitors around the country (confirmed live in fly logs, Labor Day with active
+              // severe weather: Florida, Missouri, Arkansas, Mid-Atlantic, Gulf Coast combos all
+              // computing at once, none of them prewarmed) each need their OWN fresh combo, all
+              // competing for the same MAX_CONCURRENT_COMPUTE=2 slots this worker has. Phase 1's
+              // small reused combo set meant most real traffic hit an already-warm cache; Phase 3's
+              // whole premise (any location resolves correctly) is exactly what defeats that —
+              // more geographic diversity in real traffic means more simultaneous cache misses, not
+              // fewer. A single-browser worst-case test can't reproduce "the whole country's traffic
+              // spread across many regions at once" — this needs load-testing against that pattern,
+              // or a real fix to the underlying capacity (the actual bottleneck, per the
+              // MAX_CONCURRENT_COMPUTE 2->3 experiment, is outbound fetch concurrency — raising
+              // worker capacity safely needs that solved first), before trying this again. Reverted
+              // to Phase 1's proven-stable per-location combo while that gets figured out.
               //
               // The cache-busting `v` param is a WALL-CLOCK time bucket (changes every 90s,
               // matching the tile route's own s-maxage), not this component's own refreshToken —
@@ -654,7 +657,7 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
               // fragment the CDN cache per-VISITOR instead of per-time-window, defeating the whole
               // reason tiles share a cache across users in the first place.
               const tileCacheBucket = Math.floor(Date.now() / 90_000);
-              const tileUrlTemplate = `/api/radar/tile/{z}/{x}/{y}?v=${tileCacheBucket}`;
+              const tileUrlTemplate = `/api/radar/tile/${location.radarSite}/{z}/{x}/{y}?v=${tileCacheBucket}`;
               const nextLayer = getOrCreateProviderLayer(tileUrlTemplate);
               if (!mapRef.current) throw new Error("Map unmounted");
               const wasAlreadyMounted = mapRef.current.hasLayer(nextLayer);
