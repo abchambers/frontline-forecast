@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
+import { satelliteForLongitude } from "@/lib/goes-satellite";
 
-// NOAA STAR's CDN keeps a real directory listing of every past GOES-19 CONUS frame (weeks of
+// NOAA STAR's CDN keeps a real directory listing of every past GOES CONUS frame (weeks of
 // history, one image every 5 minutes), not just the latest -- that's what makes a real scrubbable
 // timeline possible here, the same way the radar timeline already works off retained history
 // rather than a single current tile. Each channel directory uses the same filename shape:
-// `{YYYYDDDHHMM}_GOES19-ABI-CONUS-{dir}-1250x750.jpg`, DDD being day-of-year.
+// `{YYYYDDDHHMM}_{SAT}-ABI-CONUS-{dir}-1250x750.jpg`, DDD being day-of-year.
 //
 // Deliberately not computed from wall-clock time: real capture-to-publish latency varies (observed
 // 5-10+ minutes, not a fixed offset), so guessing the latest timestamp algorithmically produces
@@ -19,6 +20,9 @@ type Channel = keyof typeof CHANNEL_DIRS;
 // cadence — still a light fetch (small CONUS JPGs) and well inside the "weeks of history" the
 // directory listing retains.
 const MAX_FRAMES = 48;
+// See src/lib/goes-satellite.ts for why this depends on location at all — confirmed live that
+// GOES18's (West) CDN directory mirrors GOES19's (East) exactly, same channel dirs and file-size
+// variants, before wiring this in.
 
 function isoFromTimestamp(stamp: string) {
   const year = Number(stamp.slice(0, 4));
@@ -34,25 +38,31 @@ function isoFromTimestamp(stamp: string) {
 export async function GET(request: Request) {
   const limit = checkRateLimit(request, "satellite-frames", 30, 60_000);
   if (limit.limited) return rateLimitResponse(limit.retryAfterSeconds);
-  const requestedChannel = new URL(request.url).searchParams.get("channel");
+  const params = new URL(request.url).searchParams;
+  const requestedChannel = params.get("channel");
   const channel: Channel = requestedChannel === "ir" || requestedChannel === "wv" ? requestedChannel : "geocolor";
   const dir = CHANNEL_DIRS[channel];
+  const lonParam = params.get("lon");
+  const satellite = satelliteForLongitude(lonParam !== null && lonParam !== "" ? Number(lonParam) : null);
   try {
-    const response = await fetch(`https://cdn.star.nesdis.noaa.gov/GOES19/ABI/CONUS/${dir}/`, {
+    const response = await fetch(`https://cdn.star.nesdis.noaa.gov/${satellite.id}/ABI/CONUS/${dir}/`, {
       headers: { "User-Agent": "Frontline Forecast weather application" },
       cache: "no-store",
     });
     if (!response.ok) throw new Error(`GOES image archive returned ${response.status}`);
     const html = await response.text();
-    const pattern = new RegExp(`(\\d{11})_GOES19-ABI-CONUS-${dir}-1250x750\\.jpg`, "g");
+    const pattern = new RegExp(`(\\d{11})_${satellite.id}-ABI-CONUS-${dir}-1250x750\\.jpg`, "g");
     const timestamps = [...new Set([...html.matchAll(pattern)].map((match) => match[1]))].sort();
     const recent = timestamps.slice(-MAX_FRAMES);
     if (!recent.length) throw new Error("No recent GOES frames were found.");
     const frames = recent.map((stamp) => ({
       time: isoFromTimestamp(stamp),
-      url: `https://cdn.star.nesdis.noaa.gov/GOES19/ABI/CONUS/${dir}/${stamp}_GOES19-ABI-CONUS-${dir}-1250x750.jpg`,
+      url: `https://cdn.star.nesdis.noaa.gov/${satellite.id}/ABI/CONUS/${dir}/${stamp}_${satellite.id}-ABI-CONUS-${dir}-1250x750.jpg`,
     }));
-    return NextResponse.json({ channel, frames }, { headers: { "Cache-Control": "public, s-maxage=180, stale-while-revalidate=300" } });
+    return NextResponse.json(
+      { channel, satellite: satellite.id, satelliteLabel: satellite.label, frames },
+      { headers: { "Cache-Control": "public, s-maxage=180, stale-while-revalidate=300" } },
+    );
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "The satellite image archive is unavailable right now." }, { status: 502 });
   }
