@@ -236,7 +236,7 @@ const COMPUTE_WORKER_PATH = path.join(__dirname, "compute-worker.js");
 // above that documented worst case.
 const COMPUTE_TIMEOUT_MS = Number(process.env.COMPUTE_TIMEOUT_MS ?? 240_000);
 
-type ComputeWorkerJob = { kind: "single"; station: string; moment: "reflectivity" | "velocity" } | { kind: "mosaic"; stations: string[] };
+type ComputeWorkerJob = { kind: "single"; station: string; moment: "reflectivity" | "velocity" } | { kind: "mosaic"; stations: string[] } | { kind: "upper-air" };
 type ComputeWorkerRequest = ComputeWorkerJob & { id: number };
 type ComputeWorkerResponse = { id: number; ok: true; body: unknown } | { id: number; ok: false; error: string };
 
@@ -389,6 +389,32 @@ async function handleSevere(station: string) {
 const MAX_MOSAIC_STATIONS = 8;
 const MOSAIC_CACHE_TTL_MS = 300_000; // matches PAYLOAD_CACHE_TTL_MS — same volume-refresh-cadence reasoning.
 
+// GFS only publishes a new run every 6 real hours (vs. radar's ~5-10 minute cadence), so this can
+// cache far longer than anything else in this file — 20 minutes is just often enough to notice a
+// newly-published run reasonably promptly without adding any real load to NOAA's public feed.
+const UPPER_AIR_CACHE_TTL_MS = 1_200_000;
+
+async function handleUpperAir() {
+  const cacheKey = "upper-air:500mb";
+  const hit = cached(cacheKey);
+  if (hit) return { status: 200, body: hit, source: "cache" as const };
+
+  const existing = inFlight.get(cacheKey);
+  if (existing) return existing;
+
+  const promise = withComputeSlot(async () => {
+    const payload = await runInComputeWorker({ kind: "upper-air" });
+    setCache(cacheKey, payload, UPPER_AIR_CACHE_TTL_MS);
+    return { status: 200, body: payload, source: "live" as const };
+  });
+  inFlight.set(cacheKey, promise);
+  try {
+    return await promise;
+  } finally {
+    inFlight.delete(cacheKey);
+  }
+}
+
 async function handleMosaic(stationsParam: string) {
   const stations = [...new Set(stationsParam.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean))];
   if (stations.length === 0) return { status: 400, body: { error: "At least one station is required, e.g. ?stations=KFFC,KJGX,KVAX." }, source: "cache" as const };
@@ -460,6 +486,16 @@ const server = createServer((request, response) => {
       .catch((error: unknown) => {
         console.error(`[mosaic] request failed:`, error);
         respondJson(502, { error: error instanceof Error ? error.message : "Mosaic request failed." });
+      });
+    return;
+  }
+
+  if (url.pathname === "/upper-air") {
+    handleUpperAir()
+      .then((result) => respondJson(result.status, result.body, { "X-Radar-Source": result.source }))
+      .catch((error: unknown) => {
+        console.error(`[upper-air] request failed:`, error);
+        respondJson(502, { error: error instanceof Error ? error.message : "Upper-air request failed." });
       });
     return;
   }

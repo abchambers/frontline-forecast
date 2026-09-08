@@ -16,10 +16,16 @@ import { getVolumeCached, extractLowestElevation } from "./level2.js";
 import { computeReflectivityGrid, computeVelocityGrid, buildCandidateCells, boundsOf, mergeReflectivityCells, makeSharedMergeGrid, sharedMergeGridToPoints } from "./project.js";
 import { renderMrmsGridToDataUrl, renderVelocityGridToDataUrl } from "./render.js";
 import { GRID_STEP_DEG, MAX_RANGE_KM } from "./radar-constants.js";
+import { renderUpperAir500mb } from "./upper-air.js";
 
 type SingleRequest = { id: number; kind: "single"; station: string; moment: "reflectivity" | "velocity" };
 type MosaicRequest = { id: number; kind: "mosaic"; stations: string[] };
-type WorkerRequest = SingleRequest | MosaicRequest;
+// GFS/GRIB2 decoding is brand-new, less-battle-tested code touching an external data source this
+// worker has never depended on before — the same real reason radar decode runs in this isolated
+// child process (a hang or crash here must not take /health down with it) applies just as much
+// here, even though the real measured footprint (~270MB, ~2-3s) is far lighter than a radar job.
+type UpperAirRequest = { id: number; kind: "upper-air" };
+type WorkerRequest = SingleRequest | MosaicRequest | UpperAirRequest;
 type WorkerResponse = { id: number; ok: true; body: unknown } | { id: number; ok: false; error: string };
 
 // Real NEXRAD Volume Coverage Pattern codes for Clear Air surveillance (31 = long-pulse, 35 =
@@ -261,7 +267,12 @@ process.on("message", (request: WorkerRequest) => {
   const respond = (response: WorkerResponse) => {
     if (process.send) process.send(response);
   };
-  const job = request.kind === "single" ? computeSingle(request.station, request.moment) : computeMosaic(request.stations);
+  const job =
+    request.kind === "single"
+      ? computeSingle(request.station, request.moment)
+      : request.kind === "mosaic"
+        ? computeMosaic(request.stations)
+        : renderUpperAir500mb();
   job
     .then((body) => respond({ id: request.id, ok: true, body }))
     .catch((error: unknown) => respond({ id: request.id, ok: false, error: error instanceof Error ? error.message : String(error) }));

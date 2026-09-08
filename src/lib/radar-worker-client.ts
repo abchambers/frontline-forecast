@@ -131,6 +131,54 @@ function recordMosaicFailure() {
   }
 }
 
+// Own dedicated timeout + circuit breaker, 2026-09-08 — deliberately NOT sharing fetchFromWorker's
+// (radar single-station), even though the real measured latency is similar (~2-3s): upper-air's
+// GFS/GRIB2 fetch depends on an entirely different real upstream (NOAA's public S3 feed, not
+// NEXRAD/api.weather.gov) with its own independent failure modes, so a genuinely broken radar
+// pipeline shouldn't stop upper-air from being tried, and vice versa.
+const UPPER_AIR_TIMEOUT_MS = 20_000;
+const UPPER_AIR_FAILURE_THRESHOLD = 3;
+const UPPER_AIR_COOLDOWN_MS = 60_000;
+let upperAirConsecutiveFailures = 0;
+let upperAirCircuitOpenUntil = 0;
+
+export async function fetchUpperAirFromWorker(): Promise<unknown | null> {
+  if (!WORKER_URL) return null;
+  if (Date.now() < upperAirCircuitOpenUntil) return null;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), UPPER_AIR_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${WORKER_URL}/upper-air`, {
+      headers: WORKER_API_KEY ? { "x-worker-key": WORKER_API_KEY } : {},
+      signal: controller.signal,
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      console.error(`radar-worker-client: /upper-air returned ${response.status}`);
+      recordUpperAirFailure();
+      return null;
+    }
+    upperAirConsecutiveFailures = 0;
+    upperAirCircuitOpenUntil = 0;
+    return await response.json();
+  } catch (error) {
+    console.error(`radar-worker-client: /upper-air failed —`, error instanceof Error ? error.message : error);
+    recordUpperAirFailure();
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function recordUpperAirFailure() {
+  upperAirConsecutiveFailures += 1;
+  if (upperAirConsecutiveFailures >= UPPER_AIR_FAILURE_THRESHOLD) {
+    upperAirCircuitOpenUntil = Date.now() + UPPER_AIR_COOLDOWN_MS;
+    upperAirConsecutiveFailures = 0;
+  }
+}
+
 // Phase 1 tile architecture (2026-09-02) — a tile request costs exactly what a mosaic request
 // costs on the worker (it calls the same handleMosaic internally, see server.ts's /tile route,
 // then slices ~15ms of real work on top), so this deliberately shares fetchMosaicFromWorker's own
