@@ -17,6 +17,7 @@ import { createCanvas, GlobalFonts } from "@napi-rs/canvas";
 import { parseGribIndex, GribMessage } from "@mattnucc/gribberish";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { fetchWithTimeout } from "./fetch-with-timeout.js";
 import type { MrmsBounds } from "./types.js";
 
 // Real bug found live, 2026-09-08: this worker has never needed to render TEXT on canvas before
@@ -72,7 +73,7 @@ async function findLatestAvailableRun(): Promise<{ runDate: string; runHour: str
   const candidates = candidateRuns(new Date());
   for (const candidate of candidates) {
     const url = gfsUrl(candidate.runDate, candidate.runHour);
-    const head = await fetch(url, { method: "HEAD" }).catch(() => null);
+    const head = await fetchWithTimeout(url, { method: "HEAD" }).catch(() => null);
     if (head?.ok) {
       const fileSize = Number(head.headers.get("content-length"));
       return { ...candidate, fileSize };
@@ -83,12 +84,16 @@ async function findLatestAvailableRun(): Promise<{ runDate: string; runHour: str
 
 async function fetchGfsMessage(runDate: string, runHour: string, fileSize: number, varName: string, level: string): Promise<GribMessage> {
   const url = gfsUrl(runDate, runHour);
-  const idxText = await (await fetch(`${url}.idx`)).text();
+  const idxText = await (await fetchWithTimeout(`${url}.idx`)).text();
   const entries = parseGribIndex(idxText, fileSize);
   const entry = entries.find((e) => e.var === varName && e.level === level);
   if (!entry) throw new Error(`GFS field not found: ${varName} @ ${level}`);
   const end = entry.length ? entry.offset + entry.length - 1 : fileSize - 1;
-  const res = await fetch(url, { headers: { Range: `bytes=${entry.offset}-${end}` } });
+  // GRIB2 range fetches can genuinely take longer than the 10s default under real concurrent load
+  // now that they share the same global slot every other outbound call does — matches level2.ts's
+  // own 20s allowance for its S3 downloads, the same real reasoning (queued behind other traffic
+  // isn't a hang, it just needs more real time to actually transfer once its turn comes).
+  const res = await fetchWithTimeout(url, { headers: { Range: `bytes=${entry.offset}-${end}` } }, 20_000);
   const buf = new Uint8Array(await res.arrayBuffer());
   return GribMessage.parseFromBuffer(buf, 0);
 }

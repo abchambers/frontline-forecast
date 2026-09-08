@@ -192,18 +192,24 @@ async function computeMosaic(stations: string[]) {
   // BOTH S3 and api.weather.gov (two unrelated external services) started timing out en masse at
   // the same moment — not an external outage, this machine's own outbound capacity got saturated —
   // causing real missing tiles in production (Andrew's own live report, side-by-side against
-  // RadarScope). Capping per-job fetch concurrency bounds the worst case to
-  // MAX_CONCURRENT_COMPUTE x this value regardless of how many distinct combos Phase 3 ever needs
-  // at once, trading away some of the latency win for not saturating the machine outright.
-  const VOLUME_FETCH_BATCH_SIZE = Math.min(2, resolvedSites.length);
+  // RadarScope). The fix at the time (a per-job batch-of-2 cap here) worked but was incomplete by
+  // construction: it only ever knew about ITS OWN job's fetches, not any other concurrently-running
+  // job's — real testing later the same night reproduced the identical saturation signature from
+  // pure job-count alone (3 concurrent jobs x this file's own 2-per-job cap = 6 total, still
+  // unsafe), proving the batching needed to happen GLOBALLY, not per job.
+  //
+  // REPLACED, 2026-09-08, with a real global cap in fetch-with-timeout.ts's own fetchWithTimeout —
+  // every real outbound call in this whole process (this file's volume fetches, site.ts's station
+  // lookups, upper-air.ts's GRIB2 fetches) shares ONE concurrency gate now, so it holds regardless
+  // of how many different job kinds happen to overlap, which a per-job number never could. Firing
+  // every station's fetch here without a local cap is NOT a memory regression from the batch-of-2
+  // era: full per-job concurrency (all of one job's stations at once, no cap) was already verified
+  // live and memory-safe on its own, back when partial decode first cut the steady-state floor —
+  // the failure mode that followed was specifically about MULTIPLE jobs' fetches compounding
+  // unseen by each other, which the new global cap directly closes.
   const volumeFetchStart = performance.now();
-  const volumeResults: PromiseSettledResult<Awaited<ReturnType<typeof getVolumeCached>>>[] = [];
-  for (let batchStart = 0; batchStart < resolvedSites.length; batchStart += VOLUME_FETCH_BATCH_SIZE) {
-    const batch = resolvedSites.slice(batchStart, batchStart + VOLUME_FETCH_BATCH_SIZE);
-    const batchResults = await Promise.allSettled(batch.map(({ station }) => getVolumeCached(station)));
-    volumeResults.push(...batchResults);
-  }
-  console.log(`[mosaic:${stations.join(",")}] volume fetch+parse (batches of ${VOLUME_FETCH_BATCH_SIZE}, ${resolvedSites.length} stations): ${((performance.now() - volumeFetchStart) / 1000).toFixed(1)}s`);
+  const volumeResults = await Promise.allSettled(resolvedSites.map(({ station }) => getVolumeCached(station)));
+  console.log(`[mosaic:${stations.join(",")}] volume fetch+parse (${resolvedSites.length} stations): ${((performance.now() - volumeFetchStart) / 1000).toFixed(1)}s`);
 
   for (let i = 0; i < resolvedSites.length; i += 1) {
     const { station, site } = resolvedSites[i];
