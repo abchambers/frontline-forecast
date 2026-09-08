@@ -2469,6 +2469,14 @@ export default function Home() {
 
   useEffect(() => {
     if (activeSection !== "dashboard" || dataPanel !== "sounding") return;
+    // Real bug found live (2026-09-08): switching location while a fetch for the PREVIOUS
+    // location fails (or is still in flight) used to leave that previous location's real text
+    // on screen with no visible sign it was stale — the "Loaded" indicator these panels show
+    // only ever checked whether text was non-empty, which stale text still satisfies. Clearing
+    // both the text and status before the new fetch starts means a failure genuinely shows an
+    // error instead of silently passing off old data as current.
+    setSoundingText("");
+    setSoundingStatus("Loading latest radiosonde observation…");
     fetch(`/api/sounding?${locationQuery}`)
       .then(async (response) => {
         const data = await response.json();
@@ -2481,6 +2489,12 @@ export default function Home() {
 
   useEffect(() => {
     if (activeSection !== "dashboard" || dataPanel !== "nbm") return;
+    // See the sounding effect above for why text is cleared before every new fetch, not just on
+    // the initial load — this is the exact bug Andrew reported live (NBM stayed on Athens/KAHN
+    // after switching to Los Angeles, whose auto-resolved station briefly didn't have real NBM
+    // coverage — see location-lookup/route.ts's own ICAO-preference fix for that root cause).
+    setNbmText("");
+    setNbmStatus("Loading latest NBM bulletin…");
     fetch(`/api/nbm?${locationQuery}`)
       .then(async (response) => {
         const data = await response.json();
@@ -2493,6 +2507,9 @@ export default function Home() {
 
   useEffect(() => {
     if (activeSection !== "dashboard" || dataPanel !== "afd") return;
+    // See the sounding effect above for why text is cleared before every new fetch.
+    setAfdText("");
+    setAfdStatus("Loading latest forecast discussion…");
     fetch(`/api/afd?${locationQuery}`)
       .then(async (response) => {
         const data = await response.json();

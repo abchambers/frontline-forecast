@@ -82,7 +82,19 @@ export async function GET(request: Request) {
     let observationStation = stationId ?? null;
     if (!observationStation) {
       const stationList = await nws<{ features: { properties: { stationIdentifier: string } }[] }>(pointData.observationStations);
-      observationStation = stationList.features[0]?.properties.stationIdentifier ?? null;
+      // Real bug found live (2026-09-08): NWS's own "nearest stations" list is sorted by raw
+      // distance, not station type, and routinely puts a 5-character mesonet/RAWS/buoy site (e.g.
+      // "FHMC1") ahead of the real airport ICAO station a few miles further out (confirmed for a
+      // real Los Angeles point: FHMC1 ranked #1, with KHHR/KLAX/KSMO/KBUR right behind it). This
+      // app's own downstream routes (NBM, sounding, AFD) all key off this same station id, and
+      // NBM/sounding text bulletins only cover real ICAO-style stations — a mesonet id silently
+      // fails to match anything in that text, which used to just leave the PREVIOUS location's
+      // stale bulletin on screen with no visible error (see page.tsx's nbmText/nbmStatus fix).
+      // Prefer the first standard 4-letter ICAO code (matches every real CONUS/Alaska/Hawaii
+      // airport station this app cares about); fall back to whatever's nearest if none exists —
+      // better than breaking a genuinely remote location this doesn't anticipate.
+      const icaoStation = stationList.features.find((f) => /^[A-Z]{4}$/.test(f.properties.stationIdentifier));
+      observationStation = icaoStation?.properties.stationIdentifier ?? stationList.features[0]?.properties.stationIdentifier ?? null;
     }
 
     const { station: upperAirStation, distanceKm: upperAirDistanceKm } = nearestUpperAirStation(latitude, longitude);
