@@ -729,22 +729,27 @@ async function prewarm() {
   // members — e.g. KFFC's combo only needs KJGX/KMXX/KGSP fresh, not all 5. The two combos also
   // share KMXX/KBMX with each other, so running KFFC's combo first warms part of KBMX's combo too.
   //
-  // Fired CONCURRENTLY (not one-at-a-time), 2026-09-08 — a real, necessary consequence of
-  // broadening PREWARM_MOSAIC_COMBOS from 2 entries to 12: this loop used to await each combo
-  // fully before starting the next, which was fine at 2 combos (a couple minutes, comfortably
-  // inside PREWARM_INTERVAL_MS) but would take 12-28 real minutes at 12 combos run sequentially —
-  // several times longer than the interval meant to keep them fresh. handleMosaic already routes
-  // through withComputeSlot (MAX_CONCURRENT_COMPUTE) and every real fetch through the new global
-  // outbound cap, so firing all of them via Promise.allSettled is exactly as safe as real
-  // concurrent user traffic hitting these same combos already has to be — it just lets the ROTATION
-  // itself benefit from the same real concurrency those safety gates were built to allow.
-  await Promise.allSettled(
-    PREWARM_MOSAIC_COMBOS.map((combo) =>
-      handleMosaic(combo.join(",")).catch((error) => {
-        console.error(`[prewarm:mosaic:${combo.join(",")}] failed —`, error instanceof Error ? error.message : error);
-      }),
-    ),
-  );
+  // Tried firing all combos concurrently via Promise.allSettled, 2026-09-08 -- reverted the SAME
+  // day after real fly logs showed it actively failing in production: one mosaic (KHGX/KLCH/
+  // KGRK/KPOE) came back with ALL FOUR stations failed (three 20s timeouts plus one outright
+  // "fetch failed"), not the tolerable "1 station dropped" degradation seen before. Root cause:
+  // a single mosaic alone already fires 4-5 concurrent station fetches (compute-worker.ts's
+  // computeMosaic relies entirely on the global fetchWithTimeout semaphore now, no per-job
+  // batching), which is already close to that semaphore's MAX_CONCURRENT_OUTBOUND_FETCHES=4 cap.
+  // Running 3 mosaics at once (MAX_CONCURRENT_COMPUTE) sustains 12-15 concurrent station-fetch
+  // demands against only 4 real slots for the ENTIRE rotation, not a brief burst -- very different
+  // from the earlier adversarial test that only proved a one-time burst of 3 combos safe. Back to
+  // sequential: slower full rotation (12-28 real minutes for 12 combos), but this is the exact
+  // shape already proven not to wipe out whole combos. Making the rotation faster without
+  // reintroducing this needs a real bounded-concurrency pool (e.g. 2 at a time) or a higher fetch
+  // cap, each of which needs its own live adversarial re-verification -- not a same-day bolt-on.
+  for (const combo of PREWARM_MOSAIC_COMBOS) {
+    try {
+      await handleMosaic(combo.join(","));
+    } catch (error) {
+      console.error(`[prewarm:mosaic:${combo.join(",")}] failed —`, error instanceof Error ? error.message : error);
+    }
+  }
   setTimeout(prewarm, PREWARM_INTERVAL_MS);
 }
 
