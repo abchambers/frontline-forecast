@@ -1908,6 +1908,16 @@ export default function Home() {
     if (!storedDraft) { setForecastRun(createNewForecastRun()); return; }
     try {
       const parsed = JSON.parse(storedDraft) as ForecastRunDraft;
+      const today = addDays(new Date(), 0);
+      const hasCurrentOrFutureDay = parsed.days?.some((day) => validForecastDate(day.date) && day.date >= today);
+      if (!hasCurrentOrFutureDay) {
+        // Every day in the saved draft has already passed (e.g. a 3-day run from last week
+        // nobody ever submitted) -- resuming it would silently show a stale, un-postable
+        // forecast as if it were current. Start fresh instead of loading dead state.
+        window.localStorage.removeItem(forecastDraftStorageKeyFor(session.user.id));
+        setForecastRun(createNewForecastRun());
+        return;
+      }
       if (parsed.days?.length) setForecastRun({ ...parsed, days: parsed.days.map((day) => ({ ...day, date: fallbackForecastDate(day.date), day: { ...emptyPeriod("day"), ...day.day, references: savedReferences(day.day.references) }, night: { ...emptyPeriod("night"), ...day.night, references: savedReferences(day.night.references) } })) });
     } catch {
       window.localStorage.removeItem(forecastDraftStorageKeyFor(session.user.id));
