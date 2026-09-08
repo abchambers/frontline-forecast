@@ -53,6 +53,12 @@ async function computeSingle(station: string, moment: "reflectivity" | "velocity
   } catch {
     correlationCoefficient = undefined;
   }
+  let differentialReflectivity;
+  try {
+    differentialReflectivity = await extractLowestElevation(radar, "differentialReflectivity", station);
+  } catch {
+    differentialReflectivity = undefined;
+  }
 
   const candidateCells = buildCandidateCells(site, GRID_STEP_DEG, MAX_RANGE_KM);
   const t2 = performance.now();
@@ -62,13 +68,13 @@ async function computeSingle(station: string, moment: "reflectivity" | "velocity
   if (moment === "velocity") {
     const reflElevation = await extractLowestElevation(radar, "reflectivity", station);
     const velElevation = await extractLowestElevation(radar, "velocity", station);
-    const { echoMask, qualityControl: qc } = computeReflectivityGrid(reflElevation, site, GRID_STEP_DEG, MAX_RANGE_KM, correlationCoefficient, candidateCells);
+    const { echoMask, qualityControl: qc } = computeReflectivityGrid(reflElevation, site, GRID_STEP_DEG, MAX_RANGE_KM, correlationCoefficient, candidateCells, differentialReflectivity);
     ({ grid, bounds } = computeVelocityGrid(velElevation, site, GRID_STEP_DEG, MAX_RANGE_KM, echoMask, candidateCells));
     elevationDeg = velElevation.elevationDeg;
     qualityControl = qc;
   } else {
     const elevation = await extractLowestElevation(radar, "reflectivity", station);
-    ({ grid, bounds, qualityControl } = computeReflectivityGrid(elevation, site, GRID_STEP_DEG, MAX_RANGE_KM, correlationCoefficient, candidateCells));
+    ({ grid, bounds, qualityControl } = computeReflectivityGrid(elevation, site, GRID_STEP_DEG, MAX_RANGE_KM, correlationCoefficient, candidateCells, differentialReflectivity));
     elevationDeg = elevation.elevationDeg;
   }
   const tCompute = performance.now();
@@ -213,8 +219,14 @@ async function computeMosaic(stations: string[]) {
       } catch {
         correlationCoefficient = undefined;
       }
+      let differentialReflectivity;
+      try {
+        differentialReflectivity = await extractLowestElevation(volume.radar, "differentialReflectivity", station);
+      } catch {
+        differentialReflectivity = undefined;
+      }
       const candidateCells = buildCandidateCells(site, GRID_STEP_DEG, MAX_RANGE_KM);
-      const { grid } = computeReflectivityGrid(elevation, site, GRID_STEP_DEG, MAX_RANGE_KM, correlationCoefficient, candidateCells);
+      const { grid } = computeReflectivityGrid(elevation, site, GRID_STEP_DEG, MAX_RANGE_KM, correlationCoefficient, candidateCells, differentialReflectivity);
       mergeReflectivityCells(shared, grid, GRID_STEP_DEG, stationIsClearAir, clearAirCellKeys);
       succeededStations.push(station);
       perStationMs.push(`${station}=${((performance.now() - stationStart) / 1000).toFixed(1)}s`);

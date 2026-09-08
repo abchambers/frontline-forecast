@@ -305,6 +305,22 @@ function flatGridToPoints(grid: FlatGrid, stepDeg: number): MrmsPoint[] {
 // of this app's hard-won, measured-against-real-data tuning actually lives (see git history for the
 // full incident-by-incident writeups; reproduced in brief below since the numbers still apply).
 const CORRELATION_COEFFICIENT_THRESHOLD = 0.85;
+// Real investigation, 2026-09-08: the original CC-gating work (98165ac) found RHO alone (even at a
+// strict 0.97) lets a persistent radial spoke pattern survive, left unresolved as "plausibly real
+// widespread light rain/drizzle, plausibly something else." Checked differential reflectivity (ZDR)
+// — decoded by the library but never used here before — directly against real live volumes:
+// CONFIRMED-real precipitation (dBZ>=25, this file's own "strong signal is always real" cells, KCLX
+// live storm cores) measured ZDR mean 0.78-0.96dB with LOW variance (std ~0.2-0.5), squarely in the
+// physically-expected range for real rain (roughly 0-3dB). The ambiguous weak population (dBZ<25,
+// matching the visible spoke pattern, sampled from both KFFC clear-air and KCLX) measured ZDR mean
+// 6-8.5dB with HIGH variance (std 3-6.5) — the classic signature of irregular, non-hydrometeor
+// targets (insects, ground clutter: erratic RCS between polarizations), not light rain. This
+// directly answers the original ambiguity: it's clutter, not real drizzle, at least for the cases
+// checked. Threshold picked conservatively from that real distribution: 6dB caught roughly 62% of
+// the ambiguous population in the investigation sample while sitting clearly above real rain's
+// expected range — the same "only remove what's confidently non-real, don't risk real weak
+// precipitation" philosophy as the CC threshold itself.
+const DIFFERENTIAL_REFLECTIVITY_THRESHOLD_DB = 6;
 const MIN_REFLECTIVITY_DBZ = 5; // matches RadarScope's own "0-10: very light reflectivity" bottom legend band.
 const DESPECKLE_MIN_NEIGHBORS = 3;
 // Cells at or above this always survive despeckling regardless of neighbor count — real biological
@@ -363,6 +379,25 @@ function applyCorrelationCoefficientGate(grid: FlatGrid, ccGrid: FlatGrid): void
   }
 }
 
+// Same "AND on top of the baseline, never a replacement" shape as CC above, and deliberately NOT
+// exempting strong (>=DESPECKLE_STRENGTH_GATE_DBZ) cells either — matching CC's own precedent, not
+// despeckle/cluster-removal's. A real reason a strength-based exemption would be wrong here: giant
+// hail or a tornadic debris signature can show erratic/negative ZDR at HIGH dBZ, exactly the real,
+// meaningful severe-weather case a blanket "strong = trust it" rule would incorrectly discard. See
+// DIFFERENTIAL_REFLECTIVITY_THRESHOLD_DB's own comment for the real measured evidence this is based
+// on — confirmed-real precipitation sits at 0-1dB with low variance; ambiguous clutter/bio-scatter
+// sits at 6-8.5dB with high variance. Missing ZDR (NaN) rejects, same as missing CC — every real
+// WSR-88D site has been dual-pol since 2013, so this should be at least as rare as CC ever being
+// absent, not a meaningfully different availability risk.
+function applyDifferentialReflectivityGate(grid: FlatGrid, zdrGrid: FlatGrid): void {
+  const { values } = grid;
+  for (let i = 0; i < values.length; i++) {
+    if (Number.isNaN(values[i])) continue;
+    const zdr = zdrGrid.values[i];
+    if (Number.isNaN(zdr) || Math.abs(zdr) > DIFFERENTIAL_REFLECTIVITY_THRESHOLD_DB) values[i] = NaN;
+  }
+}
+
 // Runs on the FINAL survivor set (after CC, not just after despeckle) — removing small connected
 // components of whatever actually survived every earlier filter, regardless of which one is
 // responsible for a neighbor's absence. See the original version's extensive comment for the real
@@ -418,7 +453,8 @@ export function computeReflectivityGrid(
   maxRangeKm: number,
   correlationCoefficient?: DecodedElevation,
   candidateCells?: CandidateGrid,
-): { grid: MrmsPoint[]; bounds: MrmsBounds; echoMask: FlatGrid; qualityControl: "noise-floor+correlation-coefficient" | "noise-floor" } {
+  differentialReflectivity?: DecodedElevation,
+): { grid: MrmsPoint[]; bounds: MrmsBounds; echoMask: FlatGrid; qualityControl: string } {
   const bounds = boundsForSite(site, maxRangeKm);
   const cg = candidateCells ?? buildCandidateCells(site, stepDeg, maxRangeKm);
   const grid = sampleAtCandidateCellsInterpolated(elevation, cg);
@@ -431,15 +467,24 @@ export function computeReflectivityGrid(
     applyCorrelationCoefficientGate(grid, ccGrid);
   }
 
+  if (differentialReflectivity) {
+    const zdrGrid = sampleAtCandidateCellsInterpolated(differentialReflectivity, cg);
+    applyDifferentialReflectivityGate(grid, zdrGrid);
+  }
+
   // Runs on the FINAL survivor set (after CC, not just after despeckle) — see removeSmallClusters'
   // own comment for why that ordering matters.
   removeSmallClusters(grid);
+
+  const qualityControlParts = ["noise-floor"];
+  if (correlationCoefficient) qualityControlParts.push("correlation-coefficient");
+  if (differentialReflectivity) qualityControlParts.push("differential-reflectivity");
 
   return {
     grid: flatGridToPoints(grid, stepDeg),
     bounds,
     echoMask: grid,
-    qualityControl: correlationCoefficient ? "noise-floor+correlation-coefficient" : "noise-floor",
+    qualityControl: qualityControlParts.join("+"),
   };
 }
 

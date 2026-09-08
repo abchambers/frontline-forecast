@@ -225,7 +225,7 @@ async function refetchAndDecodeFully(stationId: string): Promise<InstanceType<ty
   return radar;
 }
 
-export type Moment = "reflectivity" | "velocity" | "correlationCoefficient";
+export type Moment = "reflectivity" | "velocity" | "correlationCoefficient" | "differentialReflectivity";
 
 // Picks the lowest elevation angle that actually carries the requested
 // moment — reflectivity is on every tilt, but velocity is only on the
@@ -233,14 +233,13 @@ export type Moment = "reflectivity" | "velocity" | "correlationCoefficient";
 // KFFC volume: REF on all 17 elevations, VEL only on a subset — not
 // documented anywhere obvious, it's how the volume actually decoded).
 //
-// getHighresCorrelationCoefficient(scan) has a real bug found live: calling
-// it with an explicit scan index (even 0) throws "invalid scan selected:
-// undefined", even when that exact scan's data is present and correct via
-// getHeader(scan).rho. Calling it with NO argument returns the full
-// per-elevation array instead and works fine — confirmed against real data
-// (all 720 entries populated, matching getHeader's values exactly). Worked
-// around by fetching the whole-elevation array once per elevation and
-// indexing into it, rather than calling per-scan like the other two moments.
+// getHighresCorrelationCoefficient(scan) and getHighresDiffReflectivity(scan) both have the same
+// real bug found live: calling with an explicit scan index (even 0) throws "invalid scan selected:
+// undefined", even when that exact scan's data is present and correct via getHeader(scan). Calling
+// with NO argument returns the full per-elevation array instead and works fine — confirmed against
+// real data (all 720 entries populated, matching getHeader's values exactly, for both moments).
+// Worked around by fetching the whole-elevation array once per elevation and indexing into it,
+// rather than calling per-scan like reflectivity/velocity.
 function extractLowestElevationOnce(radar: InstanceType<typeof Level2Radar>, moment: Moment): DecodedElevation | null {
   for (const elevation of radar.listElevations()) {
     radar.setElevation(elevation);
@@ -249,6 +248,7 @@ function extractLowestElevationOnce(radar: InstanceType<typeof Level2Radar>, mom
     let sawMoment = false;
 
     const allCorrelationCoefficient = moment === "correlationCoefficient" ? radar.getHighresCorrelationCoefficient() : null;
+    const allDiffReflectivity = moment === "differentialReflectivity" ? radar.getHighresDiffReflectivity() : null;
 
     for (let scan = 0; scan < scans; scan += 1) {
       const azimuth = radar.getAzimuth(scan) as number;
@@ -257,7 +257,9 @@ function extractLowestElevationOnce(radar: InstanceType<typeof Level2Radar>, mom
           ? radar.getHighresReflectivity(scan)
           : moment === "velocity"
             ? radar.getHighresVelocity(scan)
-            : allCorrelationCoefficient?.[scan];
+            : moment === "correlationCoefficient"
+              ? allCorrelationCoefficient?.[scan]
+              : allDiffReflectivity?.[scan];
       if (!data || !data.name) continue;
       sawMoment = true;
       // gate_size/first_gate come back from the decoder already in
