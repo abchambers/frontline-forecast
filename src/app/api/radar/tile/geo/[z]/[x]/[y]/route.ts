@@ -11,6 +11,18 @@ import { resolveStationsForTile } from "@/lib/tile-station-resolver";
 // so any tile anywhere in the country resolves the same way, not just the locations someone
 // thought to add to a table. See radar-worker/scripts/prototype-tile-station-matching.ts for the
 // real-data validation this design is based on before it became a real route.
+//
+// Currently UNUSED by the client (radar-map.tsx points at Phase 1's [station] route) — real
+// production incidents (see radar quality pass notes, 2026-09-07) showed this needs a real fix to
+// the worker's outbound fetch capacity, or genuine nationwide-traffic load-testing, before it's
+// safe to re-enable. Left live and reachable so the code stays exercised/deployable, not deleted.
+//
+// Moved under /geo/ 2026-09-08 (was directly at /api/radar/tile/[z]/[x]/[y]) — Next.js requires
+// every dynamic route at the same path depth under a shared parent to use the SAME param name, and
+// this route's [z] collided with the Phase 1 route's [station] both being the first segment under
+// /api/radar/tile/. Real, standard Next.js routing rule, not something this fork changed — broke
+// local `next dev` outright ("You cannot use different slug names for the same dynamic path")
+// despite Vercel's production builds apparently tolerating it. Pure rename, no behavior change.
 const MAX_ZOOM = 12;
 
 export async function GET(request: Request, { params }: { params: Promise<{ z: string; x: string; y: string }> }) {
