@@ -191,13 +191,16 @@ function setCache(key: string, data: unknown, ttlMs: number) {
 // the 2 -> ... wait for it -> 2026-09-01 MAX_CONCURRENT_COMPUTE=1->2 note in git history), now shown
 // to be much more severe than previously measured.
 //
-// Conclusion: 2 remains the safe, verified value. Going higher trades a bounded, understood problem
-// (a fresh combo queues briefly, worst case) for an unbounded one (dropped stations and multi-minute
-// silent hangs). If more real concurrency is ever needed, the actual bottleneck to address first is
-// outbound fetch capacity (VOLUME_FETCH_BATCH_SIZE, or the S3/api.weather.gov concurrency ceiling
-// this container can sustain), not this slot count -- raising this number alone just moves the
-// contention from the compute queue to the network, where it's worse and harder to see coming.
-const MAX_CONCURRENT_COMPUTE = 2;
+// Trying 3 again, 2026-09-08, now that the actual bottleneck this comment named above is real:
+// fetch-with-timeout.ts's fetchWithTimeout gates EVERY real outbound call in this process (not
+// just one job's own volume fetches) through a single global concurrency cap. Raising this number
+// no longer means raising real network concurrency by the same factor -- the global cap holds
+// regardless of how many jobs are active, which is the structural fix the earlier per-job batching
+// could never provide. Verify live before trusting this number, same discipline as every other
+// change here: re-run the exact adversarial test that broke the 2->3 attempt last time (3 real
+// non-overlapping combos fired at once directly at /mosaic) and confirm both real memory stays
+// safe AND no station drops / client-facing hangs this time.
+const MAX_CONCURRENT_COMPUTE = 3;
 let activeCompute = 0;
 const computeQueue: (() => void)[] = [];
 
@@ -647,13 +650,34 @@ const PREWARM_STATIONS = ["KFFC", "KBMX"];
 //
 // Hardcoded rather than looked up from src/lib/mosaic-station-sets.ts (the main app's table): this
 // worker deliberately has no station-coordinate database to look combos up from (see handleMosaic's
-// own comment for why — that logic belongs in the app, not here), so this is a hand-synced copy of
-// just the two combos that matter: the ones covering this app's actual preset locations
-// (weatherDeskLocations all resolve to KFFC or KBMX, same reasoning as PREWARM_STATIONS above).
-// Update this alongside mosaic-station-sets.ts if either preset's station set ever changes.
+// own comment for why — that logic belongs in the app, not here), so this is a hand-synced copy.
+// Update this alongside mosaic-station-sets.ts if a preset's station set ever changes.
+//
+// Broadened 2026-09-08, real request ("instantaneous load no matter where"): the first two entries
+// cover this app's own preset locations; the rest are a curated set of major US metro hubs, real
+// geographic spread (Northeast/West Coast/Midwest/South/Southwest/Mountain), each combo pulled
+// directly from src/lib/mosaic-station-sets.ts's own already-vetted table (every station ID
+// verified against the live api.weather.gov/radar/stations list first, not guessed from memory —
+// two initial guesses, KLIX and KCLT, don't exist as real WSR-88D IDs; the real nearest stations
+// for New Orleans and Charlotte are KHDC and KGSP respectively). This does NOT make "anywhere"
+// instant — it makes the small number of locations most real visitors are actually near instant,
+// while a genuinely uncovered location still falls back to the existing cold-compute path (now
+// itself safer thanks to the new global fetch cap). Sized to 12 total combos specifically so a full
+// rotation has a real chance of completing within PREWARM_INTERVAL_MS at MAX_CONCURRENT_COMPUTE=3 —
+// verify actual rotation time live after deploying, same as every other change to this mechanism.
 const PREWARM_MOSAIC_COMBOS: string[][] = [
   ["KFFC", "KJGX", "KMXX", "KBMX", "KGSP"],
   ["KBMX", "KMXX", "KGWX", "KHTX"],
+  ["KOKX", "KDIX", "KBOX", "KENX"], // New York City
+  ["KVTX", "KVBX", "KSOX", "KEYX"], // Los Angeles
+  ["KLOT", "KMKX", "KILX", "KIWX"], // Chicago
+  ["KHGX", "KLCH", "KGRK", "KPOE"], // Houston
+  ["KIWA", "KFSX", "KEMX", "KYUX"], // Phoenix
+  ["KMUX", "KDAX", "KHNX", "KBBX"], // San Francisco Bay Area
+  ["KATX", "KLGX", "KRTX", "KOTX"], // Seattle
+  ["KFTG", "KPUX", "KCYS", "KGLD"], // Denver
+  ["KBOX", "KOKX", "KGYX", "KENX"], // Boston
+  ["KAMX", "KBYX", "KMLB", "KTBW"], // Miami
 ];
 // Originally 80s (just under the 90s cache TTL, to never let it expire) —
 // found live via fly logs this was too aggressive: each station's cold
@@ -704,13 +728,23 @@ async function prewarm() {
   // is already warm by the time these run, so each combo only pays a fresh decode for its OTHER
   // members — e.g. KFFC's combo only needs KJGX/KMXX/KGSP fresh, not all 5. The two combos also
   // share KMXX/KBMX with each other, so running KFFC's combo first warms part of KBMX's combo too.
-  for (const combo of PREWARM_MOSAIC_COMBOS) {
-    try {
-      await handleMosaic(combo.join(","));
-    } catch (error) {
-      console.error(`[prewarm:mosaic:${combo.join(",")}] failed —`, error instanceof Error ? error.message : error);
-    }
-  }
+  //
+  // Fired CONCURRENTLY (not one-at-a-time), 2026-09-08 — a real, necessary consequence of
+  // broadening PREWARM_MOSAIC_COMBOS from 2 entries to 12: this loop used to await each combo
+  // fully before starting the next, which was fine at 2 combos (a couple minutes, comfortably
+  // inside PREWARM_INTERVAL_MS) but would take 12-28 real minutes at 12 combos run sequentially —
+  // several times longer than the interval meant to keep them fresh. handleMosaic already routes
+  // through withComputeSlot (MAX_CONCURRENT_COMPUTE) and every real fetch through the new global
+  // outbound cap, so firing all of them via Promise.allSettled is exactly as safe as real
+  // concurrent user traffic hitting these same combos already has to be — it just lets the ROTATION
+  // itself benefit from the same real concurrency those safety gates were built to allow.
+  await Promise.allSettled(
+    PREWARM_MOSAIC_COMBOS.map((combo) =>
+      handleMosaic(combo.join(",")).catch((error) => {
+        console.error(`[prewarm:mosaic:${combo.join(",")}] failed —`, error instanceof Error ? error.message : error);
+      }),
+    ),
+  );
   setTimeout(prewarm, PREWARM_INTERVAL_MS);
 }
 
