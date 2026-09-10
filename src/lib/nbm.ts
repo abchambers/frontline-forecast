@@ -58,18 +58,6 @@ export const NBM_ELEMENTS: Record<string, NbmElementMeta> = {
   SOL: { label: "Solar radiation", unit: "W/m²", group: "other", scale: 10 },
 };
 
-const COMPASS_POINTS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
-
-/** WDR/TWD store direction in tens of degrees (36 = 360/north, 09 = 90/east, 00 = calm). */
-export function windDirectionCompass(rawTens: string | null): string | null {
-  if (!rawTens || rawTens.trim() === "") return null;
-  const tens = Number(rawTens);
-  if (Number.isNaN(tens)) return null;
-  if (tens === 0) return "Calm";
-  const degrees = tens * 10;
-  return COMPASS_POINTS[Math.round(degrees / 22.5) % 16];
-}
-
 export function nbmDisplayValue(elementCode: string, raw: string | null): string | null {
   if (raw === null || raw.trim() === "") return null;
   const meta = NBM_ELEMENTS[elementCode];
