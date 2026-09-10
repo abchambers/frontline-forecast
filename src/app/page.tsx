@@ -354,18 +354,31 @@ function NbmHourlyTable({ hourly, timezone }: { hourly: NbmHourly; timezone: str
   </div>;
 }
 
-// A real, hand-rolled multi-panel meteogram from NBM's own hourly guidance -- same house SVG-chart
-// convention as LegacyModelSoundingChart/VerticalProfileChart above (fixed viewBox, a margin object,
+type ModelOverlaySeries = { label: string; temperatureF: (number | null)[]; dewpointF: (number | null)[]; windMph: (number | null)[]; gustMph: (number | null)[]; cloudCoverPct: (number | null)[]; precipProbabilityPct: (number | null)[]; precipitationIn: (number | null)[] };
+type ModelOverlay = { hours: string[]; models: Record<string, ModelOverlaySeries> };
+const OVERLAY_MODEL_ORDER = ["gfs", "hrrr", "nam"] as const;
+
+// A real, hand-rolled multi-panel meteogram -- same house SVG-chart convention as
+// LegacyModelSoundingChart/VerticalProfileChart above (fixed viewBox, a margin object,
 // coordinate-mapping helpers, paths as M/L command strings, colors from CSS classes not inline).
 // Reference: bufkitwarehouse.org's Iowa State "Meteogram Generator", which overlays many raw models
-// per panel -- this v1 is deliberately NBM-only (Andrew's own call: a multi-model overlay needs raw
-// NAM/GFS/RAP access this app doesn't have yet, planned as the very next item after this ships).
+// per panel. Shipped in two real steps, per Andrew's own sequencing: NBM-only first (the panels
+// below), then this multi-model overlay -- GFS/HRRR/NAM were already wired into this app via
+// Open-Meteo (see /api/open-meteo), just one at a time, so /api/model-overlay fetches all three in
+// one real request and this component draws them as extra, thinner lines alongside NBM's own,
+// rather than duplicating panels per model like the reference does (would be unreadable at this
+// panel size with 4 sources). RAP and NAM/GFS-MOS are real, separate follow-on items -- RAP has no
+// simple point API (would need raw GRIB2, like the upper-air GFS work), MOS is a real NWS text
+// bulletin similar in shape to NBM's own but not yet parsed. Overlay dewpoint/gust/bars are
+// deliberately NOT drawn per model (a real, considered scope cut, not an oversight) -- adding a 4th
+// line to already-dense panels crosses from "comparison" into "unreadable," so only the ONE variable
+// each panel already centers on (temp, wind speed, sky cover, PoP) gets the extra model lines.
 // Winter-precip panels (snowfall) only render when a location's forecast actually has some, matching
 // the same conditional already used in the raw table. Freezing rain / sleet accumulation panels from
 // the reference are deliberately NOT built: NBM only gives conditional precip-TYPE probabilities
 // (PZR/PPL), not a real accumulated amount -- Bufkit derives that from full vertical-profile software
 // this app doesn't have, so a fabricated number isn't shown here.
-function NbmMeteogram({ hourly, timezone }: { hourly: NbmHourly; timezone: string }) {
+function Meteogram({ hourly, overlay, timezone }: { hourly: NbmHourly; overlay: ModelOverlay | null; timezone: string }) {
   const width = 900;
   const panelHeight = 150;
   const margin = { top: 10, right: 16, bottom: 10, left: 40 };
@@ -373,15 +386,39 @@ function NbmMeteogram({ hourly, timezone }: { hourly: NbmHourly; timezone: strin
   const plotTop = margin.top;
   const plotBottom = panelHeight - margin.bottom;
   const hours = hourly.hours.map((iso) => new Date(iso));
-  const xFor = (index: number) => margin.left + (index / Math.max(1, hours.length - 1)) * (plotRight - margin.left);
+  // Time-based (not index-based) so overlay series -- which start earlier and run longer than NBM's
+  // own ~25-hour window -- land at the correct real position instead of being squeezed to match
+  // NBM's own point count. NBM's own window is kept as the chart's fixed domain (Andrew's forecast
+  // day/night periods live inside it); overlay points outside it are simply not drawn.
+  const domainStart = hours[0]?.getTime() ?? Date.now();
+  const domainEnd = hours[hours.length - 1]?.getTime() ?? domainStart + 3_600_000;
+  const xForTime = (time: number) => margin.left + ((time - domainStart) / Math.max(1, domainEnd - domainStart)) * (plotRight - margin.left);
+  const xFor = (index: number) => xForTime(hours[index]?.getTime() ?? domainStart);
   const dateFormatter = new Intl.DateTimeFormat("en-US", { timeZone: timezone, month: "short", day: "numeric" });
   const dayBoundaries = hours.map((date, index) => ({ index, isBoundary: index === 0 || dateFormatter.format(date) !== dateFormatter.format(hours[index - 1]), label: dateFormatter.format(date) })).filter((boundary) => boundary.isBoundary);
 
   const series = (code: string) => hourly.elements[code]?.map((raw) => nbmNumericValue(code, raw)) ?? [];
-  const realValues = (values: (number | null)[]) => values.filter((value): value is number => value !== null);
+  const realValues = (values: (number | null | undefined)[]) => values.filter((value): value is number => value !== null && value !== undefined);
 
   const linePath = (values: (number | null)[], yFor: (value: number) => number) =>
     values.map((value, index) => (value === null ? null : `${index === 0 || values[index - 1] === null ? "M" : "L"}${xFor(index).toFixed(1)},${yFor(value).toFixed(1)}`)).filter(Boolean).join(" ");
+
+  const overlayHours = overlay?.hours.map((iso) => new Date(iso).getTime()) ?? [];
+  const overlayLinePath = (values: (number | null)[] | undefined, yFor: (value: number) => number) => {
+    if (!values || !overlayHours.length) return "";
+    let d = "";
+    let drawing = false;
+    for (let index = 0; index < overlayHours.length; index += 1) {
+      const time = overlayHours[index];
+      const value = values[index];
+      if (time < domainStart || time > domainEnd || value === null || value === undefined) { drawing = false; continue; }
+      d += `${drawing ? "L" : "M"}${xForTime(time).toFixed(1)},${yFor(value).toFixed(1)} `;
+      drawing = true;
+    }
+    return d.trim();
+  };
+  const overlayValuesInDomain = (values: (number | null)[] | undefined) =>
+    (values ?? []).filter((value, index) => value !== null && overlayHours[index] >= domainStart && overlayHours[index] <= domainEnd) as number[];
 
   const niceRange = (values: number[], padding: number, step: number) => {
     if (!values.length) return { min: 0, max: step };
@@ -395,15 +432,19 @@ function NbmMeteogram({ hourly, timezone }: { hourly: NbmHourly; timezone: strin
     {ticks.map((tick) => <g key={tick}><line x1={margin.left} x2={plotRight} y1={yFor(tick)} y2={yFor(tick)} /><text x={margin.left - 6} y={yFor(tick) + 3} textAnchor="end">{tick}</text></g>)}
   </g>;
 
+  const overlayModels = OVERLAY_MODEL_ORDER.filter((key) => overlay?.models[key]).map((key) => ({ key, data: overlay!.models[key] }));
+
   const tmp = series("TMP");
   const dpt = series("DPT");
-  const tempRange = niceRange(realValues([...tmp, ...dpt]), 4, 10);
+  const overlayTemps = overlayModels.map((model) => overlayValuesInDomain(model.data.temperatureF)).flat();
+  const tempRange = niceRange(realValues([...tmp, ...dpt, ...overlayTemps]), 4, 10);
   const tempY = (value: number) => plotBottom - ((value - tempRange.min) / (tempRange.max - tempRange.min)) * (plotBottom - plotTop);
   const tempTicks = Array.from({ length: Math.floor((tempRange.max - tempRange.min) / 10) + 1 }, (_, i) => tempRange.min + i * 10);
 
   const wsp = series("WSP");
   const gst = series("GST");
-  const windMax = Math.max(10, ...realValues([...wsp, ...gst]).map((value) => Math.ceil((value + 5) / 10) * 10));
+  const overlayWinds = overlayModels.map((model) => overlayValuesInDomain(model.data.windMph)).flat();
+  const windMax = Math.max(10, ...realValues([...wsp, ...gst, ...overlayWinds]).map((value) => Math.ceil((value + 5) / 10) * 10));
   const windY = (value: number) => plotBottom - (value / windMax) * (plotBottom - plotTop);
   const windTicks = Array.from({ length: windMax / 10 + 1 }, (_, i) => i * 10);
   const wdr = hourly.elements.WDR ?? [];
@@ -425,13 +466,14 @@ function NbmMeteogram({ hourly, timezone }: { hourly: NbmHourly; timezone: strin
   const snowY = (value: number) => plotBottom - (value / snowMax) * (plotBottom - plotTop);
 
   return <div className="meteogram">
-    <div className="nbm-hourly-caption"><span className="nbm-code">{hourly.station}</span><span>{hourly.cycle} run</span><span>NBM guidance only</span></div>
+    <div className="nbm-hourly-caption"><span className="nbm-code">{hourly.station}</span><span>{hourly.cycle} run</span><span>{overlayModels.length ? `NBM + ${overlayModels.map((model) => model.data.label).join("/")}` : "NBM guidance only"}</span></div>
 
     <figure className="meteogram-panel">
       <figcaption><span>Temperature &amp; dewpoint</span><small>F</small></figcaption>
       <svg viewBox={`0 0 ${width} ${panelHeight}`} role="img" aria-label="Temperature and dewpoint forecast">
         <rect x={margin.left} y={plotTop} width={plotRight - margin.left} height={plotBottom - plotTop} rx="4" />
         {grid(tempY, tempTicks)}
+        {overlayModels.map((model) => <path key={model.key} className={`meteogram-overlay-${model.key}`} d={overlayLinePath(model.data.temperatureF, tempY)} />)}
         <path className="meteogram-dewpoint" d={linePath(dpt, tempY)} />
         <path className="meteogram-temperature" d={linePath(tmp, tempY)} />
       </svg>
@@ -442,6 +484,7 @@ function NbmMeteogram({ hourly, timezone }: { hourly: NbmHourly; timezone: strin
       <svg viewBox={`0 0 ${width} ${panelHeight}`} role="img" aria-label="Wind speed, gust, and direction forecast">
         <rect x={margin.left} y={plotTop} width={plotRight - margin.left} height={plotBottom - plotTop} rx="4" />
         {grid(windY, windTicks)}
+        {overlayModels.map((model) => <path key={model.key} className={`meteogram-overlay-${model.key}`} d={overlayLinePath(model.data.windMph, windY)} />)}
         <path className="meteogram-wind-gust" d={linePath(gst, windY)} />
         <path className="meteogram-wind-speed" d={linePath(wsp, windY)} />
         <g className="meteogram-wind-barbs">{wdr.map((raw, index) => {
@@ -462,6 +505,7 @@ function NbmMeteogram({ hourly, timezone }: { hourly: NbmHourly; timezone: strin
         {grid(skyY, [0, 50, 100])}
         <path className="meteogram-sky-fill" d={`${linePath(sky, skyY)} L${xFor(hours.length - 1).toFixed(1)},${plotBottom.toFixed(1)} L${xFor(0).toFixed(1)},${plotBottom.toFixed(1)} Z`} />
         <path className="meteogram-sky-line" d={linePath(sky, skyY)} />
+        {overlayModels.map((model) => <path key={model.key} className={`meteogram-overlay-${model.key}`} d={overlayLinePath(model.data.cloudCoverPct, skyY)} />)}
       </svg>
     </figure>
 
@@ -472,6 +516,7 @@ function NbmMeteogram({ hourly, timezone }: { hourly: NbmHourly; timezone: strin
         {grid(popY, [0, 50, 100])}
         {pop.map((value, index) => (!value ? null : <rect key={index} className="meteogram-pop-bar" x={xFor(index) - barWidth / 2} y={popY(value)} width={barWidth} height={plotBottom - popY(value)} />))}
         {qpf.map((value, index) => (!value ? null : <rect key={index} className="meteogram-qpf-bar" x={xFor(index) - barWidth / 4} y={plotBottom - (value / qpfMax) * (plotBottom - plotTop) * 0.9} width={barWidth / 2} height={(value / qpfMax) * (plotBottom - plotTop) * 0.9} />))}
+        {overlayModels.map((model) => <path key={model.key} className={`meteogram-overlay-${model.key}`} d={overlayLinePath(model.data.precipProbabilityPct, popY)} />)}
       </svg>
     </figure>
 
@@ -486,14 +531,15 @@ function NbmMeteogram({ hourly, timezone }: { hourly: NbmHourly; timezone: strin
 
     <div className="meteogram-axis"><svg viewBox={`0 0 ${width} 22`} role="presentation">{dayBoundaries.map((boundary) => <text key={boundary.index} x={xFor(boundary.index) + 3} y={14} textAnchor="start">{boundary.label}</text>)}</svg></div>
     <div className="meteogram-legend">
-      <span><i className="meteogram-swatch-temp" />Temperature</span>
-      <span><i className="meteogram-swatch-dewpoint" />Dewpoint</span>
-      <span><i className="meteogram-swatch-wsp" />Wind speed</span>
-      <span><i className="meteogram-swatch-gst" />Gust</span>
-      <span><i className="meteogram-swatch-pop" />PoP</span>
-      <span><i className="meteogram-swatch-qpf" />Rainfall</span>
+      <span><i className="meteogram-swatch-temp" />NBM temperature</span>
+      <span><i className="meteogram-swatch-dewpoint" />NBM dewpoint</span>
+      <span><i className="meteogram-swatch-wsp" />NBM wind speed</span>
+      <span><i className="meteogram-swatch-gst" />NBM gust</span>
+      <span><i className="meteogram-swatch-pop" />NBM PoP</span>
+      <span><i className="meteogram-swatch-qpf" />NBM rainfall</span>
+      {overlayModels.map((model) => <span key={model.key}><i className={`meteogram-swatch-${model.key}`} />{model.data.label}</span>)}
     </div>
-    <p className="model-attribution">Single-source NBM guidance, not yet a multi-model comparison — a NAM/GFS/RAP overlay is planned next.</p>
+    <p className="model-attribution">{overlayModels.length ? "NBM guidance plus GFS/HRRR/NAM (Open-Meteo) for temperature, wind speed, sky cover, and precipitation chance — RAP and NAM/GFS-MOS are real, separate follow-ons, not yet built." : "Single-source NBM guidance, not yet a multi-model comparison — a GFS/HRRR/NAM overlay is loading or unavailable."}</p>
   </div>;
 }
 
@@ -1523,6 +1569,7 @@ export default function Home() {
   const [nbmText, setNbmText] = useState("");
   const [nbmHourly, setNbmHourly] = useState<NbmHourly | null>(null);
   const [nbmStatus, setNbmStatus] = useState("Loading latest KAHN NBM bulletin…");
+  const [modelOverlay, setModelOverlay] = useState<ModelOverlay | null>(null);
   const [afdText, setAfdText] = useState("");
   const [afdStatus, setAfdStatus] = useState("Loading latest forecast discussion…");
   const [mcdDiscussions, setMcdDiscussions] = useState<{ id: string; title: string; issuedAt: string | null; imageUrl: string | null; text: string; link: string }[]>([]);
@@ -2703,6 +2750,22 @@ export default function Home() {
         setNbmStatus("");
       })
       .catch((error: Error) => setNbmStatus(error.message));
+  }, [activeSection, dataPanel, locationQuery]);
+
+  useEffect(() => {
+    // Only the meteogram tab needs this -- the plain NBM table doesn't show the overlay, so a
+    // visitor who never opens the meteogram never pays for this extra request. A failure here is
+    // non-fatal: Meteogram renders its NBM-only panels regardless (see its own model_attribution
+    // fallback text) since this is additive comparison data, not the chart's core source.
+    if (activeSection !== "dashboard" || dataPanel !== "meteogram") return;
+    setModelOverlay(null);
+    fetch(`/api/model-overlay?${locationQuery}`)
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Model overlay unavailable");
+        setModelOverlay(data);
+      })
+      .catch(() => setModelOverlay(null));
   }, [activeSection, dataPanel, locationQuery]);
 
   useEffect(() => {
@@ -3964,7 +4027,7 @@ export default function Home() {
         {dataPanel === "nbm" && !hasForecasterToolsAccess && <SignInToolsUpsell label="NBM full text" onLogin={() => setLoginMenuOpen(true)} />}
         {dataPanel === "nbm" && hasForecasterToolsAccess && <section className="source-bulletin"><div className="model-guidance-heading"><div><strong>National Blend of Models guidance</strong><span>Hourly NBM guidance for {selectedLocation.name}</span></div><small>{nbmHourly ? "Latest bulletin loaded" : nbmStatus}</small></div>{nbmHourly ? <NbmHourlyTable hourly={nbmHourly} timezone={selectedLocation.timezone} /> : <p className="empty">{nbmStatus}</p>}<details><summary>Open raw NBM bulletin text</summary><pre className="model-text">{nbmText || nbmStatus}</pre></details></section>}
         {dataPanel === "meteogram" && !hasForecasterToolsAccess && <SignInToolsUpsell label="Meteogram" onLogin={() => setLoginMenuOpen(true)} />}
-        {dataPanel === "meteogram" && hasForecasterToolsAccess && <section className="source-bulletin"><div className="model-guidance-heading"><div><strong>Meteogram</strong><span>Stacked hourly guidance for {selectedLocation.name}</span></div><small>{nbmHourly ? "Latest bulletin loaded" : nbmStatus}</small></div>{nbmHourly ? <NbmMeteogram hourly={nbmHourly} timezone={selectedLocation.timezone} /> : <p className="empty">{nbmStatus}</p>}</section>}
+        {dataPanel === "meteogram" && hasForecasterToolsAccess && <section className="source-bulletin"><div className="model-guidance-heading"><div><strong>Meteogram</strong><span>Stacked hourly guidance for {selectedLocation.name}</span></div><small>{nbmHourly ? "Latest bulletin loaded" : nbmStatus}</small></div>{nbmHourly ? <Meteogram hourly={nbmHourly} overlay={modelOverlay} timezone={selectedLocation.timezone} /> : <p className="empty">{nbmStatus}</p>}</section>}
         {dataPanel === "afd" && !hasForecasterToolsAccess && <SignInToolsUpsell label="Forecast discussion" onLogin={() => setLoginMenuOpen(true)} />}
         {dataPanel === "afd" && hasForecasterToolsAccess && <section className="source-bulletin"><div className="model-guidance-heading"><div><strong>Area Forecast Discussion</strong><span>The local NWS office's own reasoning behind the {selectedLocation.name} forecast</span></div><small>{afdText ? "Latest discussion loaded" : afdStatus}</small></div><details open><summary>Open full forecast discussion</summary><pre className="model-text">{afdText || afdStatus}</pre></details></section>}
         {dataPanel === "mcd" && !hasForecasterToolsAccess && <SignInToolsUpsell label="Mesoscale discussions" onLogin={() => setLoginMenuOpen(true)} />}
