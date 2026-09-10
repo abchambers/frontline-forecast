@@ -70,7 +70,8 @@ export function nbmDisplayValue(elementCode: string, raw: string | null): string
   return `${rounded}${meta.unit ? ` ${meta.unit}` : ""}`;
 }
 
-export type NbmHourly = { hours: string[]; elements: Record<string, (string | null)[]> };
+export type NbmParsedHourly = { hours: string[]; elements: Record<string, (string | null)[]> };
+export type NbmHourly = NbmParsedHourly & { station: string; cycle: string };
 
 /**
  * Parses one station's NBH block into hourly columns. `issuedAt` is the bulletin's own
@@ -78,7 +79,7 @@ export type NbmHourly = { hours: string[]; elements: Record<string, (string | nu
  * issuedAt + (N+1) hours, computed from real elapsed time rather than trusting the
  * printed "00".."23" hour-of-day labels, so day/month rollover is always correct.
  */
-export function parseNbmHourly(bulletinText: string, issuedAt: Date): NbmHourly | null {
+export function parseNbmHourly(bulletinText: string, issuedAt: Date): NbmParsedHourly | null {
   const lines = bulletinText.split("\n");
   const headerIndex = lines.findIndex((line) => line.slice(0, 4).trim() === "UTC");
   if (headerIndex < 0) return null;

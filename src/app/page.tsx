@@ -339,13 +339,18 @@ function IconPicker({ value, onChange, style }: { value: string; onChange: (next
 // just reflowed into real columns instead of a fixed-width text block. The
 // raw text itself is still one click away for cross-checking.
 function NbmHourlyTable({ hourly, timezone }: { hourly: NbmHourly; timezone: string }) {
-  const hourFormatter = new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour: "numeric" });
+  // Compact "8a"/"12p" instead of "8 AM"/"12 PM" -- tightens every data column
+  // (Andrew's ask: fit more hours on screen without losing readability) without
+  // needing a locale-fragile hand-rolled 12-hour formatter.
+  const hourFormatter = new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour: "numeric", hour12: true });
+  const compactHour = (date: Date) => hourFormatter.format(date).replace(" AM", "a").replace(" PM", "p");
   const dateFormatter = new Intl.DateTimeFormat("en-US", { timeZone: timezone, month: "short", day: "numeric" });
-  const columns = hourly.hours.map((iso) => ({ iso, hourLabel: hourFormatter.format(new Date(iso)), dateLabel: dateFormatter.format(new Date(iso)) }));
+  const columns = hourly.hours.map((iso) => ({ iso, hourLabel: compactHour(new Date(iso)), dateLabel: dateFormatter.format(new Date(iso)) }));
   const codes = Object.keys(hourly.elements).filter((code) => NBM_ELEMENTS[code]);
 
   return <div className="nbm-hourly">
-    <div className="nbm-hourly-scroll"><table className="nbm-hourly-table"><thead><tr><th>Local time</th>{columns.map((column, index) => <th key={column.iso}>{index === 0 || column.dateLabel !== columns[index - 1].dateLabel ? <><small>{column.dateLabel}</small><br /></> : null}{column.hourLabel}</th>)}</tr></thead><tbody>{codes.map((code) => <tr key={code}><td title={NBM_ELEMENTS[code].label}><span className="nbm-code">{code}</span></td>{columns.map((column, index) => <td key={column.iso}>{nbmDisplayValue(code, hourly.elements[code]?.[index] ?? null) ?? "—"}</td>)}</tr>)}</tbody></table></div>
+    <div className="nbm-hourly-caption"><span className="nbm-code">{hourly.station}</span><span>{hourly.cycle} run</span></div>
+    <div className="nbm-hourly-scroll"><table className="nbm-hourly-table"><thead><tr><th>Local time</th>{columns.map((column, index) => <th key={column.iso}><span className="nbm-hourly-date">{index === 0 || column.dateLabel !== columns[index - 1].dateLabel ? column.dateLabel : " "}</span><span className="nbm-hourly-hour">{column.hourLabel}</span></th>)}</tr></thead><tbody>{codes.map((code) => <tr key={code}><td title={`${NBM_ELEMENTS[code].label}${NBM_ELEMENTS[code].unit ? ` (${NBM_ELEMENTS[code].unit})` : ""}`}><span className="nbm-code">{code}</span></td>{columns.map((column, index) => <td key={column.iso}>{nbmDisplayValue(code, hourly.elements[code]?.[index] ?? null) ?? "—"}</td>)}</tr>)}</tbody></table></div>
   </div>;
 }
 

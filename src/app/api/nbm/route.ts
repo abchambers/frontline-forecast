@@ -49,8 +49,9 @@ export async function GET(request: Request) {
       if (!response.ok) continue;
       const bulletin = stationBulletin(await response.text(), station);
       if (bulletin) {
-        const hourly = parseNbmHourly(bulletin, candidate);
-        return NextResponse.json({ station, cycle: `${datePart} ${hour}Z`, text: bulletin, hourly, source: url }, { headers: { "Cache-Control": "s-maxage=1800" } });
+        const cycle = `${datePart} ${hour}Z`;
+        const parsed = parseNbmHourly(bulletin, candidate);
+        return NextResponse.json({ station, cycle, text: bulletin, hourly: parsed ? { ...parsed, station, cycle } : null, source: url }, { headers: { "Cache-Control": "s-maxage=1800" } });
       }
     } catch {
       continue;
