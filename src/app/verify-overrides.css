@@ -126,18 +126,23 @@
 .nbm-hourly-caption { align-items:center; color:var(--muted); display:flex; font-size:.76rem; font-weight:700; gap:8px; }
 .nbm-hourly-scroll { border:1px solid var(--line); border-radius:10px; overflow-x:auto; }
 .nbm-hourly-table { border-collapse:collapse; font-variant-numeric:tabular-nums; white-space:nowrap; width:100%; }
-.nbm-hourly-table th,.nbm-hourly-table td { border-bottom:1px solid var(--line); padding:5px 7px; text-align:right; }
-.nbm-hourly-table th:first-child,.nbm-hourly-table td:first-child { background:var(--soft); left:0; position:sticky; text-align:left; white-space:nowrap; }
+.nbm-hourly-table th,.nbm-hourly-table td { border-bottom:1px solid var(--line); padding:7px 5px; }
+.nbm-hourly-table th:first-child,.nbm-hourly-table td:first-child { background:var(--soft); left:0; padding-left:9px; position:sticky; text-align:left; white-space:nowrap; }
 .nbm-code { background:var(--surface); border:1px solid var(--line); border-radius:4px; color:var(--accent); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.68rem; font-weight:800; letter-spacing:.02em; padding:1px 5px; }
-/* Header cells stack a date span + hour span, each centered over the column
-   they belong to -- fixes a real illusion where a right-aligned date line
-   (from the general th/td rule above) sat flush against the NEXT column's
-   left edge and read as if it labeled that column instead of its own. */
-.nbm-hourly-table thead th { color:var(--muted); font-size:.64rem; font-weight:800; letter-spacing:.02em; padding:5px 6px; text-align:center; text-transform:uppercase; }
+/* Header cells are centered over their column; data cells stay right-aligned
+   (tabular-nums keeps digits a consistent width, so right-alignment is what
+   actually lines the numbers up column to column). The date+hour stack: two
+   separate centered spans, not one right-aligned line -- fixes a real
+   illusion where a wide date string, right-aligned, sat flush against the
+   NEXT column's left edge and read as if it labeled that column instead of
+   its own. */
+.nbm-hourly-table thead th { color:var(--muted); font-size:.68rem; font-weight:800; letter-spacing:.02em; text-align:center; text-transform:uppercase; }
+.nbm-hourly-table thead th:first-child { text-align:left; }
+.nbm-hourly-table tbody td { text-align:right; }
 .nbm-hourly-date,.nbm-hourly-hour { display:block; }
-.nbm-hourly-date { font-size:.6rem; }
+.nbm-hourly-date { font-size:.62rem; }
 .nbm-hourly-table tbody tr:last-child td { border-bottom:none; }
-.nbm-hourly-table td { font-size:.78rem; }
+.nbm-hourly-table td { font-size:.82rem; }
 .model-guidance-grid { display:grid; gap:8px; grid-template-columns:repeat(4,minmax(0,1fr)); }
 .model-guidance-grid article { background:var(--soft); border:1px solid var(--line); border-radius:8px; display:grid; gap:5px; padding:11px; }
 .model-guidance-grid article strong { font-size:.88rem; }
