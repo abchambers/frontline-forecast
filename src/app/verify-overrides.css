@@ -182,6 +182,7 @@
 .meteogram-panel rect:first-child { fill:var(--soft); }
 .meteogram-grid line { stroke:var(--line); stroke-width:1; }
 .meteogram-grid .meteogram-day-line { stroke:var(--muted); stroke-dasharray:2 3; }
+.meteogram-grid .meteogram-hour-line { stroke:var(--line); stroke-dasharray:1 4; }
 .meteogram-grid text { fill:var(--muted); font-size:9px; }
 .meteogram-temperature,.meteogram-dewpoint,.meteogram-wind-speed,.meteogram-wind-gust,.meteogram-sky-line { fill:none; stroke-linecap:round; stroke-linejoin:round; stroke-width:2.4; }
 .meteogram-temperature { stroke:#cf4f49; }
@@ -194,8 +195,9 @@
 .meteogram-pop-bar { fill:color-mix(in srgb, var(--blue) 55%, transparent); }
 .meteogram-qpf-bar { fill:#2e8b6e; }
 .meteogram-snow-fill { fill:color-mix(in srgb, var(--accent) 20%, transparent); stroke:var(--accent); stroke-width:1.4; }
-.meteogram-axis svg { display:block; height:22px; width:100%; }
+.meteogram-axis svg { display:block; height:28px; width:100%; }
 .meteogram-axis text { fill:var(--muted); font-size:10px; font-weight:700; }
+.meteogram-axis-date { fill:var(--ink); font-size:9px; font-weight:800; letter-spacing:.02em; text-transform:uppercase; }
 .meteogram-legend { align-items:center; color:var(--muted); display:flex; flex-wrap:wrap; font-size:.74rem; gap:8px 14px; }
 .meteogram-legend span { align-items:center; display:flex; gap:5px; }
 .meteogram-legend i { border-radius:999px; display:inline-block; height:3px; width:16px; }

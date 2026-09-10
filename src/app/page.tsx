@@ -395,7 +395,20 @@ function Meteogram({ hourly, overlay, timezone }: { hourly: NbmHourly; overlay: 
   const xForTime = (time: number) => margin.left + ((time - domainStart) / Math.max(1, domainEnd - domainStart)) * (plotRight - margin.left);
   const xFor = (index: number) => xForTime(hours[index]?.getTime() ?? domainStart);
   const dateFormatter = new Intl.DateTimeFormat("en-US", { timeZone: timezone, month: "short", day: "numeric" });
-  const dayBoundaries = hours.map((date, index) => ({ index, isBoundary: index === 0 || dateFormatter.format(date) !== dateFormatter.format(hours[index - 1]), label: dateFormatter.format(date) })).filter((boundary) => boundary.isBoundary);
+  // Real hour+date labels every 6 real UTC hours (0/6/12/18Z, offset by the display timezone),
+  // not just a label at each day boundary -- Andrew's own complaint, "we dont see times on it."
+  // Time-based rather than tied to NBM's own data points: those are hourly near-term then
+  // 3-hourly further out (see mergeNbmProducts), an irregular spacing that would make index-based
+  // ticks land unevenly on screen.
+  const hourFormatter = new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour: "numeric", hour12: true });
+  const compactHour = (date: Date) => hourFormatter.format(date).replace(" AM", "a").replace(" PM", "p");
+  const tickIntervalMs = 6 * 3_600_000;
+  const timeTicks: { time: number; hourLabel: string; dateLabel: string; isNewDay: boolean }[] = [];
+  for (let time = Math.ceil(domainStart / tickIntervalMs) * tickIntervalMs; time <= domainEnd; time += tickIntervalMs) {
+    const date = new Date(time);
+    const dateLabel = dateFormatter.format(date);
+    timeTicks.push({ time, hourLabel: compactHour(date), dateLabel, isNewDay: timeTicks.length === 0 || dateLabel !== timeTicks[timeTicks.length - 1].dateLabel });
+  }
 
   const series = (code: string) => hourly.elements[code]?.map((raw) => nbmNumericValue(code, raw)) ?? [];
   const realValues = (values: (number | null | undefined)[]) => values.filter((value): value is number => value !== null && value !== undefined);
@@ -428,7 +441,7 @@ function Meteogram({ hourly, overlay, timezone }: { hourly: NbmHourly; overlay: 
   };
 
   const grid = (yFor: (value: number) => number, ticks: number[]) => <g className="meteogram-grid">
-    {dayBoundaries.map((boundary) => <line key={boundary.index} className="meteogram-day-line" x1={xFor(boundary.index)} x2={xFor(boundary.index)} y1={plotTop} y2={plotBottom} />)}
+    {timeTicks.map((tick) => <line key={tick.time} className={tick.isNewDay ? "meteogram-day-line" : "meteogram-hour-line"} x1={xForTime(tick.time)} x2={xForTime(tick.time)} y1={plotTop} y2={plotBottom} />)}
     {ticks.map((tick) => <g key={tick}><line x1={margin.left} x2={plotRight} y1={yFor(tick)} y2={yFor(tick)} /><text x={margin.left - 6} y={yFor(tick) + 3} textAnchor="end">{tick}</text></g>)}
   </g>;
 
@@ -488,7 +501,10 @@ function Meteogram({ hourly, overlay, timezone }: { hourly: NbmHourly; overlay: 
         <path className="meteogram-wind-gust" d={linePath(gst, windY)} />
         <path className="meteogram-wind-speed" d={linePath(wsp, windY)} />
         <g className="meteogram-wind-barbs">{wdr.map((raw, index) => {
-          if (index % 2 !== 0 || raw === null) return null;
+          // Time-based (every 3rd real hour), not array-index-based: NBM's own points go from
+          // hourly to 3-hourly partway through the chart (see mergeNbmProducts), so "every other
+          // index" would cluster barbs near-term and space them unevenly further out.
+          if (raw === null || hours[index].getUTCHours() % 3 !== 0) return null;
           const direction = Number(raw) * 10;
           const speed = Math.round((wsp[index] ?? 0) / 5) * 5;
           const flags = Math.floor(speed / 10);
@@ -529,7 +545,7 @@ function Meteogram({ hourly, overlay, timezone }: { hourly: NbmHourly; overlay: 
       </svg>
     </figure>}
 
-    <div className="meteogram-axis"><svg viewBox={`0 0 ${width} 22`} role="presentation">{dayBoundaries.map((boundary) => <text key={boundary.index} x={xFor(boundary.index) + 3} y={14} textAnchor="start">{boundary.label}</text>)}</svg></div>
+    <div className="meteogram-axis"><svg viewBox={`0 0 ${width} 28`} role="presentation">{timeTicks.map((tick) => <g key={tick.time} transform={`translate(${xForTime(tick.time).toFixed(1)} 0)`}>{tick.isNewDay && <text className="meteogram-axis-date" y="10" textAnchor="middle">{tick.dateLabel}</text>}<text y="24" textAnchor="middle">{tick.hourLabel}</text></g>)}</svg></div>
     <div className="meteogram-legend">
       <span><i className="meteogram-swatch-temp" />NBM temperature</span>
       <span><i className="meteogram-swatch-dewpoint" />NBM dewpoint</span>
