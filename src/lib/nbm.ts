@@ -70,6 +70,15 @@ export function nbmDisplayValue(elementCode: string, raw: string | null): string
   return `${rounded}${meta.unit ? ` ${meta.unit}` : ""}`;
 }
 
+/** Same scaling as nbmDisplayValue but returns a plain number for charting, not a labeled string. */
+export function nbmNumericValue(elementCode: string, raw: string | null): number | null {
+  if (raw === null || raw.trim() === "") return null;
+  const numeric = Number(raw);
+  if (Number.isNaN(numeric)) return null;
+  const meta = NBM_ELEMENTS[elementCode];
+  return meta?.scale ? numeric * meta.scale : numeric;
+}
+
 export type NbmParsedHourly = { hours: string[]; elements: Record<string, (string | null)[]> };
 export type NbmHourly = NbmParsedHourly & { station: string; cycle: string };
 

@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import { track } from "@vercel/analytics";
 import { defaultWeatherDeskLocation, weatherDeskLocation, weatherDeskLocations, type WeatherDeskLocation } from "@/lib/locations";
 import { satelliteForLongitude } from "@/lib/goes-satellite";
-import { NBM_ELEMENTS, nbmDisplayValue, type NbmHourly } from "@/lib/nbm";
+import { NBM_ELEMENTS, nbmDisplayValue, nbmNumericValue, type NbmHourly } from "@/lib/nbm";
 import { automaticForecastScore, type ForecastPeriodActual } from "@/lib/forecast-verification";
 import type { PersonalTier } from "@/lib/access";
 import type { RadarFrameMeta } from "./radar-map";
@@ -23,7 +23,7 @@ const UpperAirMap = dynamic(() => import("./upper-air-map"), {
   loading: () => <div className="radar-loading">Loading upper-air charts…</div>,
 });
 
-type DataPanel = "nbm" | "afd" | "mcd" | "alerts" | "sounding" | "models" | "model-radar" | "ensembles" | "model-sounding";
+type DataPanel = "nbm" | "meteogram" | "afd" | "mcd" | "alerts" | "sounding" | "models" | "model-radar" | "ensembles" | "model-sounding";
 type GuidanceGroup = "high-res" | "global";
 type RadarMapView = "composite" | "velocity" | "future_reflectivity" | "satellite";
 type RadarLegend = { title: string; left: string; middle: string; right: string; unit: string; gradient: string };
@@ -351,6 +351,149 @@ function NbmHourlyTable({ hourly, timezone }: { hourly: NbmHourly; timezone: str
   return <div className="nbm-hourly">
     <div className="nbm-hourly-caption"><span className="nbm-code">{hourly.station}</span><span>{hourly.cycle} run</span></div>
     <div className="nbm-hourly-scroll"><table className="nbm-hourly-table"><thead><tr><th>Local time</th>{columns.map((column, index) => <th key={column.iso}><span className="nbm-hourly-date">{index === 0 || column.dateLabel !== columns[index - 1].dateLabel ? column.dateLabel : " "}</span><span className="nbm-hourly-hour">{column.hourLabel}</span></th>)}</tr></thead><tbody>{codes.map((code) => <tr key={code}><td title={`${NBM_ELEMENTS[code].label}${NBM_ELEMENTS[code].unit ? ` (${NBM_ELEMENTS[code].unit})` : ""}`}><span className="nbm-code">{code}</span></td>{columns.map((column, index) => <td key={column.iso}>{nbmDisplayValue(code, hourly.elements[code]?.[index] ?? null) ?? "—"}</td>)}</tr>)}</tbody></table></div>
+  </div>;
+}
+
+// A real, hand-rolled multi-panel meteogram from NBM's own hourly guidance -- same house SVG-chart
+// convention as LegacyModelSoundingChart/VerticalProfileChart above (fixed viewBox, a margin object,
+// coordinate-mapping helpers, paths as M/L command strings, colors from CSS classes not inline).
+// Reference: bufkitwarehouse.org's Iowa State "Meteogram Generator", which overlays many raw models
+// per panel -- this v1 is deliberately NBM-only (Andrew's own call: a multi-model overlay needs raw
+// NAM/GFS/RAP access this app doesn't have yet, planned as the very next item after this ships).
+// Winter-precip panels (snowfall) only render when a location's forecast actually has some, matching
+// the same conditional already used in the raw table. Freezing rain / sleet accumulation panels from
+// the reference are deliberately NOT built: NBM only gives conditional precip-TYPE probabilities
+// (PZR/PPL), not a real accumulated amount -- Bufkit derives that from full vertical-profile software
+// this app doesn't have, so a fabricated number isn't shown here.
+function NbmMeteogram({ hourly, timezone }: { hourly: NbmHourly; timezone: string }) {
+  const width = 900;
+  const panelHeight = 150;
+  const margin = { top: 10, right: 16, bottom: 10, left: 40 };
+  const plotRight = width - margin.right;
+  const plotTop = margin.top;
+  const plotBottom = panelHeight - margin.bottom;
+  const hours = hourly.hours.map((iso) => new Date(iso));
+  const xFor = (index: number) => margin.left + (index / Math.max(1, hours.length - 1)) * (plotRight - margin.left);
+  const dateFormatter = new Intl.DateTimeFormat("en-US", { timeZone: timezone, month: "short", day: "numeric" });
+  const dayBoundaries = hours.map((date, index) => ({ index, isBoundary: index === 0 || dateFormatter.format(date) !== dateFormatter.format(hours[index - 1]), label: dateFormatter.format(date) })).filter((boundary) => boundary.isBoundary);
+
+  const series = (code: string) => hourly.elements[code]?.map((raw) => nbmNumericValue(code, raw)) ?? [];
+  const realValues = (values: (number | null)[]) => values.filter((value): value is number => value !== null);
+
+  const linePath = (values: (number | null)[], yFor: (value: number) => number) =>
+    values.map((value, index) => (value === null ? null : `${index === 0 || values[index - 1] === null ? "M" : "L"}${xFor(index).toFixed(1)},${yFor(value).toFixed(1)}`)).filter(Boolean).join(" ");
+
+  const niceRange = (values: number[], padding: number, step: number) => {
+    if (!values.length) return { min: 0, max: step };
+    const min = Math.floor((Math.min(...values) - padding) / step) * step;
+    const rawMax = Math.ceil((Math.max(...values) + padding) / step) * step;
+    return { min, max: rawMax > min ? rawMax : min + step };
+  };
+
+  const grid = (yFor: (value: number) => number, ticks: number[]) => <g className="meteogram-grid">
+    {dayBoundaries.map((boundary) => <line key={boundary.index} className="meteogram-day-line" x1={xFor(boundary.index)} x2={xFor(boundary.index)} y1={plotTop} y2={plotBottom} />)}
+    {ticks.map((tick) => <g key={tick}><line x1={margin.left} x2={plotRight} y1={yFor(tick)} y2={yFor(tick)} /><text x={margin.left - 6} y={yFor(tick) + 3} textAnchor="end">{tick}</text></g>)}
+  </g>;
+
+  const tmp = series("TMP");
+  const dpt = series("DPT");
+  const tempRange = niceRange(realValues([...tmp, ...dpt]), 4, 10);
+  const tempY = (value: number) => plotBottom - ((value - tempRange.min) / (tempRange.max - tempRange.min)) * (plotBottom - plotTop);
+  const tempTicks = Array.from({ length: Math.floor((tempRange.max - tempRange.min) / 10) + 1 }, (_, i) => tempRange.min + i * 10);
+
+  const wsp = series("WSP");
+  const gst = series("GST");
+  const windMax = Math.max(10, ...realValues([...wsp, ...gst]).map((value) => Math.ceil((value + 5) / 10) * 10));
+  const windY = (value: number) => plotBottom - (value / windMax) * (plotBottom - plotTop);
+  const windTicks = Array.from({ length: windMax / 10 + 1 }, (_, i) => i * 10);
+  const wdr = hourly.elements.WDR ?? [];
+
+  const skyY = (value: number) => plotBottom - (value / 100) * (plotBottom - plotTop);
+  const sky = series("SKY");
+
+  const popY = (value: number) => plotBottom - (value / 100) * (plotBottom - plotTop);
+  const pop = series("P01");
+  const qpf = series("Q01");
+  const qpfMax = Math.max(0.1, ...realValues(qpf));
+  const barWidth = Math.max(2, ((plotRight - margin.left) / hours.length) * 0.55);
+
+  const snowHourly = series("S01");
+  const hasSnow = realValues(snowHourly).some((value) => value > 0);
+  let snowRunning = 0;
+  const snowAccum = snowHourly.map((value) => { snowRunning += value ?? 0; return snowRunning; });
+  const snowMax = Math.max(0.5, ...snowAccum);
+  const snowY = (value: number) => plotBottom - (value / snowMax) * (plotBottom - plotTop);
+
+  return <div className="meteogram">
+    <div className="nbm-hourly-caption"><span className="nbm-code">{hourly.station}</span><span>{hourly.cycle} run</span><span>NBM guidance only</span></div>
+
+    <figure className="meteogram-panel">
+      <figcaption><span>Temperature &amp; dewpoint</span><small>F</small></figcaption>
+      <svg viewBox={`0 0 ${width} ${panelHeight}`} role="img" aria-label="Temperature and dewpoint forecast">
+        <rect x={margin.left} y={plotTop} width={plotRight - margin.left} height={plotBottom - plotTop} rx="4" />
+        {grid(tempY, tempTicks)}
+        <path className="meteogram-dewpoint" d={linePath(dpt, tempY)} />
+        <path className="meteogram-temperature" d={linePath(tmp, tempY)} />
+      </svg>
+    </figure>
+
+    <figure className="meteogram-panel">
+      <figcaption><span>Wind speed, gust &amp; direction</span><small>kt</small></figcaption>
+      <svg viewBox={`0 0 ${width} ${panelHeight}`} role="img" aria-label="Wind speed, gust, and direction forecast">
+        <rect x={margin.left} y={plotTop} width={plotRight - margin.left} height={plotBottom - plotTop} rx="4" />
+        {grid(windY, windTicks)}
+        <path className="meteogram-wind-gust" d={linePath(gst, windY)} />
+        <path className="meteogram-wind-speed" d={linePath(wsp, windY)} />
+        <g className="meteogram-wind-barbs">{wdr.map((raw, index) => {
+          if (index % 2 !== 0 || raw === null) return null;
+          const direction = Number(raw) * 10;
+          const speed = Math.round((wsp[index] ?? 0) / 5) * 5;
+          const flags = Math.floor(speed / 10);
+          const hasHalf = speed % 10 >= 5;
+          return <g key={index} transform={`translate(${xFor(index).toFixed(1)} ${(plotTop + 16).toFixed(1)}) rotate(${direction + 180})`}><line x1="0" y1="0" x2="0" y2="-14" />{Array.from({ length: flags }, (_, i) => <line key={i} x1="0" y1={-3 - i * 3} x2="6" y2={-i * 3} />)}{hasHalf && <line x1="0" y1={-3 - flags * 3} x2="3" y2={-1.5 - flags * 3} />}</g>;
+        })}</g>
+      </svg>
+    </figure>
+
+    <figure className="meteogram-panel">
+      <figcaption><span>Sky cover</span><small>%</small></figcaption>
+      <svg viewBox={`0 0 ${width} ${panelHeight}`} role="img" aria-label="Sky cover forecast">
+        <rect x={margin.left} y={plotTop} width={plotRight - margin.left} height={plotBottom - plotTop} rx="4" />
+        {grid(skyY, [0, 50, 100])}
+        <path className="meteogram-sky-fill" d={`${linePath(sky, skyY)} L${xFor(hours.length - 1).toFixed(1)},${plotBottom.toFixed(1)} L${xFor(0).toFixed(1)},${plotBottom.toFixed(1)} Z`} />
+        <path className="meteogram-sky-line" d={linePath(sky, skyY)} />
+      </svg>
+    </figure>
+
+    <figure className="meteogram-panel">
+      <figcaption><span>Precipitation chance &amp; hourly rainfall</span><small>% / in</small></figcaption>
+      <svg viewBox={`0 0 ${width} ${panelHeight}`} role="img" aria-label="Precipitation chance and rainfall forecast">
+        <rect x={margin.left} y={plotTop} width={plotRight - margin.left} height={plotBottom - plotTop} rx="4" />
+        {grid(popY, [0, 50, 100])}
+        {pop.map((value, index) => (!value ? null : <rect key={index} className="meteogram-pop-bar" x={xFor(index) - barWidth / 2} y={popY(value)} width={barWidth} height={plotBottom - popY(value)} />))}
+        {qpf.map((value, index) => (!value ? null : <rect key={index} className="meteogram-qpf-bar" x={xFor(index) - barWidth / 4} y={plotBottom - (value / qpfMax) * (plotBottom - plotTop) * 0.9} width={barWidth / 2} height={(value / qpfMax) * (plotBottom - plotTop) * 0.9} />))}
+      </svg>
+    </figure>
+
+    {hasSnow && <figure className="meteogram-panel">
+      <figcaption><span>Accumulated snowfall</span><small>in</small></figcaption>
+      <svg viewBox={`0 0 ${width} ${panelHeight}`} role="img" aria-label="Accumulated snowfall forecast">
+        <rect x={margin.left} y={plotTop} width={plotRight - margin.left} height={plotBottom - plotTop} rx="4" />
+        {grid(snowY, [0, Math.round((snowMax / 2) * 10) / 10, Math.round(snowMax * 10) / 10])}
+        <path className="meteogram-snow-fill" d={`${linePath(snowAccum, snowY)} L${xFor(hours.length - 1).toFixed(1)},${plotBottom.toFixed(1)} L${xFor(0).toFixed(1)},${plotBottom.toFixed(1)} Z`} />
+      </svg>
+    </figure>}
+
+    <div className="meteogram-axis"><svg viewBox={`0 0 ${width} 22`} role="presentation">{dayBoundaries.map((boundary) => <text key={boundary.index} x={xFor(boundary.index) + 3} y={14} textAnchor="start">{boundary.label}</text>)}</svg></div>
+    <div className="meteogram-legend">
+      <span><i className="meteogram-swatch-temp" />Temperature</span>
+      <span><i className="meteogram-swatch-dewpoint" />Dewpoint</span>
+      <span><i className="meteogram-swatch-wsp" />Wind speed</span>
+      <span><i className="meteogram-swatch-gst" />Gust</span>
+      <span><i className="meteogram-swatch-pop" />PoP</span>
+      <span><i className="meteogram-swatch-qpf" />Rainfall</span>
+    </div>
+    <p className="model-attribution">Single-source NBM guidance, not yet a multi-model comparison — a NAM/GFS/RAP overlay is planned next.</p>
   </div>;
 }
 
@@ -2541,7 +2684,9 @@ export default function Home() {
   }, [activeSection, dataPanel, locationQuery]);
 
   useEffect(() => {
-    if (activeSection !== "dashboard" || dataPanel !== "nbm") return;
+    // The meteogram tab shares this exact fetch -- it's the same NBM hourly data, just charted
+    // instead of tabled, so both tabs reuse one request rather than duplicating the fetch.
+    if (activeSection !== "dashboard" || (dataPanel !== "nbm" && dataPanel !== "meteogram")) return;
     // See the sounding effect above for why text is cleared before every new fetch, not just on
     // the initial load — this is the exact bug Andrew reported live (NBM stayed on Athens/KAHN
     // after switching to Los Angeles, whose auto-resolved station briefly didn't have real NBM
@@ -3809,6 +3954,7 @@ export default function Home() {
           <button className={dataPanel === "afd" ? "active" : ""} onClick={() => setDataPanel("afd")}>Forecast discussion</button>
           <button className={dataPanel === "mcd" ? "active" : ""} onClick={() => setDataPanel("mcd")}>Mesoscale discussions</button>
           <button className={dataPanel === "nbm" ? "active" : ""} onClick={() => setDataPanel("nbm")}>NBM full text</button>
+          <button className={dataPanel === "meteogram" ? "active" : ""} onClick={() => setDataPanel("meteogram")}>Meteogram</button>
           <button className={dataPanel === "sounding" ? "active" : ""} onClick={() => setDataPanel("sounding")}>Sounding</button>
           <button className={dataPanel === "models" ? "active" : ""} onClick={() => setDataPanel("models")}>Model data</button>
           <button className={dataPanel === "ensembles" ? "active" : ""} onClick={() => setDataPanel("ensembles")}>Ensembles</button>
@@ -3817,6 +3963,8 @@ export default function Home() {
         </div>
         {dataPanel === "nbm" && !hasForecasterToolsAccess && <SignInToolsUpsell label="NBM full text" onLogin={() => setLoginMenuOpen(true)} />}
         {dataPanel === "nbm" && hasForecasterToolsAccess && <section className="source-bulletin"><div className="model-guidance-heading"><div><strong>National Blend of Models guidance</strong><span>Hourly NBM guidance for {selectedLocation.name}</span></div><small>{nbmHourly ? "Latest bulletin loaded" : nbmStatus}</small></div>{nbmHourly ? <NbmHourlyTable hourly={nbmHourly} timezone={selectedLocation.timezone} /> : <p className="empty">{nbmStatus}</p>}<details><summary>Open raw NBM bulletin text</summary><pre className="model-text">{nbmText || nbmStatus}</pre></details></section>}
+        {dataPanel === "meteogram" && !hasForecasterToolsAccess && <SignInToolsUpsell label="Meteogram" onLogin={() => setLoginMenuOpen(true)} />}
+        {dataPanel === "meteogram" && hasForecasterToolsAccess && <section className="source-bulletin"><div className="model-guidance-heading"><div><strong>Meteogram</strong><span>Stacked hourly guidance for {selectedLocation.name}</span></div><small>{nbmHourly ? "Latest bulletin loaded" : nbmStatus}</small></div>{nbmHourly ? <NbmMeteogram hourly={nbmHourly} timezone={selectedLocation.timezone} /> : <p className="empty">{nbmStatus}</p>}</section>}
         {dataPanel === "afd" && !hasForecasterToolsAccess && <SignInToolsUpsell label="Forecast discussion" onLogin={() => setLoginMenuOpen(true)} />}
         {dataPanel === "afd" && hasForecasterToolsAccess && <section className="source-bulletin"><div className="model-guidance-heading"><div><strong>Area Forecast Discussion</strong><span>The local NWS office's own reasoning behind the {selectedLocation.name} forecast</span></div><small>{afdText ? "Latest discussion loaded" : afdStatus}</small></div><details open><summary>Open full forecast discussion</summary><pre className="model-text">{afdText || afdStatus}</pre></details></section>}
         {dataPanel === "mcd" && !hasForecasterToolsAccess && <SignInToolsUpsell label="Mesoscale discussions" onLogin={() => setLoginMenuOpen(true)} />}
