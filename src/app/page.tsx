@@ -444,8 +444,13 @@ function Meteogram({ hourly, overlay, timezone }: { hourly: NbmHourly; overlay: 
     {timeTicks.map((tick) => <line key={tick.time} className={tick.isNewDay ? "meteogram-day-line" : "meteogram-hour-line"} x1={xForTime(tick.time)} x2={xForTime(tick.time)} y1={plotTop} y2={plotBottom} />)}
     {ticks.map((tick) => <g key={tick}><line x1={margin.left} x2={plotRight} y1={yFor(tick)} y2={yFor(tick)} /><text x={margin.left - 6} y={yFor(tick) + 3} textAnchor="end">{tick}</text></g>)}
   </g>;
-
   const overlayModels = OVERLAY_MODEL_ORDER.filter((key) => overlay?.models[key]).map((key) => ({ key, data: overlay!.models[key] }));
+  // Andrew's reference (Iowa State's Bufkit meteogram) repeats its time axis and legend on every
+  // panel, not once for the whole stack -- real usability point: a panel should be readable on its
+  // own while scrolling, without hunting elsewhere on the page for what time or line is which.
+  const timeAxis = <div className="meteogram-panel-axis"><svg viewBox={`0 0 ${width} 26`} role="presentation">{timeTicks.map((tick) => <g key={tick.time} transform={`translate(${xForTime(tick.time).toFixed(1)} 0)`}>{tick.isNewDay && <text className="meteogram-axis-date" y="9" textAnchor="middle">{tick.dateLabel}</text>}<text y="22" textAnchor="middle">{tick.hourLabel}</text></g>)}</svg></div>;
+  const overlayLegendEntries = overlayModels.map((model) => ({ swatch: model.key, label: model.data.label }));
+  const legend = (entries: { swatch: string; label: string }[]) => <div className="meteogram-legend">{[...entries, ...overlayLegendEntries].map((entry) => <span key={entry.swatch}><i className={`meteogram-swatch-${entry.swatch}`} />{entry.label}</span>)}</div>;
 
   const tmp = series("TMP");
   const dpt = series("DPT");
@@ -490,6 +495,8 @@ function Meteogram({ hourly, overlay, timezone }: { hourly: NbmHourly; overlay: 
         <path className="meteogram-dewpoint" d={linePath(dpt, tempY)} />
         <path className="meteogram-temperature" d={linePath(tmp, tempY)} />
       </svg>
+      {timeAxis}
+      {legend([{ swatch: "temp", label: "NBM temperature" }, { swatch: "dewpoint", label: "NBM dewpoint" }])}
     </figure>
 
     <figure className="meteogram-panel">
@@ -512,6 +519,8 @@ function Meteogram({ hourly, overlay, timezone }: { hourly: NbmHourly; overlay: 
           return <g key={index} transform={`translate(${xFor(index).toFixed(1)} ${(plotTop + 16).toFixed(1)}) rotate(${direction + 180})`}><line x1="0" y1="0" x2="0" y2="-14" />{Array.from({ length: flags }, (_, i) => <line key={i} x1="0" y1={-3 - i * 3} x2="6" y2={-i * 3} />)}{hasHalf && <line x1="0" y1={-3 - flags * 3} x2="3" y2={-1.5 - flags * 3} />}</g>;
         })}</g>
       </svg>
+      {timeAxis}
+      {legend([{ swatch: "wsp", label: "NBM wind speed" }, { swatch: "gst", label: "NBM gust" }])}
     </figure>
 
     <figure className="meteogram-panel">
@@ -523,6 +532,8 @@ function Meteogram({ hourly, overlay, timezone }: { hourly: NbmHourly; overlay: 
         <path className="meteogram-sky-line" d={linePath(sky, skyY)} />
         {overlayModels.map((model) => <path key={model.key} className={`meteogram-overlay-${model.key}`} d={overlayLinePath(model.data.cloudCoverPct, skyY)} />)}
       </svg>
+      {timeAxis}
+      {legend([{ swatch: "sky", label: "NBM sky cover" }])}
     </figure>
 
     <figure className="meteogram-panel">
@@ -534,6 +545,8 @@ function Meteogram({ hourly, overlay, timezone }: { hourly: NbmHourly; overlay: 
         {qpf.map((value, index) => (!value ? null : <rect key={index} className="meteogram-qpf-bar" x={xFor(index) - barWidth / 4} y={plotBottom - (value / qpfMax) * (plotBottom - plotTop) * 0.9} width={barWidth / 2} height={(value / qpfMax) * (plotBottom - plotTop) * 0.9} />))}
         {overlayModels.map((model) => <path key={model.key} className={`meteogram-overlay-${model.key}`} d={overlayLinePath(model.data.precipProbabilityPct, popY)} />)}
       </svg>
+      {timeAxis}
+      {legend([{ swatch: "pop", label: "NBM PoP" }, { swatch: "qpf", label: "NBM rainfall" }])}
     </figure>
 
     {hasSnow && <figure className="meteogram-panel">
@@ -543,18 +556,10 @@ function Meteogram({ hourly, overlay, timezone }: { hourly: NbmHourly; overlay: 
         {grid(snowY, [0, Math.round((snowMax / 2) * 10) / 10, Math.round(snowMax * 10) / 10])}
         <path className="meteogram-snow-fill" d={`${linePath(snowAccum, snowY)} L${xFor(hours.length - 1).toFixed(1)},${plotBottom.toFixed(1)} L${xFor(0).toFixed(1)},${plotBottom.toFixed(1)} Z`} />
       </svg>
+      {timeAxis}
+      {legend([{ swatch: "snow", label: "NBM accumulated snowfall" }])}
     </figure>}
 
-    <div className="meteogram-axis"><svg viewBox={`0 0 ${width} 28`} role="presentation">{timeTicks.map((tick) => <g key={tick.time} transform={`translate(${xForTime(tick.time).toFixed(1)} 0)`}>{tick.isNewDay && <text className="meteogram-axis-date" y="10" textAnchor="middle">{tick.dateLabel}</text>}<text y="24" textAnchor="middle">{tick.hourLabel}</text></g>)}</svg></div>
-    <div className="meteogram-legend">
-      <span><i className="meteogram-swatch-temp" />NBM temperature</span>
-      <span><i className="meteogram-swatch-dewpoint" />NBM dewpoint</span>
-      <span><i className="meteogram-swatch-wsp" />NBM wind speed</span>
-      <span><i className="meteogram-swatch-gst" />NBM gust</span>
-      <span><i className="meteogram-swatch-pop" />NBM PoP</span>
-      <span><i className="meteogram-swatch-qpf" />NBM rainfall</span>
-      {overlayModels.map((model) => <span key={model.key}><i className={`meteogram-swatch-${model.key}`} />{model.data.label}</span>)}
-    </div>
     <p className="model-attribution">{overlayModels.length ? "NBM guidance plus GFS/HRRR/NAM (Open-Meteo) for temperature, wind speed, sky cover, and precipitation chance — RAP and NAM/GFS-MOS are real, separate follow-ons, not yet built." : "Single-source NBM guidance, not yet a multi-model comparison — a GFS/HRRR/NAM overlay is loading or unavailable."}</p>
   </div>;
 }

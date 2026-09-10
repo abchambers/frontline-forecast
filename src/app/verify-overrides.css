@@ -195,10 +195,10 @@
 .meteogram-pop-bar { fill:color-mix(in srgb, var(--blue) 55%, transparent); }
 .meteogram-qpf-bar { fill:#2e8b6e; }
 .meteogram-snow-fill { fill:color-mix(in srgb, var(--accent) 20%, transparent); stroke:var(--accent); stroke-width:1.4; }
-.meteogram-axis svg { display:block; height:28px; width:100%; }
-.meteogram-axis text { fill:var(--muted); font-size:10px; font-weight:700; }
+.meteogram-panel-axis svg { display:block; height:24px; width:100%; }
+.meteogram-panel-axis text { fill:var(--muted); font-size:10px; font-weight:700; }
 .meteogram-axis-date { fill:var(--ink); font-size:9px; font-weight:800; letter-spacing:.02em; text-transform:uppercase; }
-.meteogram-legend { align-items:center; color:var(--muted); display:flex; flex-wrap:wrap; font-size:.74rem; gap:8px 14px; }
+.meteogram-legend { align-items:center; border-top:1px solid var(--line); color:var(--muted); display:flex; flex-wrap:wrap; font-size:.7rem; gap:6px 12px; margin-top:4px; padding-top:6px; }
 .meteogram-legend span { align-items:center; display:flex; gap:5px; }
 .meteogram-legend i { border-radius:999px; display:inline-block; height:3px; width:16px; }
 .meteogram-swatch-temp { background:#cf4f49; }
@@ -207,6 +207,8 @@
 .meteogram-swatch-gst { background:var(--muted); }
 .meteogram-swatch-pop { background:color-mix(in srgb, var(--blue) 55%, transparent); }
 .meteogram-swatch-qpf { background:#2e8b6e; }
+.meteogram-swatch-sky { background:var(--muted); }
+.meteogram-swatch-snow { background:var(--accent); }
 .meteogram-overlay-gfs,.meteogram-overlay-hrrr,.meteogram-overlay-nam { fill:none; stroke-linecap:round; stroke-linejoin:round; stroke-dasharray:5 3; stroke-width:1.6; }
 .meteogram-overlay-gfs { stroke:#8a5cc9; }
 .meteogram-overlay-hrrr { stroke:#c97a2e; }
