@@ -352,24 +352,27 @@ function NbmHourlyTable({ hourly, timezone }: { hourly: NbmHourly; timezone: str
     return `${direction ? `${direction} ` : ""}${speed}${gustPart} kt`;
   };
 
-  const primaryRows: { key: string; label: string; render: (index: number) => string }[] = [
-    { key: "TMP", label: "Temp", render: (i) => nbmDisplayValue("TMP", hourly.elements.TMP?.[i] ?? null) ?? "—" },
-    { key: "DPT", label: "Dewpoint", render: (i) => nbmDisplayValue("DPT", hourly.elements.DPT?.[i] ?? null) ?? "—" },
-    { key: "SKY", label: "Sky cover", render: (i) => nbmDisplayValue("SKY", hourly.elements.SKY?.[i] ?? null) ?? "—" },
-    { key: "WIND", label: "Wind", render: windLabel },
-    { key: "P01", label: "Rain chance", render: (i) => nbmDisplayValue("P01", hourly.elements.P01?.[i] ?? null) ?? "0 %" },
-    { key: "T01", label: "T-storm chance", render: (i) => nbmDisplayValue("T01", hourly.elements.T01?.[i] ?? null) ?? "0 %" },
+  // Andrew's own instruction: keep the raw NBM shorthand (TMP, DPT, WDR...) visible
+  // next to the plain-English label, not hidden behind it -- the goal is for
+  // forecasters to get used to reading the real element codes, not to replace them.
+  const primaryRows: { key: string; code: string; label: string; render: (index: number) => string }[] = [
+    { key: "TMP", code: "TMP", label: "Temp", render: (i) => nbmDisplayValue("TMP", hourly.elements.TMP?.[i] ?? null) ?? "—" },
+    { key: "DPT", code: "DPT", label: "Dewpoint", render: (i) => nbmDisplayValue("DPT", hourly.elements.DPT?.[i] ?? null) ?? "—" },
+    { key: "SKY", code: "SKY", label: "Sky cover", render: (i) => nbmDisplayValue("SKY", hourly.elements.SKY?.[i] ?? null) ?? "—" },
+    { key: "WIND", code: "WDR/WSP/GST", label: "Wind", render: windLabel },
+    { key: "P01", code: "P01", label: "Rain chance", render: (i) => nbmDisplayValue("P01", hourly.elements.P01?.[i] ?? null) ?? "0 %" },
+    { key: "T01", code: "T01", label: "T-storm chance", render: (i) => nbmDisplayValue("T01", hourly.elements.T01?.[i] ?? null) ?? "0 %" },
   ];
   if (hourly.elements.S01?.some((value) => value && Number(value) > 0)) {
-    primaryRows.push({ key: "S01", label: "Snowfall", render: (i) => nbmDisplayValue("S01", hourly.elements.S01?.[i] ?? null) ?? "0 in" });
+    primaryRows.push({ key: "S01", code: "S01", label: "Snowfall", render: (i) => nbmDisplayValue("S01", hourly.elements.S01?.[i] ?? null) ?? "0 in" });
   }
   const shownCodes = new Set(["TMP", "DPT", "SKY", "WDR", "WSP", "GST", "P01", "T01", "S01"]);
   const secondaryCodes = Object.keys(hourly.elements).filter((code) => !shownCodes.has(code) && NBM_ELEMENTS[code]);
 
   return <div className="nbm-hourly">
-    <div className="nbm-hourly-scroll"><table className="nbm-hourly-table"><thead><tr><th>Local time</th>{columns.map((column, index) => <th key={column.iso}>{index === 0 || column.dateLabel !== columns[index - 1].dateLabel ? <><small>{column.dateLabel}</small><br /></> : null}{column.hourLabel}</th>)}</tr></thead><tbody>{primaryRows.map((row) => <tr key={row.key}><td>{row.label}</td>{columns.map((column, index) => <td key={column.iso}>{row.render(index)}</td>)}</tr>)}</tbody></table></div>
+    <div className="nbm-hourly-scroll"><table className="nbm-hourly-table"><thead><tr><th>Local time</th>{columns.map((column, index) => <th key={column.iso}>{index === 0 || column.dateLabel !== columns[index - 1].dateLabel ? <><small>{column.dateLabel}</small><br /></> : null}{column.hourLabel}</th>)}</tr></thead><tbody>{primaryRows.map((row) => <tr key={row.key}><td><span className="nbm-code">{row.code}</span><span className="nbm-code-label">{row.label}</span></td>{columns.map((column, index) => <td key={column.iso}>{row.render(index)}</td>)}</tr>)}</tbody></table></div>
     <button type="button" className="nbm-hourly-toggle" onClick={() => setShowAll((value) => !value)}>{showAll ? "Hide" : "Show"} all NBM elements</button>
-    {showAll && <div className="nbm-hourly-scroll"><table className="nbm-hourly-table nbm-hourly-table-secondary"><thead><tr><th>Local time</th>{columns.map((column) => <th key={column.iso}>{column.hourLabel}</th>)}</tr></thead><tbody>{secondaryCodes.map((code) => <tr key={code}><td title={`${code} · ${NBM_ELEMENTS[code].unit || "unitless"}`}>{NBM_ELEMENTS[code].label}</td>{columns.map((column, index) => <td key={column.iso}>{nbmDisplayValue(code, hourly.elements[code]?.[index] ?? null) ?? "—"}</td>)}</tr>)}</tbody></table></div>}
+    {showAll && <div className="nbm-hourly-scroll"><table className="nbm-hourly-table nbm-hourly-table-secondary"><thead><tr><th>Local time</th>{columns.map((column) => <th key={column.iso}>{column.hourLabel}</th>)}</tr></thead><tbody>{secondaryCodes.map((code) => <tr key={code}><td><span className="nbm-code">{code}</span><span className="nbm-code-label">{NBM_ELEMENTS[code].label}{NBM_ELEMENTS[code].unit ? ` (${NBM_ELEMENTS[code].unit})` : ""}</span></td>{columns.map((column, index) => <td key={column.iso}>{nbmDisplayValue(code, hourly.elements[code]?.[index] ?? null) ?? "—"}</td>)}</tr>)}</tbody></table></div>}
   </div>;
 }
 
