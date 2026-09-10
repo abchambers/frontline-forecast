@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { track } from "@vercel/analytics";
 import { defaultWeatherDeskLocation, weatherDeskLocation, weatherDeskLocations, type WeatherDeskLocation } from "@/lib/locations";
 import { satelliteForLongitude } from "@/lib/goes-satellite";
+import { NBM_ELEMENTS, nbmDisplayValue, windDirectionCompass, type NbmHourly } from "@/lib/nbm";
 import { automaticForecastScore, type ForecastPeriodActual } from "@/lib/forecast-verification";
 import type { PersonalTier } from "@/lib/access";
 import type { RadarFrameMeta } from "./radar-map";
@@ -326,6 +327,50 @@ function periodIconCondition(period: { conditions: string; iconCondition?: strin
 }
 function IconPicker({ value, onChange, style }: { value: string; onChange: (next: string) => void; style: WeatherIconStyle }) {
   return <div className="icon-picker" role="radiogroup" aria-label="Choose an icon">{iconConditionKeys.map((key) => <button type="button" key={key} role="radio" aria-checked={value === key} className={value === key ? "active" : ""} title={iconConditionLabels[key]} onClick={() => onChange(key)}><img className="forecast-condition-icon" src={`/weather-icons/${style}/${key}.svg`} alt={iconConditionLabels[key]} /></button>)}</div>;
+}
+
+// NBM's raw NBH text is a dense, fixed-width columnar dump meant for automated
+// parsing, not reading -- Andrew's own words were that the text bulletin needed
+// "formatting... to look nicer and easier to read." This renders the same data
+// as an actual hourly table in the station's local time, with the handful of
+// elements a forecaster actually scans (temp/dewpoint/sky/wind/rain/t-storm)
+// shown by default and everything else (uncertainty spreads, aviation ceiling/
+// visibility categories, mixing height, Haines Index, etc.) behind a toggle --
+// the raw text stays available too, for anyone who wants to cross-check it.
+function NbmHourlyTable({ hourly, timezone }: { hourly: NbmHourly; timezone: string }) {
+  const [showAll, setShowAll] = useState(false);
+  const hourFormatter = new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour: "numeric" });
+  const dateFormatter = new Intl.DateTimeFormat("en-US", { timeZone: timezone, month: "short", day: "numeric" });
+  const columns = hourly.hours.map((iso) => ({ iso, date: new Date(iso), hourLabel: hourFormatter.format(new Date(iso)), dateLabel: dateFormatter.format(new Date(iso)) }));
+
+  const windLabel = (index: number) => {
+    const speed = hourly.elements.WSP?.[index];
+    if (!speed || speed === "0") return windDirectionCompass(hourly.elements.WDR?.[index] ?? null) === "Calm" ? "Calm" : "—";
+    const direction = windDirectionCompass(hourly.elements.WDR?.[index] ?? null);
+    const gust = hourly.elements.GST?.[index];
+    const gustPart = gust && Number(gust) >= Number(speed) + 5 ? ` G${gust}` : "";
+    return `${direction ? `${direction} ` : ""}${speed}${gustPart} kt`;
+  };
+
+  const primaryRows: { key: string; label: string; render: (index: number) => string }[] = [
+    { key: "TMP", label: "Temp", render: (i) => nbmDisplayValue("TMP", hourly.elements.TMP?.[i] ?? null) ?? "—" },
+    { key: "DPT", label: "Dewpoint", render: (i) => nbmDisplayValue("DPT", hourly.elements.DPT?.[i] ?? null) ?? "—" },
+    { key: "SKY", label: "Sky cover", render: (i) => nbmDisplayValue("SKY", hourly.elements.SKY?.[i] ?? null) ?? "—" },
+    { key: "WIND", label: "Wind", render: windLabel },
+    { key: "P01", label: "Rain chance", render: (i) => nbmDisplayValue("P01", hourly.elements.P01?.[i] ?? null) ?? "0 %" },
+    { key: "T01", label: "T-storm chance", render: (i) => nbmDisplayValue("T01", hourly.elements.T01?.[i] ?? null) ?? "0 %" },
+  ];
+  if (hourly.elements.S01?.some((value) => value && Number(value) > 0)) {
+    primaryRows.push({ key: "S01", label: "Snowfall", render: (i) => nbmDisplayValue("S01", hourly.elements.S01?.[i] ?? null) ?? "0 in" });
+  }
+  const shownCodes = new Set(["TMP", "DPT", "SKY", "WDR", "WSP", "GST", "P01", "T01", "S01"]);
+  const secondaryCodes = Object.keys(hourly.elements).filter((code) => !shownCodes.has(code) && NBM_ELEMENTS[code]);
+
+  return <div className="nbm-hourly">
+    <div className="nbm-hourly-scroll"><table className="nbm-hourly-table"><thead><tr><th>Local time</th>{columns.map((column, index) => <th key={column.iso}>{index === 0 || column.dateLabel !== columns[index - 1].dateLabel ? <><small>{column.dateLabel}</small><br /></> : null}{column.hourLabel}</th>)}</tr></thead><tbody>{primaryRows.map((row) => <tr key={row.key}><td>{row.label}</td>{columns.map((column, index) => <td key={column.iso}>{row.render(index)}</td>)}</tr>)}</tbody></table></div>
+    <button type="button" className="nbm-hourly-toggle" onClick={() => setShowAll((value) => !value)}>{showAll ? "Hide" : "Show"} all NBM elements</button>
+    {showAll && <div className="nbm-hourly-scroll"><table className="nbm-hourly-table nbm-hourly-table-secondary"><thead><tr><th>Local time</th>{columns.map((column) => <th key={column.iso}>{column.hourLabel}</th>)}</tr></thead><tbody>{secondaryCodes.map((code) => <tr key={code}><td title={`${code} · ${NBM_ELEMENTS[code].unit || "unitless"}`}>{NBM_ELEMENTS[code].label}</td>{columns.map((column, index) => <td key={column.iso}>{nbmDisplayValue(code, hourly.elements[code]?.[index] ?? null) ?? "—"}</td>)}</tr>)}</tbody></table></div>}
+  </div>;
 }
 
 // Caps the quick-add row at 3 chips (current obs, current forecast, NBM --
@@ -1352,6 +1397,7 @@ export default function Home() {
   const [weatherLoading, setWeatherLoading] = useState(true);
   const [weatherSyncedAt, setWeatherSyncedAt] = useState<number | null>(null);
   const [nbmText, setNbmText] = useState("");
+  const [nbmHourly, setNbmHourly] = useState<NbmHourly | null>(null);
   const [nbmStatus, setNbmStatus] = useState("Loading latest KAHN NBM bulletin…");
   const [afdText, setAfdText] = useState("");
   const [afdStatus, setAfdStatus] = useState("Loading latest forecast discussion…");
@@ -2520,12 +2566,14 @@ export default function Home() {
     // after switching to Los Angeles, whose auto-resolved station briefly didn't have real NBM
     // coverage — see location-lookup/route.ts's own ICAO-preference fix for that root cause).
     setNbmText("");
+    setNbmHourly(null);
     setNbmStatus("Loading latest NBM bulletin…");
     fetch(`/api/nbm?${locationQuery}`)
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "NBM data unavailable");
         setNbmText(`NBM hourly bulletin · ${data.station} · ${data.cycle}\n\n${data.text}`);
+        setNbmHourly(data.hourly ?? null);
         setNbmStatus("");
       })
       .catch((error: Error) => setNbmStatus(error.message));
@@ -3787,7 +3835,7 @@ export default function Home() {
           <button className={dataPanel === "model-sounding" ? "active" : ""} onClick={() => setDataPanel("model-sounding")}>Model sounding</button>
         </div>
         {dataPanel === "nbm" && !hasForecasterToolsAccess && <SignInToolsUpsell label="NBM full text" onLogin={() => setLoginMenuOpen(true)} />}
-        {dataPanel === "nbm" && hasForecasterToolsAccess && <section className="source-bulletin"><div className="model-guidance-heading"><div><strong>National Blend of Models bulletin</strong><span>Full NBM source text for {selectedLocation.name} forecast analysis</span></div><small>{nbmText ? "Latest bulletin loaded" : nbmStatus}</small></div><details><summary>Open full NBM bulletin</summary><pre className="model-text">{nbmText || nbmStatus}</pre></details></section>}
+        {dataPanel === "nbm" && hasForecasterToolsAccess && <section className="source-bulletin"><div className="model-guidance-heading"><div><strong>National Blend of Models guidance</strong><span>Hourly NBM guidance for {selectedLocation.name}</span></div><small>{nbmHourly ? "Latest bulletin loaded" : nbmStatus}</small></div>{nbmHourly ? <NbmHourlyTable hourly={nbmHourly} timezone={selectedLocation.timezone} /> : <p className="empty">{nbmStatus}</p>}<details><summary>Open raw NBM bulletin text</summary><pre className="model-text">{nbmText || nbmStatus}</pre></details></section>}
         {dataPanel === "afd" && !hasForecasterToolsAccess && <SignInToolsUpsell label="Forecast discussion" onLogin={() => setLoginMenuOpen(true)} />}
         {dataPanel === "afd" && hasForecasterToolsAccess && <section className="source-bulletin"><div className="model-guidance-heading"><div><strong>Area Forecast Discussion</strong><span>The local NWS office's own reasoning behind the {selectedLocation.name} forecast</span></div><small>{afdText ? "Latest discussion loaded" : afdStatus}</small></div><details open><summary>Open full forecast discussion</summary><pre className="model-text">{afdText || afdStatus}</pre></details></section>}
         {dataPanel === "mcd" && !hasForecasterToolsAccess && <SignInToolsUpsell label="Mesoscale discussions" onLogin={() => setLoginMenuOpen(true)} />}
