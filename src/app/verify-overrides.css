@@ -175,7 +175,6 @@
 .model-access-upsell h3 { margin:0; }
 .model-access-upsell p { color:var(--muted); font-size:.86rem; line-height:1.5; margin:0; max-width:52ch; }
 .model-access-upsell button { background:var(--accent); border:1px solid var(--accent); border-radius:8px; color:var(--accent-contrast); font-weight:700; margin-top:6px; padding:9px 16px; }
-.model-radar-panel { display:grid; gap:14px; }.model-radar-map { position:relative; }
 .ensemble-panel { display:grid; gap:16px; }
 .guidance-scope-toggle { display:flex; gap:5px; margin-top:6px; }.guidance-scope-toggle button { background:transparent; border:0; border-bottom:2px solid transparent; color:var(--muted); font:inherit; font-size:.84rem; font-weight:700; padding:5px 2px; }.guidance-scope-toggle button.active { border-color:var(--accent); color:var(--accent); }
 .ensemble-summary { border:1px solid var(--line); border-radius:9px; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); overflow:hidden; }.ensemble-summary article { border-left:1px solid var(--line); display:grid; gap:3px; padding:12px; }.ensemble-summary article:first-child { border-left:0; }.ensemble-summary span,.ensemble-summary small { color:var(--muted); font-size:.75rem; }.ensemble-summary strong { color:var(--ink); font-size:1.2rem; }
@@ -318,6 +317,13 @@
    exists for in the first place. */
 .data-desk .tabs { flex-wrap:nowrap; gap:5px; overflow-x:auto; padding-top:5px; -webkit-overflow-scrolling:touch; scrollbar-width:thin; }
 .data-desk .tabs button { flex:0 0 auto; font-size:.83rem; padding:7px 9px; white-space:nowrap; }
+/* Secondary row for the category picked above (Andrew, 2026-09-15: "condense the references menu").
+   Deliberately a lighter, pill-shaped treatment rather than reusing .tabs's own bordered/underlined
+   look -- it needs to read as a step below the category row, not a second identical tab bar. */
+.data-desk-subtabs { display:flex; flex-wrap:nowrap; gap:6px; margin:10px 0 18px; overflow-x:auto; padding-top:3px; -webkit-overflow-scrolling:touch; scrollbar-width:thin; }
+.data-desk-subtabs button { background:transparent; border:1px solid var(--line); border-radius:999px; color:var(--muted); flex:0 0 auto; font-size:.78rem; padding:6px 12px; transition:border-color .15s ease,color .15s ease,background .15s ease; white-space:nowrap; }
+.data-desk-subtabs button:hover { border-color:var(--accent); color:var(--ink); }
+.data-desk-subtabs button.active { background:var(--blue); border-color:var(--blue); color:#fff; }
 
 /* Mobile keeps controls compact and horizontally discoverable instead of
    wrapping them into uneven stacks with unused space. */
@@ -342,6 +348,9 @@
   .navigation button,.tabs button { flex:0 0 auto; white-space:nowrap; }
   .data-desk .tabs { margin-left:0; margin-right:0; scroll-snap-type:x proximity; width:100%; }
   .data-desk .tabs button { scroll-snap-align:start; }
+  .data-desk-subtabs { -webkit-overflow-scrolling:touch; margin-left:0; margin-right:0; scroll-snap-type:x proximity; scrollbar-width:none; width:100%; }
+  .data-desk-subtabs::-webkit-scrollbar { display:none; }
+  .data-desk-subtabs button { scroll-snap-align:start; }
   .day-tabs,.horizon-actions,.reference-picker > div,.model-picker,.radar-product-picker > div,.radar-field-picker { -webkit-overflow-scrolling:touch; flex-wrap:nowrap; max-width:100%; overflow-x:auto; padding-bottom:2px; scrollbar-width:none; }
   .day-tabs::-webkit-scrollbar,.horizon-actions::-webkit-scrollbar,.reference-picker > div::-webkit-scrollbar,.model-picker::-webkit-scrollbar,.radar-product-picker > div::-webkit-scrollbar,.radar-field-picker::-webkit-scrollbar { display:none; }
   .day-tabs button,.horizon-actions button,.reference-picker button,.model-picker button,.radar-product-picker button,.radar-field-picker button { flex:0 0 auto; white-space:nowrap; }
@@ -426,7 +435,7 @@
   .header-account { justify-self:end; }
   .location-menu { max-width:calc(100vw - 28px); }
   .dashboard-grid,.data-desk,.workspace-card,.radar-workspace,.forecast-period,
-  .model-workspace,.model-sounding-panel,.model-radar-panel,.ensemble-panel,
+  .model-workspace,.model-sounding-panel,.ensemble-panel,
   .verification-grid,.weekly-calendar,.reference-picker,.saved-references {
     min-width:0;
     max-width:100%;

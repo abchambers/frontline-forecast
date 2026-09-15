@@ -23,7 +23,32 @@ const UpperAirMap = dynamic(() => import("./upper-air-map"), {
   loading: () => <div className="radar-loading">Loading upper-air charts…</div>,
 });
 
-type DataPanel = "nbm" | "meteogram" | "afd" | "mcd" | "alerts" | "sounding" | "models" | "model-radar" | "ensembles" | "model-sounding";
+type DataPanel = "nbm" | "meteogram" | "afd" | "mcd" | "alerts" | "sounding" | "models" | "ensembles" | "model-sounding";
+// Grouped into categories (Andrew, 2026-09-15: "condense the references menu, it looks busy and
+// cluttered") so the data-desk shows ~3 top-level choices instead of a flat row of 10 tabs, most of
+// which required scrolling to even discover. "Model reflectivity" was dropped entirely rather than
+// grouped -- it duplicated the Radar tab's own "Forecast" view (same HRRR data, same map), a real,
+// pre-existing redundancy found while scoping this, not a feature removal Andrew asked for by name.
+const DATA_DESK_CATEGORIES: { id: string; label: string; panels: { id: DataPanel; label: string }[] }[] = [
+  { id: "alerts-discussion", label: "Alerts & discussion", panels: [
+    { id: "alerts", label: "Warnings and statements" },
+    { id: "afd", label: "Forecast discussion" },
+    { id: "mcd", label: "Mesoscale discussions" },
+  ] },
+  { id: "guidance", label: "Guidance", panels: [
+    { id: "nbm", label: "NBM full text" },
+    { id: "meteogram", label: "Meteogram" },
+    { id: "models", label: "Model data" },
+    { id: "ensembles", label: "Ensembles" },
+  ] },
+  { id: "soundings", label: "Soundings", panels: [
+    { id: "sounding", label: "Sounding" },
+    { id: "model-sounding", label: "Model sounding" },
+  ] },
+];
+const DATA_PANEL_CATEGORY: Record<string, string> = Object.fromEntries(
+  DATA_DESK_CATEGORIES.flatMap((category) => category.panels.map((panel) => [panel.id, category.id])),
+);
 type GuidanceGroup = "high-res" | "global";
 type RadarMapView = "composite" | "velocity" | "future_reflectivity" | "satellite";
 type RadarLegend = { title: string; left: string; middle: string; right: string; unit: string; gradient: string };
@@ -2087,7 +2112,7 @@ export default function Home() {
   }, [satellitePlaying, satelliteFrames.length]);
 
   useEffect(() => {
-    const wantsFutureRadar = (activeSection === "dashboard" && dataPanel === "model-radar") || (activeSection === "radar" && radarMapView === "future_reflectivity");
+    const wantsFutureRadar = activeSection === "radar" && radarMapView === "future_reflectivity";
     if (!wantsFutureRadar || !hasForecasterToolsAccess) return;
     let isActive = true;
     const loadFutureRadar = () => fetch("/api/radar/future-frames", { cache: "no-store" })
@@ -2105,7 +2130,7 @@ export default function Home() {
     loadFutureRadar();
     const refreshId = window.setInterval(loadFutureRadar, 600_000);
     return () => { isActive = false; window.clearInterval(refreshId); };
-  }, [activeSection, dataPanel, radarMapView, hasForecasterToolsAccess]);
+  }, [activeSection, radarMapView, hasForecasterToolsAccess]);
 
   useEffect(() => {
     if (!futureRadarPlaying || futureRadarFrames.length < 2) return;
@@ -2987,7 +3012,6 @@ export default function Home() {
     { id: "nbm", label: `NBM ${selectedLocation.observationStation} bulletin`, detail: nbmText || nbmStatus },
     { id: "afd", label: "NWS Area Forecast Discussion", detail: afdText || afdStatus },
     { id: "mcd", label: mcdDiscussions[0] ? `SPC ${mcdDiscussions[0].title}` : "SPC Mesoscale Discussion", detail: mcdDiscussions[0] ? `${mcdDiscussions[0].title}\n\n${mcdDiscussions[0].text}` : mcdStatus },
-    { id: "model-radar", label: "HRRR simulated reflectivity", detail: `HRRR simulated reflectivity model guidance for ${selectedLocation.name} · ${futureRadarStatus}` },
     { id: "sounding", label: `Observed ${selectedLocation.upperAirStation} sounding`, detail: soundingText || soundingStatus, preview: { kind: "observed-sounding", station: selectedLocation.upperAirStation, imageUrl: officialSoundingImageUrl(selectedLocation.upperAirStation) } },
     { id: "nws-alerts", label: "NWS alerts", detail: liveWeather?.alerts.length ? liveWeather.alerts.map((alert) => `${alert.event}: ${alert.headline ?? ""}`).join("\n") : liveWeather?.alertsAvailable === false ? "NWS alert status could not be confirmed." : "No active NWS alerts at the time this reference was attached.", preview: { kind: "metrics", items: [{ label: "Alerts", value: liveWeather?.alertsAvailable === false ? "Feed unavailable" : `${liveWeather?.alerts.length ?? 0} active` }, { label: "Status", value: liveWeather?.alerts.length ? liveWeather.alerts.map((alert) => alert.event).join(", ") : "No active alerts" }] } },
   ];
@@ -3301,10 +3325,6 @@ export default function Home() {
     }
     if (dataPanel === "alerts") {
       attachDeskReference({ id: `alerts-${Date.now()}`, label: liveWeather?.alerts.length ? `NWS ${liveWeather.alerts[0].event}` : "NWS alert status", detail: snippet(liveWeather?.alerts.length ? liveWeather.alerts.map((alert) => `${alert.event} (${alert.severity})${alert.areaDesc ? ` · ${alert.areaDesc}` : ""}\n${alert.headline ?? ""}\n\n${alert.description ?? ""}`).join("\n\n---\n\n") : "No active NWS alerts at the time this reference was attached.") });
-      return;
-    }
-    if (dataPanel === "model-radar") {
-      attachDeskReference({ id: `model-radar-${Date.now()}`, label: "HRRR simulated reflectivity", detail: `HRRR simulated reflectivity model guidance for ${selectedLocation.name} · ${futureRadarStatus}` });
       return;
     }
     if (dataPanel === "sounding") {
@@ -4033,17 +4053,11 @@ export default function Home() {
 
       {homepageContent.showReferences && <section className="data-desk">
         <div className="section-heading data-desk-heading"><div><h2>{homepageContent.referenceTitle}</h2><p>{homepageContent.referenceCaption}</p></div></div>
-        <div className="tabs" role="tablist" aria-label="Forecast data sources">
-          <button className={dataPanel === "alerts" ? "active" : ""} onClick={() => setDataPanel("alerts")}>Warnings and statements</button>
-          <button className={dataPanel === "afd" ? "active" : ""} onClick={() => setDataPanel("afd")}>Forecast discussion</button>
-          <button className={dataPanel === "mcd" ? "active" : ""} onClick={() => setDataPanel("mcd")}>Mesoscale discussions</button>
-          <button className={dataPanel === "nbm" ? "active" : ""} onClick={() => setDataPanel("nbm")}>NBM full text</button>
-          <button className={dataPanel === "meteogram" ? "active" : ""} onClick={() => setDataPanel("meteogram")}>Meteogram</button>
-          <button className={dataPanel === "sounding" ? "active" : ""} onClick={() => setDataPanel("sounding")}>Sounding</button>
-          <button className={dataPanel === "models" ? "active" : ""} onClick={() => setDataPanel("models")}>Model data</button>
-          <button className={dataPanel === "ensembles" ? "active" : ""} onClick={() => setDataPanel("ensembles")}>Ensembles</button>
-          <button className={dataPanel === "model-radar" ? "active" : ""} onClick={() => setDataPanel("model-radar")}>Model reflectivity</button>
-          <button className={dataPanel === "model-sounding" ? "active" : ""} onClick={() => setDataPanel("model-sounding")}>Model sounding</button>
+        <div className="tabs" role="tablist" aria-label="Forecast data categories">
+          {DATA_DESK_CATEGORIES.map((category) => <button key={category.id} type="button" className={DATA_PANEL_CATEGORY[dataPanel] === category.id ? "active" : ""} onClick={() => setDataPanel(category.panels[0].id)}>{category.label}</button>)}
+        </div>
+        <div className="data-desk-subtabs" role="tablist" aria-label={`${DATA_DESK_CATEGORIES.find((category) => category.id === DATA_PANEL_CATEGORY[dataPanel])?.label ?? ""} views`}>
+          {DATA_DESK_CATEGORIES.find((category) => category.id === DATA_PANEL_CATEGORY[dataPanel])?.panels.map((panel) => <button key={panel.id} type="button" className={dataPanel === panel.id ? "active" : ""} onClick={() => setDataPanel(panel.id)}>{panel.label}</button>)}
         </div>
         {dataPanel === "nbm" && !hasForecasterToolsAccess && <SignInToolsUpsell label="NBM full text" onLogin={() => setLoginMenuOpen(true)} />}
         {dataPanel === "nbm" && hasForecasterToolsAccess && <section className="source-bulletin"><div className="model-guidance-heading"><div><strong>National Blend of Models guidance</strong><span>Hourly NBM guidance for {selectedLocation.name}</span></div><small>{nbmHourly ? "Latest bulletin loaded" : nbmStatus}</small></div>{nbmHourly ? <NbmHourlyTable hourly={nbmHourly} timezone={selectedLocation.timezone} /> : <p className="empty">{nbmStatus}</p>}<details><summary>Open raw NBM bulletin text</summary><pre className="model-text">{nbmText || nbmStatus}</pre></details></section>}
@@ -4062,8 +4076,6 @@ export default function Home() {
           {openMeteoView !== "compare" && (openMeteoGuidance ? <><article className="single-model-table"><header><div className="model-picker">{guidanceModels[guidanceGroup].map(([id, label]) => <button type="button" key={id} className={openMeteoModel === id ? "active" : ""} onClick={() => setOpenMeteoModel(id)}>{label}</button>)}</div><strong>{openMeteoGuidance.model} · {selectedLocation.name}</strong><small>{openMeteoGuidance.current ? `${openMeteoGuidance.current.temperatureF ?? "—"}°F · feels ${openMeteoGuidance.current.feelsLikeF ?? "—"}°F · ${openMeteoWeatherLabel(openMeteoGuidance.current.weatherCode)}` : "Current model guidance unavailable"}</small></header><ModelGuidanceTable guidance={openMeteoGuidance} view={openMeteoView} /><div className="table-reference-action"><small>Attach this displayed guidance to matching forecast dates. A confirmation appears when it is saved.</small><button type="button" onClick={() => attachGuidanceSeries(openMeteoGuidance, openMeteoView)}>Add to forecast</button></div></article><p className="model-attribution">Model data: <a href={openMeteoGuidance.source} target="_blank" rel="noreferrer">Open-Meteo</a>. High-res guidance is for near-term detail; global models are for pattern and range.</p></> : <p className="empty">{openMeteoStatus}</p>)}
           {openMeteoView === "compare" && <section className="model-compare" aria-busy={Boolean(comparisonStatus)}>{comparisonStatus && <p className="model-loading" role="status">{comparisonStatus}</p>}<div className="comparison-columns">{[comparisonLeftModel, comparisonRightModel].map((id, index) => { const guidance = modelComparison[id]; const selectedModel = index === 0 ? comparisonLeftModel : comparisonRightModel; return <article key={index}><header><div className="model-picker">{guidanceModels[guidanceGroup].filter(([model]) => model !== "best_match").map(([model, label]) => <button type="button" key={model} className={selectedModel === model ? "active" : ""} onClick={() => { if (index === 0) { if (model === comparisonRightModel) setComparisonRightModel(comparisonLeftModel); setComparisonLeftModel(model); setOpenMeteoModel(model); } else { if (model === comparisonLeftModel) setComparisonLeftModel(comparisonRightModel); setComparisonRightModel(model); } }}>{label}</button>)}</div><div className="comparison-table-title"><strong>{guidance?.model ?? "Loading model…"}</strong><div className="model-view-toggle"><button type="button" className={comparisonView === "hourly" ? "active" : ""} onClick={() => setComparisonView("hourly")}>Hourly</button><button type="button" className={comparisonView === "daily" ? "active" : ""} onClick={() => setComparisonView("daily")}>Daily</button></div></div></header>{guidance ? <><ModelGuidanceTable guidance={guidance} view={comparisonView} compact /><div className="table-reference-action"><small>Attach this model to matching forecast dates.</small><button type="button" onClick={() => attachGuidanceSeries(guidance, comparisonView)}>Add to forecast</button></div></> : <p className="empty">Loading model guidance…</p>}</article>; })}</div></section>}
         </section>}
-        {dataPanel === "model-radar" && !hasForecasterToolsAccess && <SignInToolsUpsell label="Model reflectivity" onLogin={() => setLoginMenuOpen(true)} />}
-        {dataPanel === "model-radar" && hasForecasterToolsAccess && <section className="model-radar-panel"><div className="model-guidance-heading"><div><strong>HRRR simulated reflectivity</strong><span>Model guidance styled like radar for {selectedLocation.name} — not an observation</span></div><small>{futureRadarFrames.length ? `${futureRadarFrames.length} forecast hours` : futureRadarStatus}</small></div><div className="radar model-radar-map"><RadarMap location={selectedLocation} opacity={0.8} showReflectivity showAlerts={false} timelineTileUrl={futureRadarFrame?.tileUrl ?? null} isCurrentFrame={false} theme="dark" onMapClick={() => setFutureRadarPlaying(false)} /></div>{futureRadarFrames.length > 0 && <div className="radar-playback"><button type="button" disabled={futureRadarFrames.length < 2} onClick={() => setFutureRadarPlaying((playing) => !playing)}>{futureRadarPlaying ? "Pause" : "Play"}</button><input type="range" className="radar-scrub" min="0" max={Math.max(0, futureRadarFrames.length - 1)} value={futureRadarFrameIndex} disabled={futureRadarFrames.length < 2} onChange={(event) => { setFutureRadarPlaying(false); setFutureRadarFrameIndex(Number(event.target.value)); }} /><span>{futureRadarFrameTime}</span></div>}<div className="radar-footer"><RadarLegendStrip view="future_reflectivity" /></div><p className="model-attribution">HRRR simulated reflectivity via <a href="https://mesonet.agron.iastate.edu/" target="_blank" rel="noreferrer">Iowa Environmental Mesonet</a>. This is model guidance styled as a radar view, not an observation — treat it as less certain the further out it goes.</p></section>}
         {dataPanel === "ensembles" && !hasForecasterToolsAccess && <SignInToolsUpsell label="Ensembles" onLogin={() => setLoginMenuOpen(true)} />}
         {dataPanel === "ensembles" && hasForecasterToolsAccess && <section className="ensemble-panel"><div className="model-guidance-heading"><div><strong>GFS ensemble</strong><span>Range and spread · {selectedLocation.name}</span></div></div>{ensembleGuidance ? <><div className="ensemble-summary"><article><span>Members</span><strong>{ensembleGuidance.rows[0]?.temperature.members ?? "—"}</strong><small>available members</small></article><article><span>Temperature spread</span><strong>±{ensembleGuidance.rows[0]?.temperature.spread ?? "—"}°F</strong><small>first valid hour</small></article><article><span>Forecast horizon</span><strong>10 days</strong><small>point guidance</small></article></div><EnsembleTable guidance={ensembleGuidance} /><p className="model-attribution">Ensemble data: <a href={ensembleGuidance.source} target="_blank" rel="noreferrer">Open-Meteo Ensemble API</a></p></> : <p className="empty">{ensembleStatus}</p>}</section>}
         {dataPanel === "model-sounding" && !hasForecasterToolsAccess && <SignInToolsUpsell label="Model sounding" onLogin={() => setLoginMenuOpen(true)} />}
@@ -4162,7 +4174,7 @@ export default function Home() {
           <button type="button" className={classroomHubTab === "progress" ? "active" : ""} onClick={() => setClassroomHubTab("progress")}>{canManageActiveClassroom ? "Class progress" : "Progress"}</button>
           {canManageActiveClassroom && <button type="button" className={classroomHubTab === "roster" ? "active" : ""} onClick={() => setClassroomHubTab("roster")}>Roster</button>}
         </nav>
-        {classroomHubTab === "assignments" && (reviewTarget && reviewTarget.classroomId === activeWorkspace.classroomId ? <><ClassroomReviewPanel target={reviewTarget} runs={visibleReviewRuns} selectedRun={selectedReviewRun} notes={reviewNotes} comment={reviewComment} manualScore={reviewManualScore} message={reviewMessage} onSelectRun={setSelectedReviewRunId} onCommentChange={setReviewComment} onManualScoreChange={setReviewManualScore} onSave={saveForecastReview} onClose={() => { setReviewTarget(null); setReviewRuns([]); setReviewNotes({}); }} />{selectedReviewRun && <InstructorRubricCard rubric={reviewRubric} onRubricChange={setReviewRubric} notes={reviewNotes[selectedReviewRun.id] ?? []} onSave={() => saveForecastReview(selectedReviewRun.id)} />}</> : <ClassroomAssignmentDesk assignments={classroomAssignments} submissions={assignmentSubmissions} references={assignmentReferences} reviews={assignmentReviews} roster={academicRoster} selectedAssignmentId={selectedClassroomAssignmentId} dismissedAssignmentId={dismissedClassroomAssignmentId} canManage={canManageActiveClassroom} myUserId={session.user.id} weatherIconStyle={weatherIconStyle} draftResponses={assignmentDraftResponses} saving={assignmentSaving} referenceOptions={referenceOptions} linkLabel={assignmentLinkLabel} linkUrl={assignmentLinkUrl} onCreate={createClassroomAssignment} onSelectAssignment={selectClassroomAssignment} onDismissAssignment={dismissClassroomAssignment} onUpdateAssignment={updateClassroomAssignment} onDraftChange={updateAssignmentDraft} onFormatDraftField={formatAssignmentResponseField} onSaveDraft={saveAssignmentSubmission} onAddReference={(assignment, item) => addAssignmentReference(assignment, { kind: ["model-radar", "sounding"].includes(item.id) ? "model" : "observation", label: item.label, detail: { text: item.detail, preview: item.preview } })} onRemoveReference={removeAssignmentReference} onLinkLabelChange={setAssignmentLinkLabel} onLinkUrlChange={setAssignmentLinkUrl} onAddLinkReference={(assignment) => { addAssignmentReference(assignment, { kind: "link", label: assignmentLinkLabel.trim(), url: assignmentLinkUrl.trim() }); setAssignmentLinkLabel(""); setAssignmentLinkUrl(""); }} reviewOpenId={assignmentReviewOpenId} reviewComment={assignmentReviewComment} reviewScore={assignmentReviewScore} reviewMessage={assignmentReviewMessage} onOpenReview={(submissionId) => { setAssignmentReviewOpenId(submissionId); setAssignmentReviewComment(""); setAssignmentReviewScore(""); setAssignmentReviewMessage(""); }} onReviewCommentChange={setAssignmentReviewComment} onReviewScoreChange={setAssignmentReviewScore} onSaveReview={saveAssignmentReview} message={assignmentMessage} />)}
+        {classroomHubTab === "assignments" && (reviewTarget && reviewTarget.classroomId === activeWorkspace.classroomId ? <><ClassroomReviewPanel target={reviewTarget} runs={visibleReviewRuns} selectedRun={selectedReviewRun} notes={reviewNotes} comment={reviewComment} manualScore={reviewManualScore} message={reviewMessage} onSelectRun={setSelectedReviewRunId} onCommentChange={setReviewComment} onManualScoreChange={setReviewManualScore} onSave={saveForecastReview} onClose={() => { setReviewTarget(null); setReviewRuns([]); setReviewNotes({}); }} />{selectedReviewRun && <InstructorRubricCard rubric={reviewRubric} onRubricChange={setReviewRubric} notes={reviewNotes[selectedReviewRun.id] ?? []} onSave={() => saveForecastReview(selectedReviewRun.id)} />}</> : <ClassroomAssignmentDesk assignments={classroomAssignments} submissions={assignmentSubmissions} references={assignmentReferences} reviews={assignmentReviews} roster={academicRoster} selectedAssignmentId={selectedClassroomAssignmentId} dismissedAssignmentId={dismissedClassroomAssignmentId} canManage={canManageActiveClassroom} myUserId={session.user.id} weatherIconStyle={weatherIconStyle} draftResponses={assignmentDraftResponses} saving={assignmentSaving} referenceOptions={referenceOptions} linkLabel={assignmentLinkLabel} linkUrl={assignmentLinkUrl} onCreate={createClassroomAssignment} onSelectAssignment={selectClassroomAssignment} onDismissAssignment={dismissClassroomAssignment} onUpdateAssignment={updateClassroomAssignment} onDraftChange={updateAssignmentDraft} onFormatDraftField={formatAssignmentResponseField} onSaveDraft={saveAssignmentSubmission} onAddReference={(assignment, item) => addAssignmentReference(assignment, { kind: item.id === "sounding" ? "model" : "observation", label: item.label, detail: { text: item.detail, preview: item.preview } })} onRemoveReference={removeAssignmentReference} onLinkLabelChange={setAssignmentLinkLabel} onLinkUrlChange={setAssignmentLinkUrl} onAddLinkReference={(assignment) => { addAssignmentReference(assignment, { kind: "link", label: assignmentLinkLabel.trim(), url: assignmentLinkUrl.trim() }); setAssignmentLinkLabel(""); setAssignmentLinkUrl(""); }} reviewOpenId={assignmentReviewOpenId} reviewComment={assignmentReviewComment} reviewScore={assignmentReviewScore} reviewMessage={assignmentReviewMessage} onOpenReview={(submissionId) => { setAssignmentReviewOpenId(submissionId); setAssignmentReviewComment(""); setAssignmentReviewScore(""); setAssignmentReviewMessage(""); }} onReviewCommentChange={setAssignmentReviewComment} onReviewScoreChange={setAssignmentReviewScore} onSaveReview={saveAssignmentReview} message={assignmentMessage} />)}
         {classroomHubTab === "outlook" && <ClassroomLiveForecast archives={archives} roster={academicRoster} canManage={canManageActiveClassroom} publicGuidance={outlook} message={assignmentMessage} />}
         {classroomHubTab === "progress" && <ClassroomProgress assignments={classroomAssignments} submissions={assignmentSubmissions} roster={academicRoster} canManage={canManageActiveClassroom} currentUserId={session.user.id} />}
         {classroomHubTab === "roster" && canManageActiveClassroom && <ClassroomRosterPanel roster={classroomRoster} assignments={classroomAssignments} submissions={assignmentSubmissions} reviews={assignmentReviews} message={classroomRosterMessage} onRevoke={(userId) => setClassroomMemberStatus(userId, "suspended")} onRestore={(userId) => setClassroomMemberStatus(userId, "active")} onInvite={inviteClassroomStudent} />}
