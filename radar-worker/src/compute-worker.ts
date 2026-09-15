@@ -16,7 +16,7 @@ import { getVolumeCached, extractLowestElevation } from "./level2.js";
 import { computeReflectivityGrid, computeVelocityGrid, buildCandidateCells, boundsOf, mergeReflectivityCells, makeSharedMergeGrid, sharedMergeGridToPoints } from "./project.js";
 import { renderMrmsGridToDataUrl, renderVelocityGridToDataUrl } from "./render.js";
 import { GRID_STEP_DEG, MAX_RANGE_KM } from "./radar-constants.js";
-import { renderUpperAir500mb } from "./upper-air.js";
+import { renderUpperAirLevel, type UpperAirLevel } from "./upper-air.js";
 
 type SingleRequest = { id: number; kind: "single"; station: string; moment: "reflectivity" | "velocity" };
 type MosaicRequest = { id: number; kind: "mosaic"; stations: string[] };
@@ -24,7 +24,7 @@ type MosaicRequest = { id: number; kind: "mosaic"; stations: string[] };
 // worker has never depended on before — the same real reason radar decode runs in this isolated
 // child process (a hang or crash here must not take /health down with it) applies just as much
 // here, even though the real measured footprint (~270MB, ~2-3s) is far lighter than a radar job.
-type UpperAirRequest = { id: number; kind: "upper-air" };
+type UpperAirRequest = { id: number; kind: "upper-air"; level: string };
 type WorkerRequest = SingleRequest | MosaicRequest | UpperAirRequest;
 type WorkerResponse = { id: number; ok: true; body: unknown } | { id: number; ok: false; error: string };
 
@@ -278,7 +278,7 @@ process.on("message", (request: WorkerRequest) => {
       ? computeSingle(request.station, request.moment)
       : request.kind === "mosaic"
         ? computeMosaic(request.stations)
-        : renderUpperAir500mb();
+        : renderUpperAirLevel(request.level as UpperAirLevel);
   job
     .then((body) => respond({ id: request.id, ok: true, body }))
     .catch((error: unknown) => respond({ id: request.id, ok: false, error: error instanceof Error ? error.message : String(error) }));

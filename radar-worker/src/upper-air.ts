@@ -1,10 +1,23 @@
-// Real GFS model upper-air maps — 500mb heights + vorticity to start (the classic "troughs and
-// ridges" chart), same visual idiom as the radar (contour lines + a colored fill), rendered
-// in-house from real public GRIB2 data rather than an externally-hosted static image. This is a
-// DIFFERENT product from the existing /api/upper-air (SPC's own twice-daily OBSERVED analysis
-// charts, station plots + hand-analysis, not model output) — that stays as-is; this is the new
-// "Model" mode alongside it, matching the same "real map, radar's visual style" upgrade the fronts
-// tab got.
+// Real GFS model upper-air maps — same visual idiom as the radar (height contour lines + one
+// colored fill field), rendered in-house from real public GRIB2 data rather than an externally-
+// hosted static image. This is a DIFFERENT product from the existing /api/upper-air (SPC's own
+// twice-daily OBSERVED analysis charts, station plots + hand-analysis, not model output) — that
+// stays as-is; this is the "Model" mode alongside it, matching the same "real map, radar's visual
+// style" upgrade the fronts tab got.
+//
+// Extended 2026-09-14 from 500mb-only to all 6 levels the Observed tab already offers (250/300/
+// 500/700/850/925mb) -- Andrew's own critique: "the upper air map should be taking over the nws
+// images... show the different levels too. Ours is too messy." Height contours are drawn at every
+// level (the one parameter real synoptic analysis always plots); the ONE additional filled field
+// varies by level, matching the real convention Observed's own level captions already promised but
+// Model never delivered on:
+//   250/300mb -> wind speed isotachs (jet stream/upper-level wind)
+//   500mb     -> relative vorticity (troughs & ridges, already built)
+//   700mb     -> relative humidity (mid-level moisture)
+//   850mb     -> temperature (low-level thermal ridges/troughs)
+//   925mb     -> wind speed isotachs (near-surface flow)
+// All 5 needed GRIB2 variables (HGT/TMP/RH/UGRD/VGRD) confirmed present at every one of these 6
+// levels via a live .idx fetch before writing this, not assumed from the 500mb-only precedent.
 //
 // Technical foundation verified with real live data before writing any of this (2026-09-08):
 // @mattnucc/gribberish (a real, actively-maintained Rust/NAPI GRIB2 reader — same native-addon
@@ -283,41 +296,151 @@ function vorticityColor(relativeVorticitySiUnits: number): [number, number, numb
   return [150, 30, 130, 220];
 }
 
-const CONTOUR_INTERVAL_M = 60; // the real standard interval for 500mb height charts
+// Isotachs, real convention (WeatherBell/Pivotal-style upper-air wind charts): banded every 20kt
+// starting at 50kt, the conventional jet-level "notable wind" threshold. GFS wind is m/s; converted
+// to knots since isotachs are conventionally read and labeled in knots on a real chart, not m/s.
+function jetWindSpeedColor(speedMs: number): [number, number, number, number] | null {
+  const kt = speedMs * 1.94384;
+  if (kt < 50) return null;
+  if (kt < 70) return [175, 215, 235, 150];
+  if (kt < 90) return [235, 225, 120, 170];
+  if (kt < 110) return [240, 165, 80, 185];
+  if (kt < 130) return [220, 90, 70, 200];
+  return [165, 60, 165, 220];
+}
 
-export async function renderUpperAir500mb(widthPx = 900, heightPx: number | null = null): Promise<{ time: string; bounds: MrmsBounds; imageDataUrl: string }> {
+// Real bug found live before shipping (2026-09-14): reusing the jet-level 50kt threshold at 925mb
+// rendered a completely blank fill -- near-surface wind almost never reaches jet-level speeds even
+// in a strong low-level jet, so a real "near-surface flow" chart needs a much lower band, banded
+// every 10kt starting at 20kt (a genuinely notable sustained near-surface wind).
+function surfaceWindSpeedColor(speedMs: number): [number, number, number, number] | null {
+  const kt = speedMs * 1.94384;
+  if (kt < 20) return null;
+  if (kt < 30) return [175, 215, 235, 150];
+  if (kt < 40) return [235, 225, 120, 170];
+  if (kt < 50) return [240, 165, 80, 185];
+  if (kt < 60) return [220, 90, 70, 200];
+  return [165, 60, 165, 220];
+}
+
+// Relative humidity, real convention (the classic 700mb moisture chart): dry air below 40% left
+// uncolored, moist air banded in green shades up to a saturated dark green -- the same "highlight
+// the feature, leave the background alone" idiom as the vorticity/wind fills above.
+function relativeHumidityColor(rhPercent: number): [number, number, number, number] | null {
+  if (rhPercent < 40) return null;
+  if (rhPercent < 60) return [222, 236, 202, 120];
+  if (rhPercent < 70) return [182, 221, 162, 150];
+  if (rhPercent < 80) return [132, 201, 122, 170];
+  if (rhPercent < 90) return [82, 171, 92, 190];
+  return [42, 132, 62, 210];
+}
+
+// Temperature, real convention (the classic 850mb thermal chart): blue (cold) through green/yellow
+// into red/orange (warm), banded every 10C. Converted from GFS's native Kelvin to Celsius, the
+// real unit these charts are read in.
+function temperatureColor(tempK: number): [number, number, number, number] | null {
+  const c = tempK - 273.15;
+  if (c < -20) return [90, 50, 165, 200];
+  if (c < -10) return [65, 100, 205, 190];
+  if (c < 0) return [95, 155, 230, 175];
+  if (c < 10) return [150, 205, 225, 150];
+  if (c < 20) return [250, 225, 140, 155];
+  if (c < 25) return [248, 175, 90, 175];
+  if (c < 30) return [235, 120, 70, 195];
+  return [205, 60, 60, 215];
+}
+
+export const UPPER_AIR_LEVELS = ["250", "300", "500", "700", "850", "925"] as const;
+export type UpperAirLevel = (typeof UPPER_AIR_LEVELS)[number];
+type PrimaryField = "vorticity" | "jetWind" | "relativeHumidity" | "temperature" | "surfaceWind";
+
+const LEVEL_FIELD: Record<UpperAirLevel, PrimaryField> = {
+  "250": "jetWind",
+  "300": "jetWind",
+  "500": "vorticity",
+  "700": "relativeHumidity",
+  "850": "temperature",
+  "925": "surfaceWind",
+};
+
+const LEVEL_TITLE: Record<UpperAirLevel, string> = {
+  "250": "250mb Heights & Isotachs",
+  "300": "300mb Heights & Isotachs",
+  "500": "500mb Heights & Relative Vorticity",
+  "700": "700mb Heights & Relative Humidity",
+  "850": "850mb Heights & Temperature",
+  "925": "925mb Heights & Isotachs",
+};
+
+// Real standard contour intervals, scaled to each level's own real height range -- 500mb's 60m is
+// the well-established classic; upper levels (250/300mb, heights ~9-11km) use a coarser 120m so the
+// map isn't packed with dozens of near-parallel lines, lower levels (700/850/925mb, heights under
+// ~3.2km) use a finer 30m since the real height gradients there are much shallower in absolute terms.
+const CONTOUR_INTERVAL_BY_LEVEL: Record<UpperAirLevel, number> = {
+  "250": 120,
+  "300": 120,
+  "500": 60,
+  "700": 30,
+  "850": 30,
+  "925": 30,
+};
+
+export async function renderUpperAirLevel(level: UpperAirLevel, widthPx = 900, heightPx: number | null = null): Promise<{ time: string; bounds: MrmsBounds; imageDataUrl: string; level: UpperAirLevel; title: string }> {
+  const gribLevel = `${level} mb`;
   const { runDate, runHour, fileSize } = await findLatestAvailableRun();
-  const [hgtMsg, absvMsg] = await Promise.all([
-    fetchGfsMessage(runDate, runHour, fileSize, "HGT", "500 mb"),
-    fetchGfsMessage(runDate, runHour, fileSize, "ABSV", "500 mb"),
-  ]);
+  const field = LEVEL_FIELD[level];
 
+  const hgtMsg = await fetchGfsMessage(runDate, runHour, fileSize, "HGT", gribLevel);
   const { latitude, longitude } = hgtMsg.latlngAdjusted(true, true);
-  const hgtData = hgtMsg.dataAdjusted(true, true);
-  const absvData = absvMsg.dataAdjusted(true, true);
   const { cols } = hgtMsg.gridShape;
-  const hgtGrid: SourceGrid = { data: hgtData, lat: latitude, lon: longitude, rows: latitude.length, cols };
-  const absvGrid: SourceGrid = { data: absvData, lat: latitude, lon: longitude, rows: latitude.length, cols };
+  const toGrid = (data: Float64Array | Float32Array | number[]): SourceGrid => ({ data, lat: latitude, lon: longitude, rows: latitude.length, cols });
+  const hgtGrid = toGrid(hgtMsg.dataAdjusted(true, true));
 
   // CONUS-focused bounds, matching the region every other tab (radar, fronts) defaults to.
   const bounds: MrmsBounds = { minLatitude: 20, maxLatitude: 55, minLongitude: -130, maxLongitude: -60 };
   const height = heightPx ?? Math.round((widthPx * (latToMercatorY(bounds.maxLatitude) - latToMercatorY(bounds.minLatitude))) / (((bounds.maxLongitude - bounds.minLongitude) * Math.PI) / 180));
-
   const hgtOut = resampleToMercator(hgtGrid, bounds, widthPx, height);
-  const absoluteVorticityOut = resampleToMercator(absvGrid, bounds, widthPx, height);
-  const absvOut = absoluteToRelativeVorticity(absoluteVorticityOut, bounds, widthPx, height);
+
+  // The ONE additional field highlighted per level -- see LEVEL_FIELD's own comment above for why
+  // each level gets its real, conventional field rather than every level repeating 500mb's own.
+  let fillOut: Float32Array;
+  let colorForValue: (value: number) => [number, number, number, number] | null;
+  if (field === "vorticity") {
+    const absvMsg = await fetchGfsMessage(runDate, runHour, fileSize, "ABSV", gribLevel);
+    const absoluteOut = resampleToMercator(toGrid(absvMsg.dataAdjusted(true, true)), bounds, widthPx, height);
+    fillOut = absoluteToRelativeVorticity(absoluteOut, bounds, widthPx, height);
+    colorForValue = vorticityColor;
+  } else if (field === "jetWind" || field === "surfaceWind") {
+    const [uMsg, vMsg] = await Promise.all([
+      fetchGfsMessage(runDate, runHour, fileSize, "UGRD", gribLevel),
+      fetchGfsMessage(runDate, runHour, fileSize, "VGRD", gribLevel),
+    ]);
+    const uOut = resampleToMercator(toGrid(uMsg.dataAdjusted(true, true)), bounds, widthPx, height);
+    const vOut = resampleToMercator(toGrid(vMsg.dataAdjusted(true, true)), bounds, widthPx, height);
+    fillOut = new Float32Array(uOut.length);
+    for (let i = 0; i < uOut.length; i++) fillOut[i] = Math.hypot(uOut[i], vOut[i]);
+    colorForValue = field === "jetWind" ? jetWindSpeedColor : surfaceWindSpeedColor;
+  } else if (field === "relativeHumidity") {
+    const rhMsg = await fetchGfsMessage(runDate, runHour, fileSize, "RH", gribLevel);
+    fillOut = resampleToMercator(toGrid(rhMsg.dataAdjusted(true, true)), bounds, widthPx, height);
+    colorForValue = relativeHumidityColor;
+  } else {
+    const tmpMsg = await fetchGfsMessage(runDate, runHour, fileSize, "TMP", gribLevel);
+    fillOut = resampleToMercator(toGrid(tmpMsg.dataAdjusted(true, true)), bounds, widthPx, height);
+    colorForValue = temperatureColor;
+  }
 
   const canvas = createCanvas(widthPx, height);
   const ctx = canvas.getContext("2d");
 
-  // Vorticity fill first, blurred slightly the same way render.ts softens the radar's own weak
-  // signal — raw per-pixel model output reads as noisy speckle otherwise (confirmed directly
-  // against the real, unblurred prototype render).
+  // Field fill first, blurred slightly the same way render.ts softens the radar's own weak signal —
+  // raw per-pixel model output reads as noisy speckle otherwise (confirmed directly against the
+  // real, unblurred prototype render).
   const fillCanvas = createCanvas(widthPx, height);
   const fillCtx = fillCanvas.getContext("2d");
   const imageData = fillCtx.createImageData(widthPx, height);
-  for (let i = 0; i < absvOut.length; i++) {
-    const color = vorticityColor(absvOut[i]);
+  for (let i = 0; i < fillOut.length; i++) {
+    const color = colorForValue(fillOut[i]);
     if (!color) continue;
     imageData.data[i * 4] = color[0];
     imageData.data[i * 4 + 1] = color[1];
@@ -325,16 +448,32 @@ export async function renderUpperAir500mb(widthPx = 900, heightPx: number | null
     imageData.data[i * 4 + 3] = color[3];
   }
   fillCtx.putImageData(imageData, 0, 0);
-  ctx.filter = "blur(1.5px)";
+  // Real defect found live (2026-09-14): vorticity is a spatial DERIVATIVE of the wind field, so it
+  // carries real grid-scale noise the other fields (a direct measurement-like quantity: RH, temp,
+  // wind speed itself) don't have nearly as much of -- 1.5px was tuned against wind/RH/temp fills
+  // and left vorticity looking like scattered speckle rather than the smooth bands a real chart
+  // shows. Only vorticity gets the heavier blur; the other three fields already rendered cleanly at
+  // 1.5px and a heavier blur on them would just smear away real, meaningful gradient detail.
+  ctx.filter = field === "vorticity" ? "blur(4px)" : "blur(1.5px)";
   ctx.drawImage(fillCanvas, 0, 0);
   ctx.filter = "none";
 
-  // Height contour lines, the real standard 60m interval, labeled in decameters (the conventional
-  // unit on a real 500mb chart, e.g. "564" for 5640m) at each chained line's own midpoint.
+  // Height contour lines, this level's own real standard interval, labeled in decameters (the
+  // conventional unit on a real chart, e.g. "564" for 5640m) at each chained line's own midpoint.
+  let contourInterval = CONTOUR_INTERVAL_BY_LEVEL[level];
   let hgtMin = Infinity, hgtMax = -Infinity;
   for (const v of hgtOut) { if (v < hgtMin) hgtMin = v; if (v > hgtMax) hgtMax = v; }
+  // Real defect found live (2026-09-14): a genuinely steep real height gradient (e.g. a deep 700mb
+  // low) packed so many standard-interval contour lines into one small region that they visually
+  // merged into a solid black blob -- confirmed against a real render, not a hypothetical. Rather
+  // than hand-picking a coarser fixed interval per level (which would lose real detail on an
+  // ordinary day), doubling the interval only when the actual value range on THIS run would need
+  // more than a reasonable number of lines keeps normal days at the standard interval and only
+  // backs off when a real run's gradient actually calls for it.
+  const MAX_CONTOUR_LINES = 24;
+  while ((hgtMax - hgtMin) / contourInterval > MAX_CONTOUR_LINES) contourInterval *= 2;
   const levels: number[] = [];
-  for (let level = Math.ceil(hgtMin / CONTOUR_INTERVAL_M) * CONTOUR_INTERVAL_M; level <= hgtMax; level += CONTOUR_INTERVAL_M) levels.push(level);
+  for (let lvl = Math.ceil(hgtMin / contourInterval) * contourInterval; lvl <= hgtMax; lvl += contourInterval) levels.push(lvl);
 
   ctx.strokeStyle = "#1a1a1a";
   ctx.lineWidth = 1.4;
@@ -344,11 +483,11 @@ export async function renderUpperAir500mb(widthPx = 900, heightPx: number | null
   // height gradient, e.g. near a deep trough) placed their labels close enough to overlap into
   // illegible garbled text. Tracks already-placed label centers and skips a new one that would
   // land within LABEL_MIN_SPACING_PX of an existing one, rather than trying to space contour
-  // levels themselves differently (which would need to change the real 60m interval convention).
+  // levels themselves differently (which would need to change the real interval convention).
   const LABEL_MIN_SPACING_PX = 40;
   const placedLabels: [number, number][] = [];
-  for (const level of levels) {
-    const segments = marchingSquaresSegments(hgtOut, widthPx, height, level);
+  for (const lvl of levels) {
+    const segments = marchingSquaresSegments(hgtOut, widthPx, height, lvl);
     if (!segments.length) continue;
     const chains = chainSegments(segments);
     for (const chain of chains) {
@@ -360,7 +499,7 @@ export async function renderUpperAir500mb(widthPx = 900, heightPx: number | null
         const mid = chain[Math.floor(chain.length / 2)];
         const tooClose = placedLabels.some(([lx, ly]) => Math.hypot(lx - mid[0], ly - mid[1]) < LABEL_MIN_SPACING_PX);
         if (!tooClose) {
-          const label = Math.round(level / 10).toString();
+          const label = Math.round(lvl / 10).toString();
           ctx.fillText(label, mid[0] + 4, mid[1] - 4);
           placedLabels.push(mid);
         }
@@ -369,5 +508,5 @@ export async function renderUpperAir500mb(widthPx = 900, heightPx: number | null
   }
 
   const dataUrl = `data:image/png;base64,${canvas.toBuffer("image/png").toString("base64")}`;
-  return { time: hgtMsg.referenceDate.toISOString(), bounds, imageDataUrl: dataUrl };
+  return { time: hgtMsg.referenceDate.toISOString(), bounds, imageDataUrl: dataUrl, level, title: LEVEL_TITLE[level] };
 }

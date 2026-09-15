@@ -23,7 +23,7 @@ const LEVELS = [
 ] as const;
 
 type UpperAirData = { validTime: string | null; levels: Record<string, string> };
-type ModelUpperAirData = { time: string; bounds: { minLatitude: number; maxLatitude: number; minLongitude: number; maxLongitude: number }; imageDataUrl: string };
+type ModelUpperAirData = { time: string; bounds: { minLatitude: number; maxLatitude: number; minLongitude: number; maxLongitude: number }; imageDataUrl: string; title?: string };
 
 const CONUS_BOUNDS: [[number, number], [number, number]] = [
   [24.5, -125.5],
@@ -38,7 +38,7 @@ const cartoKeyParam = cartoApiKey ? `?key=${cartoApiKey}` : "";
 // since it carries real geographic bounds meant to be viewed as a map. Mirrors fronts-map.tsx's
 // own minimal map-setup pattern rather than reusing radar-map.tsx's much larger timeline/station
 // machinery, which this single-frame product has no use for.
-function ModelUpperAirView() {
+function ModelUpperAirView({ level }: { level: string }) {
   const mapElement = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const overlayRef = useRef<any>(null);
@@ -71,7 +71,7 @@ function ModelUpperAirView() {
     if (!leafletLoaded || !mapRef.current || !window.L) return;
     let active = true;
     setStatus("loading");
-    fetch("/api/upper-air-model")
+    fetch(`/api/upper-air-model?level=${encodeURIComponent(level)}`)
       .then(async (response) => {
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || "Model upper-air map unavailable");
@@ -87,7 +87,7 @@ function ModelUpperAirView() {
       })
       .catch(() => { if (active) setStatus("error"); });
     return () => { active = false; };
-  }, [leafletLoaded]);
+  }, [leafletLoaded, level]);
 
   const validLabel = data?.time
     ? new Intl.DateTimeFormat("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: "America/New_York", timeZoneName: "short" }).format(new Date(data.time))
@@ -95,12 +95,12 @@ function ModelUpperAirView() {
 
   return (
     <>
-      <div ref={mapElement} className="live-radar-map fronts-map" aria-label="500mb heights and relative vorticity, GFS model" />
+      <div ref={mapElement} className="live-radar-map fronts-map" aria-label={`${data?.title ?? "Upper-air"} model map`} />
       <div className="fronts-map-footer">
         <small>
-          {status === "loading" && "Loading the 500mb model map…"}
+          {status === "loading" && "Loading the model map…"}
           {status === "error" && "The in-house model map is unavailable right now."}
-          {status === "ready" && `500mb Heights & Relative Vorticity · GFS${validLabel ? ` · valid ${validLabel}` : ""}`}
+          {status === "ready" && `${data?.title ?? "GFS model"}${validLabel ? ` · valid ${validLabel}` : ""}`}
         </small>
       </div>
     </>
@@ -141,20 +141,22 @@ export default function UpperAirMap() {
         <button type="button" className={mode === "model" ? "active" : ""} onClick={() => setMode("model")}>Model</button>
         <button type="button" className={mode === "observed" ? "active" : ""} onClick={() => setMode("observed")}>Observed</button>
       </div>
+      {/* One shared level picker for both modes, not a separate one per mode -- picking a level once
+          and toggling Model/Observed compares the same level against itself, which is the real point
+          of having both. Andrew's own critique of the old Model-only-does-500mb setup was exactly
+          this: the Model side never offered the level choice the Observed side already had. */}
+      <div className="radar-field-picker satellite-channel-picker upper-air-level-picker">
+        {LEVELS.map((entry) => <button type="button" key={entry.value} className={level === entry.value ? "active" : ""} onClick={() => setLevel(entry.value)}>{entry.label}</button>)}
+      </div>
       {mode === "model" ? (
-        <ModelUpperAirView />
+        <ModelUpperAirView level={level} />
       ) : (
-        <>
-          <div className="radar-field-picker satellite-channel-picker upper-air-level-picker">
-            {LEVELS.map((entry) => <button type="button" key={entry.value} className={level === entry.value ? "active" : ""} onClick={() => setLevel(entry.value)}>{entry.label}</button>)}
-          </div>
-          <figure className="upper-air-view">
-            {status === "ready" && data?.levels[level] && <img src={data.levels[level]} alt={`NWS ${activeLevel.label} upper-air observation chart: ${activeLevel.caption}`} />}
-            {status === "loading" && <div className="radar-loading">Loading upper-air charts…</div>}
-            {status === "error" && <div className="radar-loading">Upper-air charts are unavailable right now.</div>}
-            <figcaption>{activeLevel.caption} · NWS Storm Prediction Center{validLabel ? ` · ${validLabel}` : ""}</figcaption>
-          </figure>
-        </>
+        <figure className="upper-air-view">
+          {status === "ready" && data?.levels[level] && <img src={data.levels[level]} alt={`NWS ${activeLevel.label} upper-air observation chart: ${activeLevel.caption}`} />}
+          {status === "loading" && <div className="radar-loading">Loading upper-air charts…</div>}
+          {status === "error" && <div className="radar-loading">Upper-air charts are unavailable right now.</div>}
+          <figcaption>{activeLevel.caption} · NWS Storm Prediction Center{validLabel ? ` · ${validLabel}` : ""}</figcaption>
+        </figure>
       )}
     </>
   );

@@ -239,7 +239,7 @@ const COMPUTE_WORKER_PATH = path.join(__dirname, "compute-worker.js");
 // above that documented worst case.
 const COMPUTE_TIMEOUT_MS = Number(process.env.COMPUTE_TIMEOUT_MS ?? 240_000);
 
-type ComputeWorkerJob = { kind: "single"; station: string; moment: "reflectivity" | "velocity" } | { kind: "mosaic"; stations: string[] } | { kind: "upper-air" };
+type ComputeWorkerJob = { kind: "single"; station: string; moment: "reflectivity" | "velocity" } | { kind: "mosaic"; stations: string[] } | { kind: "upper-air"; level: string };
 type ComputeWorkerRequest = ComputeWorkerJob & { id: number };
 type ComputeWorkerResponse = { id: number; ok: true; body: unknown } | { id: number; ok: false; error: string };
 
@@ -397,8 +397,11 @@ const MOSAIC_CACHE_TTL_MS = 300_000; // matches PAYLOAD_CACHE_TTL_MS — same vo
 // newly-published run reasonably promptly without adding any real load to NOAA's public feed.
 const UPPER_AIR_CACHE_TTL_MS = 1_200_000;
 
-async function handleUpperAir() {
-  const cacheKey = "upper-air:500mb";
+const UPPER_AIR_LEVELS = ["250", "300", "500", "700", "850", "925"] as const;
+type UpperAirLevel = (typeof UPPER_AIR_LEVELS)[number];
+
+async function handleUpperAir(level: UpperAirLevel) {
+  const cacheKey = `upper-air:${level}mb`;
   const hit = cached(cacheKey);
   if (hit) return { status: 200, body: hit, source: "cache" as const };
 
@@ -406,7 +409,7 @@ async function handleUpperAir() {
   if (existing) return existing;
 
   const promise = withComputeSlot(async () => {
-    const payload = await runInComputeWorker({ kind: "upper-air" });
+    const payload = await runInComputeWorker({ kind: "upper-air", level });
     setCache(cacheKey, payload, UPPER_AIR_CACHE_TTL_MS);
     return { status: 200, body: payload, source: "live" as const };
   });
@@ -494,7 +497,9 @@ const server = createServer((request, response) => {
   }
 
   if (url.pathname === "/upper-air") {
-    handleUpperAir()
+    const requestedLevel = url.searchParams.get("level") ?? "500";
+    const level = (UPPER_AIR_LEVELS as readonly string[]).includes(requestedLevel) ? (requestedLevel as UpperAirLevel) : "500";
+    handleUpperAir(level)
       .then((result) => respondJson(result.status, result.body, { "X-Radar-Source": result.source }))
       .catch((error: unknown) => {
         console.error(`[upper-air] request failed:`, error);

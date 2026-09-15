@@ -142,14 +142,14 @@ const UPPER_AIR_COOLDOWN_MS = 60_000;
 let upperAirConsecutiveFailures = 0;
 let upperAirCircuitOpenUntil = 0;
 
-export async function fetchUpperAirFromWorker(): Promise<unknown | null> {
+export async function fetchUpperAirFromWorker(level = "500"): Promise<unknown | null> {
   if (!WORKER_URL) return null;
   if (Date.now() < upperAirCircuitOpenUntil) return null;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), UPPER_AIR_TIMEOUT_MS);
   try {
-    const response = await fetch(`${WORKER_URL}/upper-air`, {
+    const response = await fetch(`${WORKER_URL}/upper-air?level=${encodeURIComponent(level)}`, {
       headers: WORKER_API_KEY ? { "x-worker-key": WORKER_API_KEY } : {},
       signal: controller.signal,
       cache: "no-store",
