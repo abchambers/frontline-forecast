@@ -13,6 +13,33 @@ function textBetween(source: string, tag: string): string | null {
   return match ? match[1].trim() : null;
 }
 
+const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// Real bug found during a scrutiny pass (Andrew, 2026-09-15): the RSS <pubDate> this used to rely on
+// is a real, live SPC feed quirk — every item in a given feed refresh gets stamped with the SAME
+// pubDate (confirmed live: two MDs issued 36 real minutes apart both carried an identical pubDate),
+// so every discussion after the first showed a misleadingly duplicate/wrong issuance time. Fixed by
+// deriving the real per-product issuance instant from the product text itself, which every MD reliably
+// carries in two forms: a human header ("0235 PM CDT Tue Sep 15 2026", used here only for month/year —
+// parsing a 12-hour time + timezone abbreviation correctly would mean building a TZ-abbreviation-to-
+// UTC-offset table for no benefit) and a machine-parseable "Valid DDHHMMZ" window, already real UTC,
+// used for the day/hour/minute instead. Falls back to the RSS pubDate only if a product text doesn't
+// match this shape (defensive — this is SPC's own consistent format across every real MD checked).
+function issuedAtFromMdText(text: string, fallback: string | null): string | null {
+  const validMatch = text.match(/Valid\s+(\d{2})(\d{2})(\d{2})Z/);
+  const dateMatch = text.match(/([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{4})/);
+  if (validMatch && dateMatch) {
+    const [, day, hour, minute] = validMatch;
+    const [, monthAbbr, , year] = dateMatch;
+    const monthIndex = MONTH_ABBR.indexOf(monthAbbr);
+    if (monthIndex !== -1) {
+      const utcMs = Date.UTC(Number(year), monthIndex, Number(day), Number(hour), Number(minute));
+      if (Number.isFinite(utcMs)) return new Date(utcMs).toISOString();
+    }
+  }
+  return fallback;
+}
+
 function parseItems(xml: string): MesoscaleDiscussion[] {
   const items: MesoscaleDiscussion[] = [];
   const itemBlocks = xml.match(/<item>[\s\S]*?<\/item>/g) ?? [];
@@ -25,10 +52,11 @@ function parseItems(xml: string): MesoscaleDiscussion[] {
     const preMatch = description.match(/<pre>([\s\S]*?)<\/pre>/);
     const text = (preMatch ? preMatch[1] : description.replace(/<[^>]+>/g, "")).trim();
     const idMatch = title.match(/(\d+)/);
+    const fallbackIssuedAt = pubDate ? new Date(pubDate).toISOString() : null;
     items.push({
       id: idMatch ? idMatch[1] : link,
       title,
-      issuedAt: pubDate ? new Date(pubDate).toISOString() : null,
+      issuedAt: issuedAtFromMdText(text, fallbackIssuedAt),
       imageUrl: imageMatch ? imageMatch[1] : null,
       text,
       link,
