@@ -68,6 +68,13 @@ export async function GET(request: Request) {
   if (limit.limited) return rateLimitResponse(limit.retryAfterSeconds);
   const location = resolveWeatherDeskLocation(new URL(request.url).searchParams);
   const station = location.observationStation;
+  // Real gap found during a scrutiny pass (2026-09-15): stationBulletin does `text.indexOf(station)`,
+  // and JS's `"".indexOf("")` returns 0 -- an empty/unresolved station (a custom location whose
+  // /api/location-lookup call found no nearby observation station at all) would silently match
+  // whatever record happens to be first in the file and serve a COMPLETELY UNRELATED station's NBM
+  // data as if it were correct, with no error. Fail loud instead, matching this codebase's own "flag
+  // the real gap, don't fabricate" convention used everywhere else (e.g. NBM/sounding text handling).
+  if (!station) return NextResponse.json({ error: "No observation station is available for this location." }, { status: 502 });
 
   const nbh = await fetchNbmProduct("nbh", station);
   if (!nbh) return NextResponse.json({ error: "The latest NBM station bulletin is not available right now." }, { status: 502 });
