@@ -52,15 +52,20 @@ export async function GET(request: Request) {
   let run = initialRun(model, runOffset);
   let response: Response | null = null;
   try {
-    // The archive can lag behind the live model cycle. Fall back by full days,
-    // preserving the requested model-run cadence and reporting the actual run.
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    // The archive can lag behind the live model cycle. Real bug found during a scrutiny pass
+    // (2026-09-15): this used to fall back a full DAY per failed attempt, not one cadence step --
+    // confirmed live that Open-Meteo's single-runs archive had today's 12Z HRRR run available (200)
+    // while today's 18Z wasn't published yet (400), but a day-sized fallback jumped straight past
+    // 12Z/06Z/00Z to YESTERDAY's 18Z, serving data up to 18 hours staler than the freshest already-
+    // available run. Fixed by falling back one cadence step (6h) at a time instead, with enough
+    // attempts to cover a couple of full days of cadence steps as a safety margin.
+    for (let attempt = 0; attempt < 8; attempt += 1) {
       response = await fetch(`https://single-runs-api.open-meteo.com/v1/forecast?${parameters}&run=${encodeURIComponent(runStamp(run))}`, {
         headers: { "User-Agent": "Frontline Forecast weather application" },
         next: { revalidate: 900 },
       });
       if (response.ok) break;
-      run.setUTCDate(run.getUTCDate() - 1);
+      run.setUTCHours(run.getUTCHours() - model.cadenceHours);
     }
     if (!response?.ok) throw new Error(`Open-Meteo archived run is unavailable (${response?.status ?? "network error"})`);
     const data = await response.json() as OpenMeteoProfile;
