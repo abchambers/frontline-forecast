@@ -6,14 +6,25 @@ export type WeatherDeskLocation = {
   timezone: string;
   observationStation: string;
   upperAirStation: string;
+  // The NWS forecast office (WFO/CWA) id, e.g. for /api/afd's product lookup. Real bug found during a
+  // scrutiny pass (2026-09-15): this used to just reuse upperAirStation for this purpose everywhere
+  // ("Peachtree City GA's office and its co-located sounding site are both FFC" -- true for these 4
+  // presets, but a coincidence, not a rule: the ~92-site upper-air network isn't 1:1 with the ~122 real
+  // WFOs). /api/location-lookup already resolves the two separately and correctly (`forecastOffice`
+  // from NWS's own /points `cwa` field vs. `upperAirStation` from nearestUpperAirStation's real
+  // distance search) but the client silently discarded `forecastOffice`, so any custom-searched
+  // location whose true WFO differs from its nearest sounding site got the WRONG office's forecast
+  // discussion (or a hard failure). Kept as its own explicit field even on these 4 presets, rather
+  // than relying on the coincidence, now that a real field exists for it.
+  forecastOffice: string;
   radarSite: string;
 };
 
 export const weatherDeskLocations: WeatherDeskLocation[] = [
-  { id: "athens-ga", name: "Athens, GA", latitude: 33.9519, longitude: -83.3576, timezone: "America/New_York", observationStation: "KAHN", upperAirStation: "FFC", radarSite: "KFFC" },
-  { id: "atlanta-ga", name: "Atlanta, GA", latitude: 33.749, longitude: -84.388, timezone: "America/New_York", observationStation: "KATL", upperAirStation: "FFC", radarSite: "KFFC" },
-  { id: "gainesville-ga", name: "Gainesville, GA", latitude: 34.2979, longitude: -83.8241, timezone: "America/New_York", observationStation: "KGVL", upperAirStation: "FFC", radarSite: "KFFC" },
-  { id: "birmingham-al", name: "Birmingham, AL", latitude: 33.5186, longitude: -86.8104, timezone: "America/Chicago", observationStation: "KBHM", upperAirStation: "BMX", radarSite: "KBMX" },
+  { id: "athens-ga", name: "Athens, GA", latitude: 33.9519, longitude: -83.3576, timezone: "America/New_York", observationStation: "KAHN", upperAirStation: "FFC", forecastOffice: "FFC", radarSite: "KFFC" },
+  { id: "atlanta-ga", name: "Atlanta, GA", latitude: 33.749, longitude: -84.388, timezone: "America/New_York", observationStation: "KATL", upperAirStation: "FFC", forecastOffice: "FFC", radarSite: "KFFC" },
+  { id: "gainesville-ga", name: "Gainesville, GA", latitude: 34.2979, longitude: -83.8241, timezone: "America/New_York", observationStation: "KGVL", upperAirStation: "FFC", forecastOffice: "FFC", radarSite: "KFFC" },
+  { id: "birmingham-al", name: "Birmingham, AL", latitude: 33.5186, longitude: -86.8104, timezone: "America/Chicago", observationStation: "KBHM", upperAirStation: "BMX", forecastOffice: "BMX", radarSite: "KBMX" },
 ];
 
 export const defaultWeatherDeskLocation = weatherDeskLocations[0];
@@ -43,6 +54,9 @@ export function resolveWeatherDeskLocation(params: URLSearchParams): WeatherDesk
       timezone: params.get("tz") || "America/New_York",
       observationStation: (params.get("station") || "").toUpperCase(),
       upperAirStation: (params.get("upperAir") || "").toUpperCase(),
+      // Falls back to upperAirStation only for a request from before this field existed (an old
+      // cached client build, or a hand-built URL) -- new requests always send a real wfo param.
+      forecastOffice: (params.get("wfo") || params.get("upperAir") || "").toUpperCase(),
       radarSite: (params.get("radar") || "").toUpperCase(),
     };
   }

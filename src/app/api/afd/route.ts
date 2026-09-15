@@ -9,9 +9,7 @@ export async function GET(request: Request) {
   const limit = checkRateLimit(request, "afd", 30, 60_000);
   if (limit.limited) return rateLimitResponse(limit.retryAfterSeconds);
   const location = resolveWeatherDeskLocation(new URL(request.url).searchParams);
-  // The upper-air station id doubles as the NWS forecast office (WFO) identifier for these
-  // locations — e.g. Peachtree City GA's office and its co-located sounding site are both "FFC".
-  const wfo = location.upperAirStation;
+  const wfo = location.forecastOffice;
   const headers = { Accept: "application/geo+json", "User-Agent": "Frontline Forecast weather application" };
   try {
     const listing = await fetch(`https://api.weather.gov/products/types/AFD/locations/${wfo}`, { headers, cache: "no-store" });

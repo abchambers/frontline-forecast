@@ -1785,7 +1785,7 @@ export default function Home() {
   // map-picked) location is already fully resolved client-side, so its fields ride along
   // directly instead of each route re-deriving them from a preset id it wouldn't recognize.
   const locationQuery = customLocation
-    ? `lat=${customLocation.latitude}&lon=${customLocation.longitude}&tz=${encodeURIComponent(customLocation.timezone)}&station=${encodeURIComponent(customLocation.observationStation)}&upperAir=${encodeURIComponent(customLocation.upperAirStation)}&radar=${encodeURIComponent(customLocation.radarSite)}&id=${encodeURIComponent(customLocation.id)}&name=${encodeURIComponent(customLocation.name)}`
+    ? `lat=${customLocation.latitude}&lon=${customLocation.longitude}&tz=${encodeURIComponent(customLocation.timezone)}&station=${encodeURIComponent(customLocation.observationStation)}&upperAir=${encodeURIComponent(customLocation.upperAirStation)}&wfo=${encodeURIComponent(customLocation.forecastOffice)}&radar=${encodeURIComponent(customLocation.radarSite)}&id=${encodeURIComponent(customLocation.id)}&name=${encodeURIComponent(customLocation.name)}`
     : `location=${encodeURIComponent(locationId)}`;
   const liveDataStatus = weatherError
     ? { label: "Not synced", tone: "attention" }
@@ -1983,6 +1983,7 @@ export default function Home() {
         timezone: data.timezone,
         observationStation: data.observationStation,
         upperAirStation: data.upperAirStation,
+        forecastOffice: data.forecastOffice,
         radarSite: data.radarSite,
       });
       setCustomStationStatus("");
@@ -3502,7 +3503,7 @@ export default function Home() {
         const response = await fetch(`/api/location-lookup?stationId=${encodeURIComponent(scenario.location_id)}`);
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "Unable to resolve that station.");
-        setCustomLocation({ id: `custom-${scenario.location_id.toLowerCase()}`, name: `${data.city}, ${data.state}`, latitude: data.latitude, longitude: data.longitude, timezone: data.timezone, observationStation: data.observationStation, upperAirStation: data.upperAirStation, radarSite: data.radarSite });
+        setCustomLocation({ id: `custom-${scenario.location_id.toLowerCase()}`, name: `${data.city}, ${data.state}`, latitude: data.latitude, longitude: data.longitude, timezone: data.timezone, observationStation: data.observationStation, upperAirStation: data.upperAirStation, forecastOffice: data.forecastOffice, radarSite: data.radarSite });
       } catch {
         setSaveMessage(`Forecasting for ${scenario.title}, but its location "${scenario.location_id}" could not be resolved — check the location before forecasting.`);
       }
