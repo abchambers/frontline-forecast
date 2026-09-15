@@ -475,10 +475,15 @@ export async function renderUpperAirLevel(level: UpperAirLevel, widthPx = 900, h
   const levels: number[] = [];
   for (let lvl = Math.ceil(hgtMin / contourInterval) * contourInterval; lvl <= hgtMax; lvl += contourInterval) levels.push(lvl);
 
-  ctx.strokeStyle = "#1a1a1a";
-  ctx.lineWidth = 1.4;
+  // Real defect found live (2026-09-15, Andrew's own report): plain near-black contour lines and
+  // labels are invisible against this map's dark basemap -- and the obvious fix, switching to
+  // white, would then be invisible against the light-colored field fill underneath (pale green/
+  // yellow/orange). No single flat color has real contrast against both a dark basemap AND a light
+  // fill at once. Fixed with the standard cartographic halo technique instead: a wide, translucent
+  // WHITE stroke drawn first, then the real dark stroke on top -- reads clearly over either
+  // background, same idea as a text drop-shadow/outline.
+  ctx.lineJoin = "round";
   ctx.font = `bold 13px "${FONT_FAMILY}"`;
-  ctx.fillStyle = "#1a1a1a";
   // Real defect found in the first live render, fixed here: closely-spaced contours (a tight
   // height gradient, e.g. near a deep trough) placed their labels close enough to overlap into
   // illegible garbled text. Tracks already-placed label centers and skips a new one that would
@@ -494,12 +499,21 @@ export async function renderUpperAirLevel(level: UpperAirLevel, widthPx = 900, h
       ctx.beginPath();
       ctx.moveTo(chain[0][0], chain[0][1]);
       for (const point of chain.slice(1)) ctx.lineTo(point[0], point[1]);
+      ctx.strokeStyle = "rgba(255,255,255,0.8)";
+      ctx.lineWidth = 3.2;
+      ctx.stroke();
+      ctx.strokeStyle = "#1a1a1a";
+      ctx.lineWidth = 1.3;
       ctx.stroke();
       if (chain.length >= 4) {
         const mid = chain[Math.floor(chain.length / 2)];
         const tooClose = placedLabels.some(([lx, ly]) => Math.hypot(lx - mid[0], ly - mid[1]) < LABEL_MIN_SPACING_PX);
         if (!tooClose) {
           const label = Math.round(lvl / 10).toString();
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = "rgba(255,255,255,0.85)";
+          ctx.strokeText(label, mid[0] + 4, mid[1] - 4);
+          ctx.fillStyle = "#1a1a1a";
           ctx.fillText(label, mid[0] + 4, mid[1] - 4);
           placedLabels.push(mid);
         }
