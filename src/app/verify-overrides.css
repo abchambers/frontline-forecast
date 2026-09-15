@@ -95,6 +95,16 @@
 .wpc-pressure-value { font:700 .62rem/1 system-ui,sans-serif; margin-top:1px; text-shadow:0 0 3px #0b0f14,0 0 6px #0b0f14; }
 .wpc-pressure-marker-high .wpc-pressure-letter,.wpc-pressure-marker-high .wpc-pressure-value { color:#5b9bf0; }
 .wpc-pressure-marker-low .wpc-pressure-letter,.wpc-pressure-marker-low .wpc-pressure-value { color:#ff6b6b; }
+/* Front-line pip glyphs (triangle = cold, half-dome = warm), drawn at a fixed pixel size instead of
+   a real geographic size (Andrew, 2026-09-15, referencing wpc.ncep.noaa.gov's own chart) -- a
+   geo-sized pip is sub-pixel at the map's normal whole-CONUS view, which is why fronts used to
+   render as bare colored lines with no visible glyphs at all. Each shape is drawn pointing "up"
+   with its flat base at the bottom of its own box, then rotated by an inline transform (the real
+   outward bearing, computed server-side) around that bottom-center point so the base stays pinned
+   to the front line while the glyph swings to face the correct direction. */
+.wpc-pip-triangle,.wpc-pip-semicircle { display:block; transform-origin:50% 100%; }
+.wpc-pip-triangle { width:14px; height:12px; clip-path:polygon(50% 0%,0% 100%,100% 100%); }
+.wpc-pip-semicircle { width:14px; height:7px; border-radius:999px 999px 0 0; }
 
 .record-actions {
   align-items: center;

@@ -24,7 +24,7 @@ export type PipKind = "cold-pip" | "warm-pip";
 export type WpcFeature =
   | { type: "Feature"; properties: { kind: PressureKind; pressureMb: number }; geometry: { type: "Point"; coordinates: [number, number] } }
   | { type: "Feature"; properties: { kind: FrontKind }; geometry: { type: "LineString"; coordinates: [number, number][] } }
-  | { type: "Feature"; properties: { kind: PipKind; frontKind: FrontKind }; geometry: { type: "Polygon"; coordinates: [number, number][][] } };
+  | { type: "Feature"; properties: { kind: PipKind; frontKind: FrontKind; bearingDeg: number }; geometry: { type: "Point"; coordinates: [number, number] } };
 
 export type WpcFrontsResult = {
   validTime: string | null;
@@ -112,7 +112,15 @@ export function parseWpcSurfaceBulletin(raw: string): WpcFrontsResult {
   return { validTime: validMatch?.[1] ?? null, issuedAt: issuedMatch?.[1]?.trim() ?? null, features };
 }
 
-// --- Frontal pip (triangle/semicircle) geometry --------------------------------------------
+// --- Frontal pip (triangle/semicircle) placement ------------------------------------------
+// Pips used to be real geography-sized Polygon rings (a 16km-radius triangle/semicircle drawn at
+// the pip's true location). That looked right zoomed in to street level, but was actually a real
+// rendering bug: at the map's normal whole-CONUS default view, 16km is sub-pixel, so every front
+// rendered as a bare colored line with no glyphs at all -- unlike WPC's own chart, whose triangle/
+// semicircle symbols are small FIXED-PIXEL icons that stay legible at any zoom, tied to a lat/lon
+// point but never scaled by real distance. Fixed by emitting a plain Point feature per pip (kind +
+// frontKind + a bearingDeg the CSS glyph rotates by) and letting wpc-fronts-layer.ts draw it as a
+// fixed-size divIcon instead of a geo-projected polygon.
 // WPC's own bulletin format documents NO convention for which side of a line the pips belong on
 // (confirmed directly against WPC's own "Reading the High-Resolution Coded Surface Bulletin" doc —
 // it specifies point sequences only, nothing about symbol orientation), and the coordinate order
@@ -130,7 +138,6 @@ export function parseWpcSurfaceBulletin(raw: string): WpcFrontsResult {
 // chart.
 const EARTH_RADIUS_KM = 6371;
 const PIP_SPACING_KM = 90;
-const PIP_SIZE_KM = 16;
 
 function toRad(deg: number): number {
   return (deg * Math.PI) / 180;
@@ -153,18 +160,6 @@ function bearingDeg(lat1: number, lon1: number, lat2: number, lon2: number): num
   return (toDeg(Math.atan2(y, x)) + 360) % 360;
 }
 
-// Standard spherical destination-point formula — same tier of approximation already used
-// elsewhere in this app's own radar geometry (radar-worker/src/project.ts's destinationPoint).
-function destinationPoint(lat: number, lon: number, bearing: number, distanceKm: number): [number, number] {
-  const angularDistance = distanceKm / EARTH_RADIUS_KM;
-  const bearingRad = toRad(bearing);
-  const lat1 = toRad(lat);
-  const lon1 = toRad(lon);
-  const lat2 = Math.asin(Math.sin(lat1) * Math.cos(angularDistance) + Math.cos(lat1) * Math.sin(angularDistance) * Math.cos(bearingRad));
-  const lon2 = lon1 + Math.atan2(Math.sin(bearingRad) * Math.sin(angularDistance) * Math.cos(lat1), Math.cos(angularDistance) - Math.sin(lat1) * Math.sin(lat2));
-  return [toDeg(lon2), toDeg(lat2)]; // [lon, lat], GeoJSON order
-}
-
 // Picks whichever perpendicular to the local line tangent points closer to `favorBearing` — e.g.
 // 90 (east) for a cold front's "advances into the warm sector" default, 0 (north) for a warm
 // front's "advances poleward" default.
@@ -173,25 +168,6 @@ function outwardBearing(tangentBearing: number, favorBearing: number): number {
   const right = (tangentBearing + 270) % 360;
   const angularDiff = (a: number, b: number) => Math.min(Math.abs(a - b), 360 - Math.abs(a - b));
   return angularDiff(left, favorBearing) <= angularDiff(right, favorBearing) ? left : right;
-}
-
-function trianglePip(lat: number, lon: number, tangentBearing: number, favorBearing: number): [number, number][] {
-  const outward = outwardBearing(tangentBearing, favorBearing);
-  const [baseLon1, baseLat1] = destinationPoint(lat, lon, (tangentBearing + 180) % 360, PIP_SIZE_KM * 0.6);
-  const [baseLon2, baseLat2] = destinationPoint(lat, lon, tangentBearing, PIP_SIZE_KM * 0.6);
-  const apex = destinationPoint(lat, lon, outward, PIP_SIZE_KM);
-  return [[baseLon1, baseLat1], apex, [baseLon2, baseLat2], [baseLon1, baseLat1]];
-}
-
-function semicirclePip(lat: number, lon: number, tangentBearing: number, favorBearing: number): [number, number][] {
-  const outward = outwardBearing(tangentBearing, favorBearing);
-  const steps = 8;
-  const arc: [number, number][] = [];
-  for (let i = 0; i <= steps; i += 1) {
-    const angle = outward - 90 + (180 * i) / steps;
-    arc.push(destinationPoint(lat, lon, angle, PIP_SIZE_KM));
-  }
-  return [...arc, arc[0]];
 }
 
 // Walks a front's real geometry at a fixed real-world spacing (matching how a printed chart spaces
@@ -226,22 +202,27 @@ function generateFrontPips(kind: FrontKind, coordinates: [number, number][]): Wp
     const lon = segStart.lon + (segEnd.lon - segStart.lon) * t;
     const tangent = bearingDeg(segStart.lat, segStart.lon, segEnd.lat, segEnd.lon);
 
+    let pipKind: PipKind;
+    let bearingFavor: number;
     if (kind === "stationary") {
       // Real convention: alternating cold/warm pips on their OWN correct (opposite) sides, not both
       // symbols at the same point — see fntcodes2.shtml's own description of a stationary front.
-      const pipKind: PipKind = n % 2 === 0 ? "cold-pip" : "warm-pip";
-      const ring = pipKind === "cold-pip" ? trianglePip(lat, lon, tangent, 90) : semicirclePip(lat, lon, tangent, 0);
-      pips.push({ type: "Feature", properties: { kind: pipKind, frontKind: kind }, geometry: { type: "Polygon", coordinates: [ring] } });
+      pipKind = n % 2 === 0 ? "cold-pip" : "warm-pip";
+      bearingFavor = pipKind === "cold-pip" ? 90 : 0;
     } else if (kind === "occluded") {
       // Real convention: alternating triangle/semicircle on the SAME side of the line.
-      const pipKind: PipKind = n % 2 === 0 ? "cold-pip" : "warm-pip";
-      const ring = pipKind === "cold-pip" ? trianglePip(lat, lon, tangent, favorBearing) : semicirclePip(lat, lon, tangent, favorBearing);
-      pips.push({ type: "Feature", properties: { kind: pipKind, frontKind: kind }, geometry: { type: "Polygon", coordinates: [ring] } });
+      pipKind = n % 2 === 0 ? "cold-pip" : "warm-pip";
+      bearingFavor = favorBearing;
     } else {
-      const pipKind: PipKind = kind === "warm" ? "warm-pip" : "cold-pip";
-      const ring = pipKind === "cold-pip" ? trianglePip(lat, lon, tangent, favorBearing) : semicirclePip(lat, lon, tangent, favorBearing);
-      pips.push({ type: "Feature", properties: { kind: pipKind, frontKind: kind }, geometry: { type: "Polygon", coordinates: [ring] } });
+      pipKind = kind === "warm" ? "warm-pip" : "cold-pip";
+      bearingFavor = favorBearing;
     }
+    const bearingDegOutward = outwardBearing(tangent, bearingFavor);
+    pips.push({
+      type: "Feature",
+      properties: { kind: pipKind, frontKind: kind, bearingDeg: bearingDegOutward },
+      geometry: { type: "Point", coordinates: [lon, lat] },
+    });
   }
   return pips;
 }

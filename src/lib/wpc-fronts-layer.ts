@@ -4,13 +4,15 @@
 // radar-map.tsx once fronts became their own tab instead of a radar overlay — see that commit for
 // why.
 //
-// Real triangle/semicircle glyphs (2026-09-08), not just colored/dashed lines — the pip polygons
-// themselves are generated server-side (wpc-fronts.ts's generateFrontPips, real geography-based
-// geometry) and arrive as ordinary Polygon features in the same GeoJSON; this file only needs to
-// give them the right fill color. A stationary front's own line no longer needs a distinct dash
-// pattern to read as "different" now that its alternating blue/red pips do that job the traditional
-// way — kept subtle anyway since two real fronts overlapping (a stationary front re-analyzed as a
-// front-generating boundary) is a real, if uncommon, occurrence.
+// Real triangle/semicircle glyphs (2026-09-08, fixed 2026-09-15 to render at a constant pixel size
+// instead of true geography) — the pip points themselves are placed server-side (wpc-fronts.ts's
+// generateFrontPips, real geography-based spacing/orientation) and arrive as Point features with a
+// kind + bearingDeg in the same GeoJSON; this file draws each one as a small rotated CSS glyph via
+// pointToLayer, matching how WPC's own chart keeps its symbols legible at any zoom instead of
+// shrinking to sub-pixel at the map's normal whole-CONUS view. A stationary front's own line no
+// longer needs a distinct dash pattern to read as "different" now that its alternating blue/red
+// pips do that job the traditional way — kept subtle anyway since two real fronts overlapping (a
+// stationary front re-analyzed as a front-generating boundary) is a real, if uncommon, occurrence.
 export const FRONT_LINE_STYLE: Record<string, { color: string; weight: number; dashArray?: string }> = {
   cold: { color: "#2f6fed", weight: 2.5 },
   warm: { color: "#e0393e", weight: 2.5 },
@@ -37,30 +39,51 @@ export const FRONT_LABEL: Record<string, string> = {
   trough: "Surface trough",
 };
 
+const PIP_KINDS = new Set(["cold-pip", "warm-pip"]);
+
 export function createFrontsGeoJsonOptions(L: any) {
   return {
     style: (feature: any) => {
-      if (feature?.geometry?.type === "Polygon") {
-        const color = pipFillColor(feature?.properties?.frontKind, feature?.properties?.kind);
-        return { color, weight: 0, fillColor: color, fillOpacity: 1 };
-      }
       return FRONT_LINE_STYLE[feature?.properties?.kind] ?? { color: "#526274", weight: 2 };
     },
     pointToLayer: (feature: any, latlng: any) => {
-      const kind = feature?.properties?.kind === "high" ? "high" : "low";
+      const kind = feature?.properties?.kind;
+      if (PIP_KINDS.has(kind)) {
+        const color = pipFillColor(feature?.properties?.frontKind, kind);
+        const bearingDeg = feature?.properties?.bearingDeg ?? 0;
+        const isTriangle = kind === "cold-pip";
+        const shapeClass = isTriangle ? "wpc-pip-triangle" : "wpc-pip-semicircle";
+        // Glyph is drawn pointing "up" (north, bearing 0) with its flat edge at the bottom, then
+        // rotated by the real outward bearing — CSS rotate() is already clockwise-from-top, the same
+        // convention as a compass bearing, so no angle conversion is needed. transform-origin sits at
+        // the bottom-center of the box (see CSS) so the anchor point stays fixed on the front line
+        // while the glyph swings around it.
+        const iconSize: [number, number] = isTriangle ? [14, 12] : [14, 7];
+        const iconAnchor: [number, number] = isTriangle ? [7, 12] : [7, 7];
+        return L.marker(latlng, {
+          icon: L.divIcon({
+            className: "wpc-pip",
+            html: `<span class="${shapeClass}" style="background:${color};transform:rotate(${bearingDeg}deg)"></span>`,
+            iconSize,
+            iconAnchor,
+          }),
+          interactive: false,
+        });
+      }
+      const pressureKind = kind === "high" ? "high" : "low";
       const pressureMb = feature?.properties?.pressureMb;
       return L.marker(latlng, {
         icon: L.divIcon({
-          className: `wpc-pressure-marker wpc-pressure-marker-${kind}`,
-          html: `<span class="wpc-pressure-letter">${kind === "high" ? "H" : "L"}</span><span class="wpc-pressure-value">${pressureMb ?? ""}</span>`,
+          className: `wpc-pressure-marker wpc-pressure-marker-${pressureKind}`,
+          html: `<span class="wpc-pressure-letter">${pressureKind === "high" ? "H" : "L"}</span><span class="wpc-pressure-value">${pressureMb ?? ""}</span>`,
           iconSize: [30, 34],
           iconAnchor: [15, 17],
         }),
       });
     },
     onEachFeature: (feature: any, layer: any) => {
-      if (feature?.geometry?.type === "Polygon") return; // pips are purely decorative — the parent line already carries the tooltip
       const kind = feature?.properties?.kind;
+      if (PIP_KINDS.has(kind)) return; // pips are purely decorative — the parent line already carries the tooltip
       if (kind === "high" || kind === "low") {
         layer.bindTooltip(`${kind === "high" ? "High" : "Low"} pressure${feature?.properties?.pressureMb ? ` · ${feature.properties.pressureMb}mb` : ""}`, { direction: "top" });
       } else {
