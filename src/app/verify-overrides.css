@@ -298,7 +298,15 @@
    horizontal-scroll treatment under the 700px mobile breakpoint below, so at
    any width between "fits everything" and 700px the extra tabs just ran off
    the edge of the screen with no way to reach them. Scroll at every width. */
-.data-desk .tabs { flex-wrap:nowrap; gap:5px; overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:thin; }
+/* Real bug, long-standing (Andrew, 2026-09-15): a selected or hovered tab's top border/shadow got
+   clipped by this row's own top edge. Root cause: setting overflow-x without also setting
+   overflow-y makes overflow-y compute to auto too, not visible (a real, if obscure, part of the CSS
+   spec) -- so this row clips vertically even though only horizontal scrolling was ever intended.
+   Combined with zero top padding and .tabs button:hover's own translateY(-1px) lift, the button's
+   top border had nowhere to go but under the clip. Fixed with real top padding, not a global
+   overflow:visible override that would have broken the actual horizontal scroll clipping this rule
+   exists for in the first place. */
+.data-desk .tabs { flex-wrap:nowrap; gap:5px; overflow-x:auto; padding-top:5px; -webkit-overflow-scrolling:touch; scrollbar-width:thin; }
 .data-desk .tabs button { flex:0 0 auto; font-size:.83rem; padding:7px 9px; white-space:nowrap; }
 
 /* Mobile keeps controls compact and horizontally discoverable instead of
