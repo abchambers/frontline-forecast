@@ -702,20 +702,36 @@ function openMeteoWeatherLabel(code: number | null) {
   return "Clear";
 }
 
-function openMeteoHour(time: string) {
-  return new Intl.DateTimeFormat("en-US", { hour: "numeric", timeZone: "America/New_York" }).format(new Date(`${time}:00`));
-}
-
+// Real bug found during a data-accuracy scrutiny pass (Andrew, 2026-09-15): open-meteo/ensembles/
+// model-sounding all request Open-Meteo with `timezone: location.timezone`, so every `.time` string
+// they return (e.g. "2026-09-15T14:00") is ALREADY the target location's own local wall-clock time —
+// not UTC, and not the viewer's own time either. This used to get parsed with a bare `new Date(...)`
+// (no offset), which JS interprets as the VIEWER's OWN browser-local time, then re-displayed in a
+// hardcoded "America/New_York" -- two compounding wrong conversions whose net error depended on the
+// viewer's own clock. Correct handling needs no zone conversion at all: treat the string as already
+// being the right wall-clock numbers and echo them verbatim by parsing+formatting both as UTC (the
+// standard trick for a naive local string), which is a real, live-reachable bug for any non-Eastern
+// location -- confirmed live against Birmingham, AL (a built-in Central-time preset).
 function modelTimestamp(time: string) {
-  return new Intl.DateTimeFormat("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(`${time}:00`));
+  return new Intl.DateTimeFormat("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: "UTC" }).format(new Date(`${time}:00Z`));
 }
 
-function nearestModelProfileIndex(profiles: ModelSounding["profiles"]) {
+// "Now" also has to go through the same wall-clock-as-if-UTC trick as the profile times themselves
+// (see modelTimestamp's comment above) — comparing a real UTC `Date.now()` against a naive local
+// string would be off by exactly the location's UTC offset, silently picking the wrong "current"
+// profile for anywhere that isn't coincidentally aligned with UTC.
+function nowAsLocationWallClock(timezone: string): number {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date());
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "00";
+  return new Date(`${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}:00Z`).getTime();
+}
+
+function nearestModelProfileIndex(profiles: ModelSounding["profiles"], timezone: string) {
   if (!profiles.length) return 0;
-  const now = Date.now();
+  const now = nowAsLocationWallClock(timezone);
   return profiles.reduce((nearestIndex, profile, index) => {
-    const nearestDistance = Math.abs(new Date(profiles[nearestIndex].time).getTime() - now);
-    const candidateDistance = Math.abs(new Date(profile.time).getTime() - now);
+    const nearestDistance = Math.abs(new Date(`${profiles[nearestIndex].time}:00Z`).getTime() - now);
+    const candidateDistance = Math.abs(new Date(`${profile.time}:00Z`).getTime() - now);
     return candidateDistance < nearestDistance ? index : nearestIndex;
   }, 0);
 }
@@ -1777,7 +1793,7 @@ export default function Home() {
       ? { label: "Syncing", tone: "loading" }
       : { label: "Live", tone: "healthy" };
   const liveDataTimestamp = weatherSyncedAt
-    ? new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(weatherSyncedAt)
+    ? new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: selectedLocation.timezone }).format(weatherSyncedAt)
     : null;
   const hasControlAccess = role === "admin" || role === "owner";
   const hasSchoolMembership = workspaceContexts.some((workspace) => workspace.kind === "classroom" || (workspace.kind === "organization" && workspace.detail === "school workspace"));
@@ -2905,7 +2921,7 @@ export default function Home() {
           setModelSounding(sounding);
           // Start on the nearest valid model hour, not the beginning of the
           // archived response (which can be yesterday's data).
-          setSoundingProfileIndex(nearestModelProfileIndex(sounding.profiles));
+          setSoundingProfileIndex(nearestModelProfileIndex(sounding.profiles, selectedLocation.timezone));
           setModelSoundingStatus("");
         }
       })
@@ -2927,7 +2943,7 @@ export default function Home() {
   }, [session?.user?.id]);
 
   const observedAt = liveWeather
-    ? new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York", timeZoneName: "short" }).format(new Date(liveWeather.observation.observedAt))
+    ? new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: selectedLocation.timezone, timeZoneName: "short" }).format(new Date(liveWeather.observation.observedAt))
     : "Loading live NWS data…";
   // Only populated for the in-house NEXRAD path (see RadarMap's onFrameMeta) — the volume's own
   // observation time, not "now", so a stale/cached frame reads honestly on the on-map legend.
@@ -2974,14 +2990,14 @@ export default function Home() {
   const radarFrame = radarFrames[radarFrameIndex] ?? null;
   const isCurrentRadarFrame = radarFrames.length === 0 || radarFrameIndex === radarFrames.length - 1;
   const soundingProfiles = modelSounding?.profiles ?? [];
-  const nearestSoundingProfileIndex = nearestModelProfileIndex(soundingProfiles);
+  const nearestSoundingProfileIndex = nearestModelProfileIndex(soundingProfiles, selectedLocation.timezone);
   const soundingWindowStart = Math.max(0, Math.min(soundingProfileIndex - 1, Math.max(0, soundingProfiles.length - 4)));
   const soundingProfileWindow = soundingProfiles.slice(soundingWindowStart, soundingWindowStart + 4);
-  const radarFrameTime = radarFrame ? new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York", timeZoneName: "short" }).format(new Date(radarFrame.time * 1000)) : "Timeline unavailable";
+  const radarFrameTime = radarFrame ? new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: selectedLocation.timezone, timeZoneName: "short" }).format(new Date(radarFrame.time * 1000)) : "Timeline unavailable";
   const satelliteFrame = satelliteFrames[satelliteFrameIndex] ?? null;
-  const satelliteFrameTime = satelliteFrame ? new Intl.DateTimeFormat("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: "America/New_York", timeZoneName: "short" }).format(new Date(satelliteFrame.time)) : "Loading satellite timeline…";
+  const satelliteFrameTime = satelliteFrame ? new Intl.DateTimeFormat("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: selectedLocation.timezone, timeZoneName: "short" }).format(new Date(satelliteFrame.time)) : "Loading satellite timeline…";
   const futureRadarFrame = futureRadarFrames[futureRadarFrameIndex] ?? null;
-  const futureRadarFrameTime = futureRadarFrame ? new Intl.DateTimeFormat("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: "America/New_York", timeZoneName: "short" }).format(new Date(futureRadarFrame.time * 1000)) : "Future radar unavailable";
+  const futureRadarFrameTime = futureRadarFrame ? new Intl.DateTimeFormat("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: selectedLocation.timezone, timeZoneName: "short" }).format(new Date(futureRadarFrame.time * 1000)) : "Future radar unavailable";
   const focusedDateRecords = filteredArchives.filter((archive) => archive.targetDate === recordFocusDate).sort((a, b) => new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime());
 
   useEffect(() => {
@@ -4009,7 +4025,7 @@ export default function Home() {
 
       {activeSection === "about" && <section className="in-app-about"><div><p className="eyebrow">{aboutContent.eyebrow || "About Frontline Forecast"}</p><h2>{aboutContent.title}</h2><p>{aboutContent.description}</p></div><div className="in-app-about-points">{aboutContent.principles.map((principle, index) => <article key={`${principle.title}-${index}`}><span>0{index + 1}</span><h3>{principle.title}</h3><p>{principle.body}</p></article>)}</div></section>}
       {activeSection === "dashboard" && <>
-      {liveWeather?.alerts.length ? <section className={`hazard-banner ${alertTone(liveWeather.alerts[0].severity)}`} role="status" aria-label="Active National Weather Service alerts"><button type="button" className="hazard-banner-trigger" onClick={() => { setDataPanel("alerts"); window.requestAnimationFrame(() => document.querySelector(".data-desk")?.scrollIntoView({ behavior: "smooth", block: "start" })); }}><span className="hazard-label">Active NWS alert · tap for details</span><strong>{liveWeather.alerts[0].event}</strong><p>{liveWeather.alerts[0].headline || "An active National Weather Service alert applies to this location."}</p>{liveWeather.alerts[0].expires ? <small>Expires {new Intl.DateTimeFormat("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }).format(new Date(liveWeather.alerts[0].expires))}</small> : null}</button><a href="https://www.weather.gov/" target="_blank" rel="noreferrer">Official NWS alerts ↗</a></section> : null}
+      {liveWeather?.alerts.length ? <section className={`hazard-banner ${alertTone(liveWeather.alerts[0].severity)}`} role="status" aria-label="Active National Weather Service alerts"><button type="button" className="hazard-banner-trigger" onClick={() => { setDataPanel("alerts"); window.requestAnimationFrame(() => document.querySelector(".data-desk")?.scrollIntoView({ behavior: "smooth", block: "start" })); }}><span className="hazard-label">Active NWS alert · tap for details</span><strong>{liveWeather.alerts[0].event}</strong><p>{liveWeather.alerts[0].headline || "An active National Weather Service alert applies to this location."}</p>{liveWeather.alerts[0].expires ? <small>Expires {new Intl.DateTimeFormat("en-US", { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: selectedLocation.timezone }).format(new Date(liveWeather.alerts[0].expires))}</small> : null}</button><a href="https://www.weather.gov/" target="_blank" rel="noreferrer">Official NWS alerts ↗</a></section> : null}
       {homepageContent.showOutlook && <section className="outlook-strip" aria-label="Seven-day NWS guidance">
         <div className="outlook-heading"><div><h2>{homepageContent.outlookTitle}</h2></div><span className={`sync-pill ${liveDataStatus.tone}`} title={weatherError || (liveDataTimestamp ? `Last successful update ${liveDataTimestamp}` : "Checking weather data")}><i aria-hidden="true" />{liveDataStatus.label}</span></div>
         <div className="outlook-cards">{homeOutlook.length ? homeOutlook.map((day) => <article key={day.date}><strong>{day.label}</strong><b aria-hidden="true"><WeatherIcon description={day.shortForecast} style={weatherIconStyle} /></b><span>{day.shortForecast}</span><em>{day.high}° / {day.low}°</em><small>{day.precipitationChance ?? 0}% PoP</small></article>) : <p>Loading 7-day NWS guidance…</p>}</div>
