@@ -2282,7 +2282,17 @@ export default function Home() {
     const accessToken = confirmation.get("access_token");
     const refreshToken = confirmation.get("refresh_token");
     const errorDescription = confirmation.get("error_description");
-    const isRecovery = confirmation.get("type") === "recovery";
+    const confirmationType = confirmation.get("type");
+    const isRecovery = confirmationType === "recovery";
+    // Real bug found live (Andrew, 2026-09-16): clicking "Accept invitation" in the invite email
+    // just dropped the new student on the plain home page, silently signed in, with no password ever
+    // set -- because Supabase's admin invite link carries type=invite, not type=recovery, and only
+    // the recovery branch routed anywhere. The student had no way to ever set a real password (the
+    // email explicitly promises "set your password"), leaving them unable to sign back in once this
+    // one magic-link session ended. Treat invite the same as recovery: send them to the Change
+    // password card (Settings/"control" is member-access, so a brand-new student account can reach
+    // it) with a message matching what the email told them to expect.
+    const isInvite = confirmationType === "invite";
     if (errorDescription) {
       setAuthMessage(errorDescription.replaceAll("+", " "));
       setLoginMenuOpen(true);
@@ -2303,9 +2313,9 @@ export default function Home() {
         window.localStorage.removeItem(sessionStorageKey);
         setSession(confirmedSession);
         setLoginMenuOpen(false);
-        if (isRecovery) {
+        if (isRecovery || isInvite) {
           setActiveSection("control");
-          setPasswordMessage("Reset link verified. Choose a new password below.");
+          setPasswordMessage(isInvite ? "Welcome! Set a password below to finish creating your account." : "Reset link verified. Choose a new password below.");
           setAuthMessage("");
         } else {
           setAuthMessage("Email confirmed. You are signed in on this browser.");
