@@ -2209,6 +2209,25 @@ export default function Home() {
     window.localStorage.setItem(forecastDraftStorageKeyFor(session.user.id), JSON.stringify(forecastRun));
   }, [forecastRun, session?.user?.id]);
 
+  // Real bug found live (Andrew, 2026-09-16): the staleness guard above only re-checks on a
+  // session.user.id CHANGE, i.e. once per real sign-in -- it never re-fires just from switching
+  // tabs within this single-page app. A long-lived, continuously-open (or simply reopened without a
+  // fresh sign-in) session can carry a draft whose only day was current when it first loaded, watch
+  // that day age past today, and never get a second look: reproduced live on Andrew's own account,
+  // an August 23 single-day draft was still loading as "the" Forecast workspace on September 16.
+  // This re-checks the CURRENTLY held draft (not a re-read from storage, so it never clobbers a
+  // still-valid in-progress edit) every time the Forecast tab actually becomes active, catching
+  // staleness that accumulates between visits instead of only at sign-in.
+  useEffect(() => {
+    if (activeSection !== "forecast" || !session) return;
+    const today = addDays(new Date(), 0);
+    const hasCurrentOrFutureDay = forecastRun.days.some((day) => validForecastDate(day.date) && day.date >= today);
+    if (!hasCurrentOrFutureDay) {
+      window.localStorage.removeItem(forecastDraftStorageKeyFor(session.user.id));
+      setForecastRun(createNewForecastRun());
+    }
+  }, [activeSection, session?.user?.id]);
+
   useEffect(() => {
     const savedSession = window.localStorage.getItem(sessionStorageKey) ?? window.sessionStorage.getItem(sessionStorageKey);
     if (savedSession) {
