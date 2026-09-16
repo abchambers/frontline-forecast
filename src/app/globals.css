@@ -28,7 +28,16 @@ h1,h2,p { margin:0; } h1 { font-size:2rem; font-weight:600; letter-spacing:-.02e
 .navigation button { border-bottom-left-radius:0; border-bottom-right-radius:0; border-bottom-color:var(--line); }
 .navigation button.active,.tabs button.active { background:var(--blue); color:white; border-color:var(--blue); }
 .dashboard-grid { display:grid; grid-template-columns:minmax(0,1.65fr) minmax(250px,.85fr); gap:18px; }
-.outlook-strip { background:var(--surface); border:1px solid var(--line); border-radius:12px; margin-bottom:18px; padding:16px 18px; }.outlook-heading { align-items:center; display:flex; justify-content:space-between; gap:12px; }.outlook-heading p { color:var(--muted); font-size:.82rem; margin-top:4px; }.outlook-cards { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:8px; margin-top:14px; overflow:auto; }.outlook-cards article { border-left:1px solid var(--line); display:grid; gap:4px; min-width:112px; padding:2px 10px; }.outlook-cards article:first-child { border-left:0; }.outlook-cards strong { font-size:.82rem; }.outlook-cards b { align-items:center; display:flex; font-size:1.45rem; font-weight:400; height:32px; }.forecast-condition-icon { display:block; height:30px; object-fit:contain; width:30px; }
+/* Real mobile layout bug (Andrew, 2026-09-16, live screenshot): the whole page rendered zoomed out
+   with a large blank void on the right on a real phone. Root cause, confirmed via scrollWidth/
+   clientWidth on every ancestor: .outlook-strip is a grid item (inside .class-forecast-hub-v2 and
+   similar grids) with no min-width set, so it defaults to min-width:auto -- refusing to shrink below
+   its own .outlook-cards child's ~1000px intrinsic width even though .outlook-cards already has its
+   own overflow:auto ready to scroll internally. That refusal propagated all the way up through every
+   ancestor to <html>, forcing the whole page (not just this one card row) wider than the viewport.
+   min-width:0 is the standard escape hatch for this exact grid/flex-item default; every ancestor
+   already had it except this one link in the chain. */
+.outlook-strip { background:var(--surface); border:1px solid var(--line); border-radius:12px; margin-bottom:18px; min-width:0; padding:16px 18px; }.outlook-heading { align-items:center; display:flex; justify-content:space-between; gap:12px; }.outlook-heading p { color:var(--muted); font-size:.82rem; margin-top:4px; }.outlook-cards { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:8px; margin-top:14px; overflow:auto; }.outlook-cards article { border-left:1px solid var(--line); display:grid; gap:4px; min-width:112px; padding:2px 10px; }.outlook-cards article:first-child { border-left:0; }.outlook-cards strong { font-size:.82rem; }.outlook-cards b { align-items:center; display:flex; font-size:1.45rem; font-weight:400; height:32px; }.forecast-condition-icon { display:block; height:30px; object-fit:contain; width:30px; }
 /* Always a swipe/scroll row, at every viewport width — deliberately not a fixed-column grid like
    .outlook-cards, since that's exactly the wrap-vs-scroll inconsistency that made the 7-day outlook
    look different across browser windows (see the homeOutlook fix). 12 hours never needs to "wrap". */
