@@ -353,7 +353,7 @@ function periodIconCondition(period: { conditions: string; iconCondition?: strin
   return conditionKeyToIcon[period?.conditions ?? ""] ?? "clear";
 }
 function IconPicker({ value, onChange, style }: { value: string; onChange: (next: string) => void; style: WeatherIconStyle }) {
-  return <div className="icon-picker" role="radiogroup" aria-label="Choose an icon">{iconConditionKeys.map((key) => <button type="button" key={key} role="radio" aria-checked={value === key} className={value === key ? "active" : ""} title={iconConditionLabels[key]} onClick={() => onChange(key)}><img className="forecast-condition-icon" src={`/weather-icons/${style}/${key}.svg`} alt={iconConditionLabels[key]} /></button>)}</div>;
+  return <div className="icon-picker" role="radiogroup" aria-label="Choose an icon">{iconConditionKeys.map((key) => <button type="button" key={key} role="radio" aria-checked={value === key} className={value === key ? "active" : ""} title={iconConditionLabels[key]} onClick={() => onChange(key)}><img className="forecast-condition-icon" data-icon-style={style} src={`/weather-icons/${style}/${key}.svg`} alt={iconConditionLabels[key]} /></button>)}</div>;
 }
 
 // NBM's raw NBH text is a dense, fixed-width columnar dump meant for automated
@@ -682,7 +682,7 @@ function weatherIconCondition(description: string) {
 }
 
 function WeatherIcon({ description, style }: { description: string; style: WeatherIconStyle }) {
-  return <img className="forecast-condition-icon" src={`/weather-icons/${style}/${weatherIconCondition(description)}.svg`} alt="" />;
+  return <img className="forecast-condition-icon" data-icon-style={style} src={`/weather-icons/${style}/${weatherIconCondition(description)}.svg`} alt="" />;
 }
 
 function alertTone(severity: string) {

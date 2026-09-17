@@ -192,7 +192,19 @@ table { border-collapse:collapse; width:100%; font-size:.88rem; } th,td { paddin
 :root[data-radius="soft"] { --hq-radius:16px; }
 :root[data-radius="sharp"] { --hq-radius:2px; }
 :root[data-cards="raised"] .workspace-card { box-shadow:0 10px 28px rgba(24,34,47,.11); }
-:root[data-theme="dark"][data-cards="raised"] .workspace-card { box-shadow:0 12px 30px rgba(0,0,0,.24); }
+/* A darker shadow reads as elevation on a light page but disappears against an
+   already-dark background (Andrew, 2026-09-18: "I dont see a difference" in dark
+   mode -- confirmed live, the box-shadow rule was firing correctly but is simply
+   invisible on a dark ground). Dark-mode elevation instead lightens the surface
+   and border slightly, the same overlay-based approach dark UIs generally use. */
+:root[data-theme="dark"][data-cards="raised"] .workspace-card { background:color-mix(in srgb, var(--surface) 90%, white 10%); border-color:color-mix(in srgb, var(--line) 65%, white 35%); box-shadow:0 12px 30px rgba(0,0,0,.4); }
+
+/* The minimal icon set is outline-only (no fill), with a near-black stroke meant
+   to read against a light card. On a dark card that stroke is nearly invisible
+   (Andrew, 2026-09-18, confirmed live). invert()+hue-rotate(180deg) is the
+   standard trick for flipping a dark-on-light line icon to read on a dark
+   background without needing a second set of icon files. */
+:root[data-theme="dark"] .forecast-condition-icon[data-icon-style="minimal"] { filter:invert(1) hue-rotate(180deg); }
 :root[data-density="compact"] .app { padding-bottom:42px; }
 html[data-site-content="loading"] .app,html[data-site-content="loading"] .about-app { opacity:0; } .app,.about-app { transition:opacity .12s ease; }
 .about-app { max-width:1180px; margin:0 auto; padding:40px 24px 64px; }.about-header { align-items:center; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; padding-bottom:18px; }.about-brand,.about-header>div { align-items:center; color:var(--ink); display:flex; gap:10px; text-decoration:none; }.about-header-mark { height:48px; width:34px; }.about-brand strong { font-size:1.12rem; letter-spacing:-.045em; }.about-header>div a,.about-header .theme-toggle { background:var(--surface); border:1px solid var(--line); border-radius:6px; color:var(--ink); font:inherit; font-size:.8rem; padding:7px 9px; text-decoration:none; }.about-header .theme-toggle { cursor:pointer; }.about-hero { align-items:center; border-bottom:1px solid var(--line); display:grid; gap:clamp(28px,8vw,108px); grid-template-columns:minmax(0,1fr) minmax(120px,.3fr); max-width:960px; padding:82px 0 64px; }.about-hero-mark { display:block; height:auto; justify-self:end; max-height:190px; max-width:100%; width:126px; }.about-hero h1 { font-size:clamp(2.8rem,7vw,5.5rem); letter-spacing:-.07em; line-height:.95; }.about-hero p:last-child { color:var(--muted); font-size:1.15rem; line-height:1.55; max-width:650px; }.about-principles { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:0; margin-top:42px; }.about-principles article { border-left:1px solid var(--line); display:grid; gap:8px; min-height:190px; padding:0 24px; }.about-principles article:first-child { border-left:0; padding-left:0; }.about-principles span { color:var(--accent); font-size:.78rem; font-weight:800; letter-spacing:.08em; }.about-principles h2 { font-size:1.1rem; }.about-principles p { color:var(--muted); font-size:.9rem; line-height:1.55; }@media(max-width:700px) { .about-app { padding:24px 14px 44px; }.about-header { align-items:flex-start; flex-direction:column; gap:14px; }.about-hero { grid-template-columns:1fr; padding:60px 0 44px; }.about-hero-mark { grid-row:1; justify-self:start; width:92px; }.about-principles { grid-template-columns:1fr; gap:18px; }.about-principles article,.about-principles article:first-child { border-left:0; border-top:1px solid var(--line); min-height:0; padding:18px 0 0; }.about-principles article:first-child { border-top:0; padding-top:0; } }
