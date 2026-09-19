@@ -88,7 +88,7 @@
 
 /* The inline legend sits on a fixed near-black strip in BOTH themes, but its labels inherited the light
    theme's muted grey (#61658c on #0b0f14 = 3.4:1, below the 4.5:1 minimum). Pin them light. */
-.radar-legend.radar-legend-inline > span,.radar-legend.radar-legend-inline small { color:#b7bcd6; }
+.radar-legend.radar-legend-inline > span,.radar-legend.radar-legend-inline small,.radar-legend.radar-legend-inline > div:nth-of-type(2) small { color:#b7bcd6; }
 .radar-legend-meta { color:#d6dde6; font-size:.58rem; font-weight:600; margin-left:6px; text-transform:none; }
 .leaflet-tooltip.nws-alert-tooltip,.leaflet-tooltip.spc-outlook-tooltip { background-color:#fff; box-shadow:0 4px 16px rgba(24,34,47,.25); box-sizing:border-box; color:#16183d; font:700 .76rem/1.35 system-ui,sans-serif; max-width:calc(100vw - 44px); min-width:200px; overflow-wrap:break-word; padding:7px 9px; white-space:normal; width:260px; word-break:normal; }
 /* H/L pressure-center labels for the WPC surface-fronts overlay — matches the letter+value stack

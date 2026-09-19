@@ -2,9 +2,13 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-test("signed-in users do not receive a redundant public sign-in tab", async () => {
+test("the default public navigation is Home, Radar and About, with no Sign in tab to become redundant once signed in", async () => {
   const page = await readFile(new URL("../src/app/page.tsx", import.meta.url), "utf8");
-  assert.match(page, /item\.target !== "login" \|\| !session/);
+  const block = page.match(/const defaultPublicNavigation[^=]*= \[([\s\S]*?)\];/)?.[1] ?? "";
+  assert.match(block, /target: "weather"/);
+  assert.match(block, /target: "radar"/);
+  assert.match(block, /target: "about"/);
+  assert.doesNotMatch(block, /"login"/);
 });
 
 test("radar frames load proactively on the dashboard and radar sections", async () => {
@@ -19,11 +23,11 @@ test("observed radar is always the scrub-bar frame loop, with no separate live/t
   assert.match(page, /className="radar-scrub"/);
 });
 
-test("HRRR simulated reflectivity lives under Models & Observations, not the Radar workspace", async () => {
+test("HRRR simulated reflectivity is the Forecast product inside the Radar workspace, drawn from real HRRR frames", async () => {
   const page = await readFile(new URL("../src/app/page.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(page, /radarProductMode/);
   assert.doesNotMatch(page, /"Future radar"/);
-  assert.match(page, /dataPanel === "model-radar"/);
+  assert.match(page, /onSelectView\("future_reflectivity"\);\s*\}\}>Forecast<\/button>/);
   assert.match(page, /futureRadarFrame\?\.tileUrl/);
 });
 
@@ -37,7 +41,7 @@ test("the public configuration endpoint returns only published public content", 
 
   assert.match(route, /site_content\?select=key,value&is_public=eq\.true/);
   assert.match(route, /row\.key\.endsWith\("\.public"\)/);
-  assert.match(route, /Cache-Control.*no-store/);
+  assert.match(route, /Cache-Control.*s-maxage=\d+/);
 });
 
 test("the radar timeline endpoint synthesizes exactly 12 same-provider frames", async () => {

@@ -16,6 +16,10 @@ const nextConfig: NextConfig = {
         source: "/:path*",
         headers: securityHeaders(),
       },
+      // Static assets served from /public revalidate on every visit by default (each page view re-asked
+      // for ~60 tiny SVG icons and Leaflet). They change rarely, so let browsers and the CDN keep them.
+      { source: "/vendor/:path*", headers: [{ key: "Cache-Control", value: "public, max-age=86400, stale-while-revalidate=604800" }] },
+      { source: "/weather-icons/:path*", headers: [{ key: "Cache-Control", value: "public, max-age=86400, stale-while-revalidate=604800" }] },
     ];
   },
 };
