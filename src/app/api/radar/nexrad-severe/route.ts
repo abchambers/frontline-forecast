@@ -36,13 +36,13 @@ export async function GET(request: Request) {
 
   const cached = cache.get(station);
   if (cached && cached.expiresAt > Date.now()) {
-    return NextResponse.json(cached.data, { headers: { "Cache-Control": "private, max-age=45", "X-Radar-Source": "cache" } });
+    return NextResponse.json(cached.data, { headers: { "Cache-Control": "public, max-age=0, s-maxage=45", "X-Radar-Source": "cache" } });
   }
 
   const fromWorker = await fetchFromWorker(`/severe?station=${station}`);
   if (fromWorker) {
     cache.set(station, { data: fromWorker, expiresAt: Date.now() + CACHE_TTL_MS });
-    return NextResponse.json(fromWorker, { headers: { "Cache-Control": "private, max-age=45", "X-Radar-Source": "worker" } });
+    return NextResponse.json(fromWorker, { headers: { "Cache-Control": "public, max-age=0, s-maxage=45", "X-Radar-Source": "worker" } });
   }
 
   try {
@@ -61,7 +61,7 @@ export async function GET(request: Request) {
       times: { stormTracks: storms.time, hail: hail.time, tvs: tvs.time, mesocyclones: mesocyclones.time },
     };
     cache.set(station, { data: payload, expiresAt: Date.now() + CACHE_TTL_MS });
-    return NextResponse.json(payload, { headers: { "Cache-Control": "private, max-age=45", "X-Radar-Source": "live" } });
+    return NextResponse.json(payload, { headers: { "Cache-Control": "public, max-age=0, s-maxage=45", "X-Radar-Source": "live" } });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Severe-weather markers are unavailable right now." },

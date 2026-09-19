@@ -77,7 +77,7 @@ export async function GET(request: Request) {
   const cacheKey = sortedIds.join(",");
   const cached = cache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
-    return NextResponse.json(cached.data, { headers: { "Cache-Control": "private, max-age=60", "X-Radar-Source": "cache" } });
+    return NextResponse.json(cached.data, { headers: { "Cache-Control": "public, max-age=0, s-maxage=60", "X-Radar-Source": "cache" } });
   }
 
   try {
@@ -86,7 +86,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "The local mosaic is unavailable right now." }, { status: 502 });
     }
     cache.set(cacheKey, { data: fromWorker, expiresAt: Date.now() + CACHE_TTL_MS });
-    return NextResponse.json(fromWorker, { headers: { "Cache-Control": "private, max-age=60", "X-Radar-Source": "worker" } });
+    return NextResponse.json(fromWorker, { headers: { "Cache-Control": "public, max-age=0, s-maxage=60", "X-Radar-Source": "worker" } });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "The local mosaic is unavailable right now." },

@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { checkRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 const noStore = { "Cache-Control": "no-store, max-age=0" };
+// Published site content changes rarely (an HQ edit), yet every page view hit a function AND Supabase.
+// A short shared window absorbs that while an HQ change still reaches visitors within a minute.
+const sharedBriefly = { "Cache-Control": "public, max-age=0, s-maxage=60, stale-while-revalidate=300" };
 
 export async function GET(request: Request) {
   const limit = checkRateLimit(request, "site-config", 120, 60_000);
@@ -29,7 +32,7 @@ export async function GET(request: Request) {
       .filter((row) => row.key === "theme.shared")
       .map((row) => ({ tokens: row.value }));
 
-    return NextResponse.json({ content, themes }, { headers: noStore });
+    return NextResponse.json({ content, themes }, { headers: sharedBriefly });
   } catch {
     return NextResponse.json({ content: [], themes: [] }, { status: 503 });
   }

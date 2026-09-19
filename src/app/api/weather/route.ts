@@ -81,17 +81,36 @@ async function nws<T>(url: string) {
   return response.json() as Promise<T>;
 }
 
+// A location's NWS grid point and its observation-station list never change between requests, but were
+// being re-fetched from api.weather.gov on every single visit (and every client polls this route each
+// minute), so upstream load scaled with open browser tabs. Alerts and observations stay uncached; only
+// these two structural lookups are remembered.
+const STATIC_LOOKUP_TTL_MS = 24 * 60 * 60 * 1000;
+const staticLookups = new Map<string, { expiresAt: number; data: unknown }>();
+async function nwsStatic<T>(url: string): Promise<T> {
+  const hit = staticLookups.get(url);
+  if (hit && hit.expiresAt > Date.now()) return hit.data as T;
+  const data = await nws<T>(url);
+  if (staticLookups.size >= 500) staticLookups.clear();
+  staticLookups.set(url, { expiresAt: Date.now() + STATIC_LOOKUP_TTL_MS, data });
+  return data;
+}
+
+// Shared across visitors for at most this long. The alert feed is safety-critical, so this is kept well
+// inside NWS's own propagation delay rather than the minutes a normal cache would use.
+const WEATHER_SHARED_CACHE_SECONDS = 30;
+
 export async function GET(request: Request) {
   const limit = checkRateLimit(request, "weather", 60, 60_000);
   if (limit.limited) return rateLimitResponse(limit.retryAfterSeconds);
   try {
     const selectedLocation = resolveWeatherDeskLocation(new URL(request.url).searchParams);
-    const point = await nws<NwsFeature<PointProperties>>(
+    const point = await nwsStatic<NwsFeature<PointProperties>>(
       `https://api.weather.gov/points/${selectedLocation.latitude},${selectedLocation.longitude}`,
     );
     const pointData = point.properties;
 
-    const stationList = await nws<{ features: NwsFeature<{ stationIdentifier: string }>[] }>(
+    const stationList = await nwsStatic<{ features: NwsFeature<{ stationIdentifier: string }>[] }>(
       pointData.observationStations,
     );
     const stationId = stationList.features.find(({ properties }) => properties.stationIdentifier === selectedLocation.observationStation)?.properties.stationIdentifier
@@ -247,7 +266,7 @@ export async function GET(request: Request) {
         hourly,
         fetchedAt: new Date().toISOString(),
       },
-      { headers: { "Cache-Control": "no-store" } },
+      { headers: { "Cache-Control": `public, max-age=0, s-maxage=${WEATHER_SHARED_CACHE_SECONDS}` } },
     );
   } catch (error) {
     console.error("Unable to load NWS weather data", error);
