@@ -11,8 +11,8 @@ const contentSecurityPolicy = [
   // va.vercel-scripts.com regardless of environment (dev serves a .debug.js variant from the same
   // host) — without this, our own CSP silently blocked both of them at the browser level, no error
   // surfaced anywhere except the console.
-  "script-src 'self' 'unsafe-inline' https://unpkg.com https://va.vercel-scripts.com",
-  "style-src 'self' 'unsafe-inline' https://unpkg.com",
+  "script-src 'self' 'unsafe-inline' https://va.vercel-scripts.com",
+  "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https://*.supabase.co https://basemaps.cartocdn.com https://opengeo.ncep.noaa.gov https://digital.weather.gov https://mesonet.agron.iastate.edu https://cdn.star.nesdis.noaa.gov https://www.spc.noaa.gov",
   "font-src 'self' data:",
   // Sentry's own SDK is bundled into this app's JS (no external <script>), it just needs to be able

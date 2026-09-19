@@ -78,8 +78,8 @@ export default function FrontsMap() {
 
   return (
     <>
-      <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-      <Script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" strategy="afterInteractive" onReady={() => setLeafletLoaded(true)} />
+      <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
+      <Script src="/vendor/leaflet/leaflet.js" strategy="afterInteractive" onReady={() => setLeafletLoaded(true)} />
       <div ref={mapElement} className="live-radar-map fronts-map" aria-label="WPC surface analysis: fronts, troughs, and pressure centers across the continental United States" />
       <div className="fronts-map-footer">
         <div className="fronts-legend">

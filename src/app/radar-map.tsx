@@ -695,9 +695,9 @@ export default function RadarMap({ opacity = 0.72, showReflectivity = true, mome
 
   return (
     <>
-      <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-      <Script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" strategy="afterInteractive" onReady={() => setLeafletLoaded(true)} />
-      <div ref={mapElement} className="live-radar-map" aria-label={`Live NOAA radar map centered on ${location.name}`} />
+      <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
+      <Script src="/vendor/leaflet/leaflet.js" strategy="afterInteractive" onReady={() => setLeafletLoaded(true)} />
+      <div ref={mapElement} className="live-radar-map" role="region" aria-label={`Live NOAA radar map centered on ${location.name}`} />
       {isDataLoading && <div className="radar-loading radar-loading-overlay" role="status">Loading live radar…</div>}
     </>
   );

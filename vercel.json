@@ -16,5 +16,18 @@
       "path": "/api/cron/outlook",
       "schedule": "45 12 * * *"
     }
+  ],
+  "redirects": [
+    {
+      "source": "/(.*)",
+      "has": [
+        {
+          "type": "host",
+          "value": "www.frontline-forecast.com"
+        }
+      ],
+      "destination": "https://frontline-forecast.com/$1",
+      "permanent": true
+    }
   ]
 }

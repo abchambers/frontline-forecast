@@ -240,8 +240,8 @@ export default function UpperAirMap() {
 
   return (
     <>
-      <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-      <Script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" strategy="afterInteractive" onReady={() => setLeafletReady(true)} />
+      <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
+      <Script src="/vendor/leaflet/leaflet.js" strategy="afterInteractive" onReady={() => setLeafletReady(true)} />
       <div className="radar-field-picker satellite-channel-picker upper-air-level-picker">
         <button type="button" className={mode === "model" ? "active" : ""} onClick={() => setMode("model")}>Model</button>
         <button type="button" className={mode === "observed" ? "active" : ""} onClick={() => setMode("observed")}>Observed</button>
