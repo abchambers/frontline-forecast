@@ -2618,7 +2618,7 @@ export default function Home() {
   async function inviteClassroomStudent(email: string) {
     if (!session || !supabaseUrl || !supabaseKey || !canManageActiveClassroom || activeWorkspace?.kind !== "classroom") return;
     setClassroomRosterMessage("Sending invite…");
-    const inviteResponse = await fetch("/api/classroom/invite-student", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` }, body: JSON.stringify({ email }) });
+    const inviteResponse = await fetch("/api/classroom/invite-student", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` }, body: JSON.stringify({ email, classroomId: activeWorkspace.classroomId }) });
     const inviteBody = await inviteResponse.json().catch(() => null) as { userId?: string; invited?: boolean; message?: string } | null;
     if (!inviteResponse.ok || !inviteBody?.userId) { setClassroomRosterMessage(inviteBody?.message || "The invite could not be sent."); return; }
     if (classroomRoster.some((member) => member.userId === inviteBody.userId)) { setClassroomRosterMessage("That student is already on this roster."); return; }
