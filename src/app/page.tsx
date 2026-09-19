@@ -8,6 +8,7 @@ import { satelliteForLongitude } from "@/lib/goes-satellite";
 import { NBM_ELEMENTS, nbmDisplayValue, nbmNumericValue, type NbmHourly } from "@/lib/nbm";
 import { automaticForecastScore, type ForecastPeriodActual } from "@/lib/forecast-verification";
 import type { PersonalTier } from "@/lib/access";
+import { accessTokenIsUsable, clearStoredSession, msUntilRefresh, readStoredSession, requestRefresh, writeStoredSession } from "@/lib/session-refresh";
 import type { RadarFrameMeta } from "./radar-map";
 
 const RadarMap = dynamic(() => import("./radar-map"), {
@@ -2252,53 +2253,86 @@ export default function Home() {
     }
   }, [activeSection, session?.user?.id]);
 
+  // Session lifecycle. Every fetch in this file sends session.access_token directly rather than
+  // going through the Supabase SDK, so nothing else keeps it alive. Real evidence (Andrew's account,
+  // 2026-09-19): 20+ separate sign-in sessions since Aug 23 with ZERO server-side refresh failures in
+  // Supabase's auth logs -- the old session was being lost client-side. The old code deleted the
+  // stored session on ANY refresh error (including a plain network failure when a laptop wakes
+  // before Wi-Fi is back), used a fixed 45-minute setInterval that freezes while a machine sleeps,
+  // and refreshed with whatever refresh token this tab held in memory, which goes stale the moment
+  // another tab rotates it. So: only a definitive rejection ends a session, refreshes are serialized
+  // across tabs and always start from the newest stored token, and every wake/focus/online event
+  // re-checks the token.
+  const refreshRetryRef = useRef<number | null>(null);
+  const refreshSession = useRef<() => Promise<void>>(async () => {});
+  refreshSession.current = async () => {
+    if (!supabaseUrl || !supabaseKey) return;
+    const run = async () => {
+      const stored = readStoredSession(sessionStorageKey);
+      if (!stored?.session.refresh_token) return;
+      if (msUntilRefresh(stored.session.access_token, Date.now()) > 0) {
+        // Fresh (possibly refreshed by another tab while this one waited for the lock).
+        setSession((current) => current?.access_token === stored.session.access_token ? current : stored.session);
+        return;
+      }
+      const usedRefreshToken = stored.session.refresh_token;
+      const result = await requestRefresh(supabaseUrl, supabaseKey, usedRefreshToken, stored.session.user);
+      if (result.kind === "refreshed") {
+        writeStoredSession(sessionStorageKey, result.session as WeatherDeskSession, stored.persistent);
+        setSession(result.session as WeatherDeskSession);
+        return;
+      }
+      if (result.kind === "rejected") {
+        // Another tab may already have rotated this token; if so its newer session is the real one.
+        const latest = readStoredSession(sessionStorageKey);
+        if (latest && latest.session.refresh_token !== usedRefreshToken) { setSession(latest.session as WeatherDeskSession); return; }
+        clearStoredSession(sessionStorageKey);
+        setSession(null);
+        setAuthMessage("Your session expired. Sign in again to continue.");
+        return;
+      }
+      // Offline / 5xx / rate limited: this says nothing about the token. Keep the session and retry.
+      setSession((current) => current ?? (stored.session as WeatherDeskSession));
+      if (refreshRetryRef.current === null) refreshRetryRef.current = window.setTimeout(() => { refreshRetryRef.current = null; void refreshSession.current(); }, 30_000);
+    };
+    if (typeof navigator !== "undefined" && navigator.locks) await navigator.locks.request("frontline-forecast-session-refresh", run);
+    else await run();
+  };
+
   useEffect(() => {
-    const savedSession = window.localStorage.getItem(sessionStorageKey) ?? window.sessionStorage.getItem(sessionStorageKey);
-    if (savedSession) {
-      const persistent = Boolean(window.localStorage.getItem(sessionStorageKey));
-      try {
-        const parsed = JSON.parse(savedSession) as WeatherDeskSession;
-        setRememberMe(persistent);
-        if (!parsed.refresh_token || !supabaseUrl || !supabaseKey) { setSession(parsed); return; }
-        fetch(`${supabaseUrl}/auth/v1/token?grant_type=refresh_token`, { method: "POST", headers: { apikey: supabaseKey, "Content-Type": "application/json" }, body: JSON.stringify({ refresh_token: parsed.refresh_token }) })
-          .then(async (response) => {
-            const data = await response.json();
-            if (!response.ok || !data.access_token) throw new Error("Session expired");
-            const refreshed = { access_token: data.access_token, refresh_token: data.refresh_token ?? parsed.refresh_token, user: data.user ?? parsed.user } as WeatherDeskSession;
-            if (persistent) window.localStorage.setItem(sessionStorageKey, JSON.stringify(refreshed)); else window.sessionStorage.setItem(sessionStorageKey, JSON.stringify(refreshed));
-            setSession(refreshed);
-          })
-          .catch(() => { window.localStorage.removeItem(sessionStorageKey); window.sessionStorage.removeItem(sessionStorageKey); });
-      } catch { window.localStorage.removeItem(sessionStorageKey); window.sessionStorage.removeItem(sessionStorageKey); }
-    }
+    const stored = readStoredSession(sessionStorageKey);
+    if (!stored) return;
+    setRememberMe(stored.persistent);
+    if (!stored.session.refresh_token || !supabaseUrl || !supabaseKey) { setSession(stored.session as WeatherDeskSession); return; }
+    // A still-valid token needs no network call at all (and so no rotation race with other tabs).
+    if (accessTokenIsUsable(stored.session.access_token, Date.now())) setSession(stored.session as WeatherDeskSession);
+    void refreshSession.current();
   }, []);
 
   useEffect(() => {
-    // The access token issued at sign-in (or on the mount-time refresh above) expires after
-    // Supabase's default 1 hour. Every fetch in this file sends session.access_token directly
-    // rather than going through the Supabase SDK, so nothing else refreshes it — a tab left open
-    // past that hour starts silently 401ing on every lazily-fetched request (e.g. Verify's
-    // Scenarios tab), which reads as missing data rather than an expired session. Proactively
-    // refresh well inside that window so a long-lived tab keeps working.
-    if (!session?.refresh_token || !supabaseUrl || !supabaseKey) return;
-    const intervalId = window.setInterval(() => {
-      fetch(`${supabaseUrl}/auth/v1/token?grant_type=refresh_token`, { method: "POST", headers: { apikey: supabaseKey, "Content-Type": "application/json" }, body: JSON.stringify({ refresh_token: session.refresh_token }) })
-        .then(async (response) => {
-          const data = await response.json();
-          if (!response.ok || !data.access_token) throw new Error("Session expired");
-          const refreshed = { access_token: data.access_token, refresh_token: data.refresh_token ?? session.refresh_token, user: data.user ?? session.user } as WeatherDeskSession;
-          if (rememberMe) window.localStorage.setItem(sessionStorageKey, JSON.stringify(refreshed)); else window.sessionStorage.setItem(sessionStorageKey, JSON.stringify(refreshed));
-          setSession(refreshed);
-        })
-        .catch(() => {
-          window.localStorage.removeItem(sessionStorageKey);
-          window.sessionStorage.removeItem(sessionStorageKey);
-          setSession(null);
-          setAuthMessage("Your session expired. Sign in again to continue.");
-        });
-    }, 45 * 60 * 1000);
-    return () => window.clearInterval(intervalId);
-  }, [session, rememberMe]);
+    if (!session?.refresh_token) return;
+    const timeout = window.setTimeout(() => void refreshSession.current(), Math.max(msUntilRefresh(session.access_token, Date.now()), 15_000));
+    return () => window.clearTimeout(timeout);
+  }, [session]);
+
+  useEffect(() => {
+    const recheck = () => { if (document.visibilityState === "visible") void refreshSession.current(); };
+    const adoptOtherTab = (event: StorageEvent) => {
+      if (event.key !== sessionStorageKey) return;
+      const latest = readStoredSession(sessionStorageKey);
+      setSession((current) => latest ? (current?.access_token === latest.session.access_token ? current : latest.session as WeatherDeskSession) : null);
+    };
+    document.addEventListener("visibilitychange", recheck);
+    window.addEventListener("focus", recheck);
+    window.addEventListener("online", recheck);
+    window.addEventListener("storage", adoptOtherTab);
+    return () => {
+      document.removeEventListener("visibilitychange", recheck);
+      window.removeEventListener("focus", recheck);
+      window.removeEventListener("online", recheck);
+      window.removeEventListener("storage", adoptOtherTab);
+    };
+  }, []);
 
   useEffect(() => {
     if (!supabaseUrl || !supabaseKey) return;
