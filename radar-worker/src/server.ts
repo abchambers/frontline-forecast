@@ -396,6 +396,7 @@ const MOSAIC_CACHE_TTL_MS = 300_000; // matches PAYLOAD_CACHE_TTL_MS — same vo
 // cache far longer than anything else in this file — 20 minutes is just often enough to notice a
 // newly-published run reasonably promptly without adding any real load to NOAA's public feed.
 const UPPER_AIR_CACHE_TTL_MS = 1_200_000;
+const UPPER_AIR_DEGRADED_CACHE_TTL_MS = 60_000;
 
 const UPPER_AIR_LEVELS = ["250", "300", "500", "700", "850", "925"] as const;
 type UpperAirLevel = (typeof UPPER_AIR_LEVELS)[number];
@@ -410,7 +411,9 @@ async function handleUpperAir(level: UpperAirLevel) {
 
   const promise = withComputeSlot(async () => {
     const payload = await runInComputeWorker({ kind: "upper-air", level });
-    setCache(cacheKey, payload, UPPER_AIR_CACHE_TTL_MS);
+    // A degraded result skipped a newer cycle on uncertain grounds (see gfs-run-selection.ts): keep it
+    // only briefly so the real newest run is picked up on the next request instead of 20 minutes later.
+    setCache(cacheKey, payload, (payload as { degraded?: boolean }).degraded ? UPPER_AIR_DEGRADED_CACHE_TTL_MS : UPPER_AIR_CACHE_TTL_MS);
     return { status: 200, body: payload, source: "live" as const };
   });
   inFlight.set(cacheKey, promise);

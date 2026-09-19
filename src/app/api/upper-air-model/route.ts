@@ -29,5 +29,7 @@ export async function GET(request: Request) {
   }
   // GFS only publishes a new run every 6 real hours — a real 10-minute edge cache is generous
   // relative to that cadence, not aggressive, and keeps repeat visits from re-hitting the worker.
-  return NextResponse.json(payload, { headers: { "Cache-Control": "public, s-maxage=600, stale-while-revalidate=1200" } });
+  // A degraded payload skipped a newer GFS cycle on uncertain grounds; don't let the edge hold it for 30 minutes.
+  const degraded = (payload as { degraded?: boolean }).degraded === true;
+  return NextResponse.json(payload, { headers: { "Cache-Control": degraded ? "public, s-maxage=60" : "public, s-maxage=600, stale-while-revalidate=1200" } });
 }

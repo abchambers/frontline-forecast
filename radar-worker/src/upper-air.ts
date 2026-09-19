@@ -31,6 +31,7 @@ import { parseGribIndex, GribMessage } from "@mattnucc/gribberish";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { fetchWithTimeout } from "./fetch-with-timeout.js";
+import { selectLatestRun } from "./gfs-run-selection.js";
 import type { MrmsBounds } from "./types.js";
 
 // Real bug found live, 2026-09-08: this worker has never needed to render TEXT on canvas before
@@ -52,27 +53,8 @@ const GFS_BUCKET = "https://noaa-gfs-bdp-pds.s3.amazonaws.com";
 // finishes — confirmed live, the 06Z run's own file showed a Last-Modified ~3.5 hours after its
 // nominal cycle time. Starting the search 5 hours back is a real, measured safety margin, not a
 // guess; falling back one cycle further covers the rest.
-const GFS_CYCLE_HOURS = [0, 6, 12, 18];
-const REAL_PUBLISH_LAG_HOURS = 5;
-
 function pad2(n: number): string {
   return n.toString().padStart(2, "0");
-}
-
-function candidateRuns(now: Date): { runDate: string; runHour: string }[] {
-  const lagged = new Date(now.getTime() - REAL_PUBLISH_LAG_HOURS * 3_600_000);
-  const candidates: { runDate: string; runHour: string }[] = [];
-  for (let back = 0; back < 3; back++) {
-    // Each step back is a real 6-hour jump, so t's OWN UTC calendar date is always the correct
-    // real day for the cycle hour floored from it — no separate day-rollback needed (0 is always
-    // in GFS_CYCLE_HOURS, so the filter below never comes back empty).
-    const t = new Date(lagged.getTime() - back * 6 * 3_600_000);
-    const cycleHour = GFS_CYCLE_HOURS.filter((h) => h <= t.getUTCHours()).pop()!;
-    const runDate = `${t.getUTCFullYear()}${pad2(t.getUTCMonth() + 1)}${pad2(t.getUTCDate())}`;
-    const runHour = pad2(cycleHour);
-    candidates.push({ runDate, runHour });
-  }
-  return candidates;
 }
 
 function gfsUrl(runDate: string, runHour: string): string {
@@ -80,19 +62,19 @@ function gfsUrl(runDate: string, runHour: string): string {
 }
 
 // Finds the most recent real, actually-published GFS run by checking the real object's existence
-// (HEAD on the .idx sidecar, much smaller than probing the full file) — never assumes a cycle is
-// ready just because its nominal time has passed.
-async function findLatestAvailableRun(): Promise<{ runDate: string; runHour: string; fileSize: number }> {
-  const candidates = candidateRuns(new Date());
-  for (const candidate of candidates) {
-    const url = gfsUrl(candidate.runDate, candidate.runHour);
-    const head = await fetchWithTimeout(url, { method: "HEAD" }).catch(() => null);
-    if (head?.ok) {
-      const fileSize = Number(head.headers.get("content-length"));
-      return { ...candidate, fileSize };
+// (HEAD on the file itself) -- never assumes a cycle is ready just because its nominal time has
+// passed, and never assumes it is MISSING just because a probe failed (see gfs-run-selection.ts).
+async function findLatestAvailableRun(): Promise<{ runDate: string; runHour: string; fileSize: number; degraded: boolean }> {
+  return selectLatestRun(new Date(), async (candidate) => {
+    try {
+      const head = await fetchWithTimeout(gfsUrl(candidate.runDate, candidate.runHour), { method: "HEAD" });
+      if (head.ok) return { kind: "present", fileSize: Number(head.headers.get("content-length")) };
+      // S3 answers 404 (or 403 on a private-listing bucket) for an object that does not exist yet.
+      return head.status === 404 || head.status === 403 ? { kind: "absent" } : { kind: "unknown" };
+    } catch {
+      return { kind: "unknown" };
     }
-  }
-  throw new Error("No recent GFS run is available on NOAA's public feed.");
+  });
 }
 
 async function fetchGfsMessage(runDate: string, runHour: string, fileSize: number, varName: string, level: string): Promise<GribMessage> {
@@ -385,9 +367,9 @@ const CONTOUR_INTERVAL_BY_LEVEL: Record<UpperAirLevel, number> = {
   "925": 30,
 };
 
-export async function renderUpperAirLevel(level: UpperAirLevel, widthPx = 900, heightPx: number | null = null): Promise<{ time: string; bounds: MrmsBounds; imageDataUrl: string; level: UpperAirLevel; title: string }> {
+export async function renderUpperAirLevel(level: UpperAirLevel, widthPx = 900, heightPx: number | null = null): Promise<{ time: string; bounds: MrmsBounds; imageDataUrl: string; level: UpperAirLevel; title: string; degraded: boolean }> {
   const gribLevel = `${level} mb`;
-  const { runDate, runHour, fileSize } = await findLatestAvailableRun();
+  const { runDate, runHour, fileSize, degraded } = await findLatestAvailableRun();
   const field = LEVEL_FIELD[level];
 
   const hgtMsg = await fetchGfsMessage(runDate, runHour, fileSize, "HGT", gribLevel);
@@ -522,5 +504,5 @@ export async function renderUpperAirLevel(level: UpperAirLevel, widthPx = 900, h
   }
 
   const dataUrl = `data:image/png;base64,${canvas.toBuffer("image/png").toString("base64")}`;
-  return { time: hgtMsg.referenceDate.toISOString(), bounds, imageDataUrl: dataUrl, level, title: LEVEL_TITLE[level] };
+  return { time: hgtMsg.referenceDate.toISOString(), bounds, imageDataUrl: dataUrl, level, title: LEVEL_TITLE[level], degraded };
 }
