@@ -6,6 +6,7 @@ import { fetchStormTracks, fetchHailDetections, fetchTvsDetections, fetchMesocyc
 import { GRID_STEP_DEG, MAX_RANGE_KM } from "./radar-constants.js";
 import { sliceTileFromComposite } from "./tile-slice.js";
 import type { MrmsBounds } from "./types.js";
+import { recordDemand, selectPrewarmCombos, nextPrewarmDelayMs } from "./prewarm-plan.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -490,6 +491,7 @@ const server = createServer((request, response) => {
   // Special-cased ahead of the generic single-station routing below — takes a `stations` list
   // instead of a single `station` param, so it can't share that block's validation.
   if (url.pathname === "/mosaic") {
+    recordDemand(mosaicDemand, (url.searchParams.get("stations") ?? "").split(","), Date.now());
     handleMosaic(url.searchParams.get("stations") ?? "")
       .then((result) => respondJson(result.status, result.body, { "X-Radar-Source": result.source }))
       .catch((error: unknown) => {
@@ -673,9 +675,13 @@ const PREWARM_STATIONS = ["KFFC", "KBMX"];
 // itself safer thanks to the new global fetch cap). Sized to 12 total combos specifically so a full
 // rotation has a real chance of completing within PREWARM_INTERVAL_MS at MAX_CONCURRENT_COMPUTE=3 —
 // verify actual rotation time live after deploying, same as every other change to this mechanism.
-const PREWARM_MOSAIC_COMBOS: string[][] = [
+const ALWAYS_ON_MOSAIC_COMBOS: string[][] = [
   ["KFFC", "KJGX", "KMXX", "KBMX", "KGSP"],
   ["KBMX", "KMXX", "KGWX", "KHTX"],
+];
+// Metro hubs: warmed only while someone has requested that combo within DEMAND_WINDOW_MS (prewarm-plan.ts).
+// Changed 2026-09-19 from "all 12, every cycle" -- see prewarm-plan.ts for the measurements behind it.
+const ON_DEMAND_MOSAIC_COMBOS: string[][] = [
   ["KOKX", "KDIX", "KBOX", "KENX"], // New York City
   ["KVTX", "KVBX", "KSOX", "KEYX"], // Los Angeles
   ["KLOT", "KMKX", "KILX", "KIWX"], // Chicago
@@ -687,6 +693,8 @@ const PREWARM_MOSAIC_COMBOS: string[][] = [
   ["KBOX", "KOKX", "KGYX", "KENX"], // Boston
   ["KAMX", "KBYX", "KMLB", "KTBW"], // Miami
 ];
+// Real requests per mosaic combo (last seen), recorded ONLY from the HTTP route so the prewarm's own calls never count as demand.
+const mosaicDemand = new Map<string, number>();
 // Originally 80s (just under the 90s cache TTL, to never let it expire) —
 // found live via fly logs this was too aggressive: each station's cold
 // compute takes ~15-25s, so 2 stations back to back can occupy ~30-50s of
@@ -707,7 +715,9 @@ const PREWARM_MOSAIC_COMBOS: string[][] = [
 // providing value. The self-rescheduling fix below already makes the exact
 // interval value a soft target rather than a hard safety requirement — a
 // slow cycle simply pushes the next one later, it can never overlap.
-const PREWARM_INTERVAL_MS = 300_000;
+// Start-to-start period. Deliberately BELOW the 5-minute cache TTL (270s = 90%) so a refresh lands before the
+// entry it replaces expires; anything >= TTL leaves each entry cold for the length of its own recompute.
+const PREWARM_INTERVAL_MS = 270_000;
 
 // Real bug found live, same incident as the cache-eviction fixes above:
 // setInterval fires unconditionally every PREWARM_INTERVAL_MS regardless of
@@ -724,6 +734,7 @@ const PREWARM_INTERVAL_MS = 300_000;
 // run more than one prewarm cycle at a time regardless of how slow compute
 // gets.
 async function prewarm() {
+  const cycleStart = Date.now();
   for (const station of PREWARM_STATIONS) {
     try {
       await handleReflectivityOrVelocity(station, "reflectivity");
@@ -751,14 +762,18 @@ async function prewarm() {
   // shape already proven not to wipe out whole combos. Making the rotation faster without
   // reintroducing this needs a real bounded-concurrency pool (e.g. 2 at a time) or a higher fetch
   // cap, each of which needs its own live adversarial re-verification -- not a same-day bolt-on.
-  for (const combo of PREWARM_MOSAIC_COMBOS) {
+  const combos = selectPrewarmCombos(ALWAYS_ON_MOSAIC_COMBOS, ON_DEMAND_MOSAIC_COMBOS, mosaicDemand, Date.now());
+  for (const combo of combos) {
     try {
       await handleMosaic(combo.join(","));
     } catch (error) {
       console.error(`[prewarm:mosaic:${combo.join(",")}] failed —`, error instanceof Error ? error.message : error);
     }
   }
-  setTimeout(prewarm, PREWARM_INTERVAL_MS);
+  const elapsedMs = Date.now() - cycleStart;
+  const delayMs = nextPrewarmDelayMs(elapsedMs, PREWARM_INTERVAL_MS);
+  console.log(`[prewarm] cycle done in ${(elapsedMs / 1000).toFixed(0)}s: ${PREWARM_STATIONS.length} stations + ${combos.length} mosaic combos (${combos.length - ALWAYS_ON_MOSAIC_COMBOS.length} on demand); next in ${(delayMs / 1000).toFixed(0)}s`);
+  setTimeout(prewarm, delayMs);
 }
 
 prewarm();
