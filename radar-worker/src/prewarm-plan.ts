@@ -42,3 +42,20 @@ export function selectPrewarmCombos(alwaysOn: readonly Combo[], onDemand: readon
 export function nextPrewarmDelayMs(elapsedMs: number, periodMs: number, minGapMs = MIN_PREWARM_GAP_MS): number {
   return Math.max(minGapMs, periodMs - elapsedMs);
 }
+
+// Refresh-ahead. A cached payload used to be skipped until it had FULLY expired, so with a cycle period
+// close to the cache lifetime each entry was cold for a stretch of every other cycle (found live
+// 2026-09-19: the first cycle after the trim skipped entries that were 4 minutes old and only refreshed
+// them a cycle later, after they had expired). The prewarm now recomputes anything that would not
+// survive until the NEXT cycle, while visitors keep being served the old entry until the new one lands.
+export const REFRESH_AHEAD_MARGIN_MS = 20_000;
+
+export function refreshAheadMs(periodMs: number): number {
+  return periodMs + REFRESH_AHEAD_MARGIN_MS;
+}
+
+// True when a cached entry with `remainingMs` of life may be served as-is. Real requests pass 0 (serve
+// anything unexpired); the prewarm passes refreshAheadMs(period) so near-expiry entries are rebuilt.
+export function isServeableWithoutRefresh(remainingMs: number, minRemainingMs: number): boolean {
+  return remainingMs > minRemainingMs;
+}

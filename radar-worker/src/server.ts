@@ -6,7 +6,7 @@ import { fetchStormTracks, fetchHailDetections, fetchTvsDetections, fetchMesocyc
 import { GRID_STEP_DEG, MAX_RANGE_KM } from "./radar-constants.js";
 import { sliceTileFromComposite } from "./tile-slice.js";
 import type { MrmsBounds } from "./types.js";
-import { recordDemand, selectPrewarmCombos, nextPrewarmDelayMs } from "./prewarm-plan.js";
+import { isServeableWithoutRefresh, nextPrewarmDelayMs, recordDemand, refreshAheadMs, selectPrewarmCombos } from "./prewarm-plan.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -123,6 +123,14 @@ function evictExpiredPayloads() {
   for (const [key, entry] of payloadCache) {
     if (entry.expiresAt <= now) payloadCache.delete(key);
   }
+}
+
+// Like cached(), but only returns an entry with more than `minRemainingMs` of life left. The prewarm uses this
+// to rebuild entries BEFORE they expire (see prewarm-plan.ts); real requests use plain cached().
+function cachedWithLife(key: string, minRemainingMs: number): unknown | null {
+  evictExpiredPayloads();
+  const entry = payloadCache.get(key);
+  return entry && isServeableWithoutRefresh(entry.expiresAt - Date.now(), minRemainingMs) ? entry.data : null;
 }
 
 function cached(key: string): unknown | null {
@@ -303,9 +311,9 @@ function runInComputeWorker(request: ComputeWorkerJob): Promise<unknown> {
 // for the same compute slot above.
 const inFlight = new Map<string, Promise<{ status: number; body: unknown; source: "cache" | "live" }>>();
 
-async function handleReflectivityOrVelocity(station: string, moment: "reflectivity" | "velocity") {
+async function handleReflectivityOrVelocity(station: string, moment: "reflectivity" | "velocity", minRemainingMs = 0) {
   const cacheKey = `${station}:${moment}`;
-  const hit = cached(cacheKey);
+  const hit = cachedWithLife(cacheKey, minRemainingMs);
   if (hit) return { status: 200, body: hit, source: "cache" as const };
 
   const existing = inFlight.get(cacheKey);
@@ -425,7 +433,7 @@ async function handleUpperAir(level: UpperAirLevel) {
   }
 }
 
-async function handleMosaic(stationsParam: string) {
+async function handleMosaic(stationsParam: string, minRemainingMs = 0) {
   const stations = [...new Set(stationsParam.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean))];
   if (stations.length === 0) return { status: 400, body: { error: "At least one station is required, e.g. ?stations=KFFC,KJGX,KVAX." }, source: "cache" as const };
   if (stations.length > MAX_MOSAIC_STATIONS) return { status: 400, body: { error: `At most ${MAX_MOSAIC_STATIONS} stations per mosaic request.` }, source: "cache" as const };
@@ -434,7 +442,7 @@ async function handleMosaic(stationsParam: string) {
   }
 
   const cacheKey = `mosaic:${[...stations].sort().join(",")}`;
-  const hit = cached(cacheKey);
+  const hit = cachedWithLife(cacheKey, minRemainingMs);
   if (hit) return { status: 200, body: hit, source: "cache" as const };
 
   const existing = inFlight.get(cacheKey);
@@ -718,6 +726,8 @@ const mosaicDemand = new Map<string, number>();
 // Start-to-start period. Deliberately BELOW the 5-minute cache TTL (270s = 90%) so a refresh lands before the
 // entry it replaces expires; anything >= TTL leaves each entry cold for the length of its own recompute.
 const PREWARM_INTERVAL_MS = 270_000;
+// Rebuild any entry that would expire before the next cycle (prewarm-plan.ts refreshAheadMs).
+const PREWARM_REFRESH_AHEAD_MS = refreshAheadMs(PREWARM_INTERVAL_MS);
 
 // Real bug found live, same incident as the cache-eviction fixes above:
 // setInterval fires unconditionally every PREWARM_INTERVAL_MS regardless of
@@ -737,7 +747,7 @@ async function prewarm() {
   const cycleStart = Date.now();
   for (const station of PREWARM_STATIONS) {
     try {
-      await handleReflectivityOrVelocity(station, "reflectivity");
+      await handleReflectivityOrVelocity(station, "reflectivity", PREWARM_REFRESH_AHEAD_MS);
     } catch (error) {
       console.error(`[prewarm:${station}] failed —`, error instanceof Error ? error.message : error);
     }
@@ -765,7 +775,7 @@ async function prewarm() {
   const combos = selectPrewarmCombos(ALWAYS_ON_MOSAIC_COMBOS, ON_DEMAND_MOSAIC_COMBOS, mosaicDemand, Date.now());
   for (const combo of combos) {
     try {
-      await handleMosaic(combo.join(","));
+      await handleMosaic(combo.join(","), PREWARM_REFRESH_AHEAD_MS);
     } catch (error) {
       console.error(`[prewarm:mosaic:${combo.join(",")}] failed —`, error instanceof Error ? error.message : error);
     }

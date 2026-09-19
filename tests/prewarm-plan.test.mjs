@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { comboKey, DEMAND_WINDOW_MS, MIN_PREWARM_GAP_MS, nextPrewarmDelayMs, recordDemand, selectPrewarmCombos } from "../radar-worker/src/prewarm-plan.ts";
+import { comboKey, DEMAND_WINDOW_MS, isServeableWithoutRefresh, MIN_PREWARM_GAP_MS, nextPrewarmDelayMs, recordDemand, REFRESH_AHEAD_MARGIN_MS, refreshAheadMs, selectPrewarmCombos } from "../radar-worker/src/prewarm-plan.ts";
 
 const HOME = [["KFFC", "KJGX", "KMXX", "KBMX", "KGSP"], ["KBMX", "KMXX", "KGWX", "KHTX"]];
 const METROS = [["KATX", "KLGX", "KRTX", "KOTX"], ["KOKX", "KDIX", "KBOX", "KENX"], ["KLOT", "KMKX", "KILX", "KIWX"]];
@@ -64,4 +64,54 @@ test("demand is recorded only from the HTTP route, never by the prewarm's own ca
   const calls = [...source.matchAll(/recordDemand\(/g)].length;
   assert.equal(calls, 1);
   assert.match(source, /if \(url\.pathname === "\/mosaic"\) \{\s*recordDemand\(/);
+});
+
+test("refresh-ahead: the prewarm rebuilds an entry that would not survive to the next cycle, real requests keep serving it", () => {
+  const period = 270_000, ttl = 300_000, ahead = refreshAheadMs(period);
+  assert.equal(ahead, period + REFRESH_AHEAD_MARGIN_MS);
+  // Real requests pass 0: any unexpired entry is served, an expired one is not.
+  assert.equal(isServeableWithoutRefresh(1, 0), true);
+  assert.equal(isServeableWithoutRefresh(0, 0), false);
+  // The prewarm, one full period after computing an entry (30s of life left), must rebuild it...
+  assert.equal(isServeableWithoutRefresh(ttl - period, ahead), false);
+  // ...but leaves an entry that was built seconds ago alone.
+  assert.equal(isServeableWithoutRefresh(ttl - 5_000, ahead), true);
+});
+
+// Models one prewarmed entry: cycles start every `period`, a rebuild takes `compute` and its result replaces
+// the old entry only when it lands. Returns how long visitors would have found the entry ABSENT.
+function coldTime(minRemainingMs, { period = 270_000, ttl = 300_000, compute = 45_000, cycles = 40 } = {}) {
+  let builtAt = compute; // built during cycle 0, which began at t=0
+  let cold = 0;
+  for (let cycle = 1; cycle <= cycles; cycle++) {
+    const cycleStart = cycle * period;
+    if (isServeableWithoutRefresh(ttl - (cycleStart - builtAt), minRemainingMs)) continue; // still good, skipped
+    const landsAt = cycleStart + compute;
+    const oldExpiresAt = builtAt + ttl;
+    if (oldExpiresAt < landsAt) cold += landsAt - oldExpiresAt; // absent from expiry until the rebuild lands
+    builtAt = landsAt;
+  }
+  return cold;
+}
+
+test("skip-until-expired (the behavior found live 2026-09-19) leaves a home entry cold for a large share of the time", () => {
+  const cold = coldTime(0);
+  assert.ok(cold > 40 * 270_000 * 0.3, `expected roughly 40% cold, got ${(cold / (40 * 270_000) * 100).toFixed(0)}%`);
+});
+
+test("with refresh-ahead, an entry is rebuilt before it expires and is never cold in steady state", () => {
+  assert.equal(coldTime(refreshAheadMs(270_000)), 0);
+  assert.equal(coldTime(refreshAheadMs(270_000), { compute: 80_000 }), 0, "still gap-free with a slow 80s rebuild");
+});
+
+test("the worker prewarm passes the refresh-ahead window to both handlers, and it sits between the period and the cache TTL", async () => {
+  const source = await readFile(new URL("../radar-worker/src/server.ts", import.meta.url), "utf8");
+  assert.match(source, /handleReflectivityOrVelocity\(station, "reflectivity", PREWARM_REFRESH_AHEAD_MS\)/);
+  assert.match(source, /handleMosaic\(combo\.join\(","\), PREWARM_REFRESH_AHEAD_MS\)/);
+  const num = (name) => Number(source.match(new RegExp(`const ${name} = (\\d[\\d_]*);`))[1].replaceAll("_", ""));
+  const ahead = refreshAheadMs(num("PREWARM_INTERVAL_MS"));
+  assert.ok(ahead > num("PREWARM_INTERVAL_MS"));
+  assert.ok(ahead < num("MOSAIC_CACHE_TTL_MS") && ahead < num("PAYLOAD_CACHE_TTL_MS"), "refresh-ahead must be shorter than the cache lifetime or every cycle rebuilds every entry immediately");
+  // Real visitor requests must keep using plain cached-entry semantics (min remaining 0).
+  assert.doesNotMatch(source, /handleMosaic\(url\.searchParams\.get\("stations"\) \?\? "", PREWARM/);
 });
